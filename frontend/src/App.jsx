@@ -133,6 +133,9 @@ const AdminPage = () => {
   const [sort, setSort] = useState({ key: "created_at", dir: "desc" });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [backendStatus, setBackendStatus] = useState("checking");
+  const [dbStatus, setDbStatus] = useState("checking");
+  const [statusMessage, setStatusMessage] = useState("");
 
   const loadAdminBookings = async (authToken) => {
     const response = await fetch(`${API_BASE}/admin/bookings`, {
@@ -241,6 +244,47 @@ const AdminPage = () => {
     loadSpeakers().catch(() => setSpeakers([]));
     loadPartners().catch(() => setPartners([]));
     loadHero().catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    const checkBackend = async () => {
+      setBackendStatus("checking");
+      setDbStatus("checking");
+      setStatusMessage("");
+      try {
+        const healthResponse = await fetch(`${API_BASE}/health`);
+        if (!healthResponse.ok) {
+          throw new Error("health_failed");
+        }
+        if (!alive) return;
+        setBackendStatus("ok");
+      } catch (error) {
+        if (!alive) return;
+        setBackendStatus("error");
+        setDbStatus("unknown");
+        setStatusMessage("Backend svarar inte.");
+        return;
+      }
+
+      try {
+        const dbResponse = await fetch(`${API_BASE}/db`);
+        if (!dbResponse.ok) {
+          throw new Error("db_failed");
+        }
+        if (!alive) return;
+        setDbStatus("ok");
+      } catch (error) {
+        if (!alive) return;
+        setDbStatus("error");
+        setStatusMessage("Databaskoppling misslyckades.");
+      }
+    };
+
+    checkBackend();
+    return () => {
+      alive = false;
+    };
   }, []);
 
   const handleLogin = (event) => {
@@ -882,6 +926,15 @@ const AdminPage = () => {
       <div className="hero" role="img" aria-label="Stronger Together"></div>
       <div className="section">
         <h2>Admin</h2>
+        <div className="admin-status">
+          <div className={`status-pill status-${backendStatus}`}>
+            Backend: {backendStatus === "ok" ? "OK" : backendStatus === "error" ? "Fel" : "Kontrollerar..."}
+          </div>
+          <div className={`status-pill status-${dbStatus}`}>
+            Databas: {dbStatus === "ok" ? "OK" : dbStatus === "error" ? "Fel" : "Kontrollerar..."}
+          </div>
+        </div>
+        {statusMessage ? <p className="admin-error">{statusMessage}</p> : null}
         <form className="admin-form" onSubmit={handleLogin}>
           <label className="field">
             <span className="field-label">Lösenord</span>
