@@ -20,12 +20,16 @@ const MOLLIE_AMOUNT = process.env.MOLLIE_AMOUNT || "";
 const MOLLIE_CURRENCY = process.env.MOLLIE_CURRENCY || "SEK";
 const FRONTEND_URL = process.env.FRONTEND_URL || "";
 const app = express();
+const useSsl =
+  String(process.env.PGSSL || "").toLowerCase() === "true" ||
+  String(process.env.NODE_ENV || "").toLowerCase() === "production";
 const pool = new Pool({
   host: process.env.PGHOST,
   port: process.env.PGPORT,
   user: process.env.PGUSER,
   password: process.env.PGPASSWORD,
-  database: process.env.PGDATABASE
+  database: process.env.PGDATABASE,
+  ssl: useSsl ? { rejectUnauthorized: false } : undefined
 });
 
 app.set("trust proxy", 1);
