@@ -4,6 +4,18 @@ import "leaflet/dist/leaflet.css";
 import "./App.css";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
+const API_BASE_NORMALIZED = API_BASE.replace(/\/+$/, "");
+
+const resolveAssetUrl = (url) => {
+  if (!url) return "";
+  if (url.startsWith("http://") || url.startsWith("https://")) {
+    return url;
+  }
+  if (!API_BASE_NORMALIZED) {
+    return url;
+  }
+  return `${API_BASE_NORMALIZED}${url.startsWith("/") ? "" : "/"}${url}`;
+};
 
 const PaymentStatusPage = () => {
   const params = new URLSearchParams(window.location.search);
@@ -1594,7 +1606,7 @@ const AdminPage = () => {
                 <div className="speaker-card" key={speaker.id}>
                   <img
                     className="speaker-photo"
-                    src={speaker.image_url}
+                    src={resolveAssetUrl(speaker.image_url)}
                     alt={speaker.name}
                   />
                   <div className="speaker-name">{speaker.name}</div>
@@ -1668,14 +1680,14 @@ const AdminPage = () => {
                     <a href={partner.url} target="_blank" rel="noreferrer">
                       <img
                         className="partner-logo"
-                        src={partner.image_url}
+                        src={resolveAssetUrl(partner.image_url)}
                         alt={partner.name || "Partnerlogo"}
                       />
                     </a>
                   ) : (
                     <img
                       className="partner-logo"
-                      src={partner.image_url}
+                      src={resolveAssetUrl(partner.image_url)}
                       alt={partner.name || "Partnerlogo"}
                     />
                   )}
@@ -2111,7 +2123,11 @@ function App() {
           <div className="speakers">
             {speakers.map((speaker) => (
               <div className="speaker-card" key={speaker.id}>
-                <img className="speaker-photo" src={speaker.image_url} alt={speaker.name} />
+                <img
+                  className="speaker-photo"
+                  src={resolveAssetUrl(speaker.image_url)}
+                  alt={speaker.name}
+                />
                 <div className="speaker-name">{speaker.name}</div>
                 <div className="speaker-bio">{speaker.bio}</div>
               </div>
@@ -2132,14 +2148,14 @@ function App() {
                   <a href={partner.url} target="_blank" rel="noreferrer">
                     <img
                       className="partner-logo"
-                      src={partner.image_url}
+                      src={resolveAssetUrl(partner.image_url)}
                       alt={partner.name || "Partnerlogo"}
                     />
                   </a>
                 ) : (
                   <img
                     className="partner-logo"
-                    src={partner.image_url}
+                    src={resolveAssetUrl(partner.image_url)}
                     alt={partner.name || "Partnerlogo"}
                   />
                 )}
