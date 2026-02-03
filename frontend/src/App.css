@@ -548,6 +548,33 @@ h2 {
   align-items: center;
 }
 
+.receipt {
+  margin-top: 1rem;
+  padding: 1rem;
+  border-radius: 16px;
+  background: #fff7e8;
+  border: 1px solid #f2d3a6;
+}
+
+.receipt h3 {
+  margin: 0 0 0.75rem 0;
+}
+
+.receipt-row,
+.receipt-total {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.25rem 0;
+}
+
+.receipt-total {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid #f0c892;
+  font-weight: 700;
+}
+
 .translate-row {
   display: flex;
   align-items: center;

@@ -22,6 +22,7 @@ const PaymentStatusPage = () => {
   const [status, setStatus] = useState("loading");
   const [message, setMessage] = useState("");
   const [summary, setSummary] = useState(null);
+  const [purchaseTime] = useState(() => new Date());
 
   useEffect(() => {
     const paymentId = params.get("paymentId") || localStorage.getItem("pendingPaymentId");
@@ -53,6 +54,46 @@ const PaymentStatusPage = () => {
       setMessage("Kunde inte kontrollera betalningen.");
     });
   }, []);
+
+  const formatSek = (value) => {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      return "-";
+    }
+    return `${value.toLocaleString("sv-SE", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    })} SEK`;
+  };
+  const totalAmount =
+    typeof summary?.total === "number"
+      ? summary.total
+      : typeof summary?.amount === "number"
+        ? summary.amount
+        : null;
+  const unitPrice = typeof summary?.amount === "number" ? summary.amount : totalAmount;
+  const discountAmount =
+    typeof unitPrice === "number" && typeof totalAmount === "number"
+      ? Math.max(0, unitPrice - totalAmount)
+      : null;
+  const vatAmount =
+    typeof totalAmount === "number"
+      ? Math.round((totalAmount * 0.25 / 1.25) * 100) / 100
+      : null;
+  const netAmount =
+    typeof totalAmount === "number"
+      ? Math.round((totalAmount - (vatAmount || 0)) * 100) / 100
+      : null;
+  const orderNumber = purchaseTime
+    .toLocaleString("sv-SE", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false
+    })
+    .replace(/\D/g, "");
 
   return (
     <div className="page">
@@ -98,6 +139,55 @@ const PaymentStatusPage = () => {
                     Bekräftelsemail skickas till {summary.email}.
                   </p>
                 ) : null}
+                <div className="receipt">
+                  <h3>Kvitto</h3>
+                  <div className="receipt-row">
+                    <span>Datum & tid</span>
+                    <strong>
+                      {purchaseTime.toLocaleString("sv-SE", {
+                        year: "numeric",
+                        month: "2-digit",
+                        day: "2-digit",
+                        hour: "2-digit",
+                        minute: "2-digit"
+                      })}
+                    </strong>
+                  </div>
+                  <div className="receipt-row">
+                    <span>Ordernummer</span>
+                    <strong>{orderNumber}</strong>
+                  </div>
+                  <div className="receipt-row">
+                    <span>Betalning</span>
+                    <strong>Online</strong>
+                  </div>
+                  <div className="receipt-row">
+                    <span>Säljare</span>
+                    <strong>Stronger Together</strong>
+                  </div>
+                  <div className="receipt-row">
+                    <span>Biljett såld genom</span>
+                    <strong>Lonetech AB</strong>
+                  </div>
+                  <div className="receipt-row">
+                    <span>Styckpris (exkl. moms)</span>
+                    <strong>{formatSek(netAmount)}</strong>
+                  </div>
+                  {summary.discountPercent ? (
+                    <div className="receipt-row">
+                      <span>Rabatt</span>
+                      <strong>-{formatSek(discountAmount)}</strong>
+                    </div>
+                  ) : null}
+                  <div className="receipt-row">
+                    <span>Moms (25%)</span>
+                    <strong>{formatSek(vatAmount)}</strong>
+                  </div>
+                  <div className="receipt-total">
+                    <span>Totalbelopp</span>
+                    <strong>{formatSek(totalAmount)}</strong>
+                  </div>
+                </div>
               </div>
             ) : null}
             {status === "paid" ? (
