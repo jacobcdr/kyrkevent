@@ -1746,6 +1746,35 @@ function App() {
   const mapRef = useRef(null);
   const markerRef = useRef(null);
 
+  useEffect(() => {
+    if (isAdminRoute || isPaymentStatusRoute) {
+      return;
+    }
+    if (window.googleTranslateElementInit) {
+      return;
+    }
+    window.googleTranslateElementInit = () => {
+      if (!window.google?.translate?.TranslateElement) {
+        return;
+      }
+      new window.google.translate.TranslateElement(
+        {
+          pageLanguage: "sv",
+          includedLanguages: "sv,en",
+          autoDisplay: false
+        },
+        "google_translate_element"
+      );
+    };
+    if (!document.getElementById("google-translate-script")) {
+      const script = document.createElement("script");
+      script.id = "google-translate-script";
+      script.src = "//translate.google.com/translate_a/element.js?cb=googleTranslateElementInit";
+      script.async = true;
+      document.body.appendChild(script);
+    }
+  }, [isAdminRoute, isPaymentStatusRoute]);
+
   const loadProgramItems = async () => {
     const response = await fetch(`${API_BASE}/program`);
     if (!response.ok) {
@@ -1975,6 +2004,10 @@ function App() {
 
   return (
     <div className="page">
+      <div className="translate-row">
+        <span className="translate-label">Språk</span>
+        <div id="google_translate_element" />
+      </div>
       <div className="hero" role="img" aria-label="Stronger Together"></div>
       <div className="section">
         <h2>{hero.title || "18-19 september"}</h2>
