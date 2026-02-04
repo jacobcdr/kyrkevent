@@ -20,6 +20,7 @@ const MOLLIE_API_KEY = process.env.MOLLIE_API_KEY || "";
 const MOLLIE_AMOUNT = process.env.MOLLIE_AMOUNT || "";
 const MOLLIE_CURRENCY = process.env.MOLLIE_CURRENCY || "SEK";
 const FRONTEND_URL = process.env.FRONTEND_URL || "";
+const UPLOAD_DIR = process.env.UPLOAD_DIR || path.resolve("uploads");
 const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
 const RESEND_FROM = process.env.RESEND_FROM || "";
 const RECEIPT_SELLER = process.env.RECEIPT_SELLER || "Stronger Together";
@@ -80,13 +81,12 @@ const adminEmailLimiter = rateLimit({
   legacyHeaders: false
 });
 
-const uploadDir = path.resolve("uploads");
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
+if (!fs.existsSync(UPLOAD_DIR)) {
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 }
 
 const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadDir),
+  destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
   filename: (_req, file, cb) => {
     const ext = path.extname(file.originalname || "").toLowerCase();
     const safeExt = ext && ext.length <= 10 ? ext : ".jpg";
