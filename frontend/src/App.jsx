@@ -1097,15 +1097,19 @@ const AdminPage = () => {
       <div className="hero" role="img" aria-label="Stronger Together"></div>
       <div className="section">
         <h2>Admin</h2>
-        <div className="admin-status">
-          <div className={`status-pill status-${backendStatus}`}>
-            Backend: {backendStatus === "ok" ? "OK" : backendStatus === "error" ? "Fel" : "Kontrollerar..."}
-          </div>
-          <div className={`status-pill status-${dbStatus}`}>
-            Databas: {dbStatus === "ok" ? "OK" : dbStatus === "error" ? "Fel" : "Kontrollerar..."}
-          </div>
-        </div>
-        {statusMessage ? <p className="admin-error">{statusMessage}</p> : null}
+        {token ? (
+          <>
+            <div className="admin-status">
+              <div className={`status-pill status-${backendStatus}`}>
+                Backend: {backendStatus === "ok" ? "OK" : backendStatus === "error" ? "Fel" : "Kontrollerar..."}
+              </div>
+              <div className={`status-pill status-${dbStatus}`}>
+                Databas: {dbStatus === "ok" ? "OK" : dbStatus === "error" ? "Fel" : "Kontrollerar..."}
+              </div>
+            </div>
+            {statusMessage ? <p className="admin-error">{statusMessage}</p> : null}
+          </>
+        ) : null}
         <form className="admin-form" onSubmit={handleLogin}>
           <label className="field">
             <span className="field-label">Lösenord</span>
@@ -1343,24 +1347,26 @@ const AdminPage = () => {
           ) : null}
           </div>
         ) : null}
-        <form className="admin-form" onSubmit={handleTestEmail}>
-          <label className="field">
-            <span className="field-label">Testmail</span>
-            <input
-              name="testEmail"
-              type="email"
-              value={testEmail}
-              onChange={(event) => setTestEmail(event.target.value)}
-              placeholder="namn@example.com"
-              required
-            />
-          </label>
-          <div className="admin-actions">
-            <button className="button button-outline" type="submit" disabled={loading}>
-              Skicka testmail
-            </button>
-          </div>
-        </form>
+        {token ? (
+          <form className="admin-form" onSubmit={handleTestEmail}>
+            <label className="field">
+              <span className="field-label">Testmail</span>
+              <input
+                name="testEmail"
+                type="email"
+                value={testEmail}
+                onChange={(event) => setTestEmail(event.target.value)}
+                placeholder="namn@example.com"
+                required
+              />
+            </label>
+            <div className="admin-actions">
+              <button className="button button-outline" type="submit" disabled={loading}>
+                Skicka testmail
+              </button>
+            </div>
+          </form>
+        ) : null}
       </div>
 
       {token ? (
