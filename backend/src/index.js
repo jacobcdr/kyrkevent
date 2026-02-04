@@ -354,6 +354,9 @@ const parseBookingPayload = (body) => {
     phone,
     organization,
     booth,
+    sponsorInterest,
+    volunteerInterest,
+    otherInfo,
     terms,
     priceName,
     priceAmount,
@@ -381,6 +384,9 @@ const parseBookingPayload = (body) => {
       phone: String(phone).trim(),
       organization: String(organization).trim(),
       booth: Boolean(booth),
+      sponsorInterest: Boolean(sponsorInterest),
+      volunteerInterest: Boolean(volunteerInterest),
+      otherInfo: otherInfo ? String(otherInfo).trim() : "",
       terms: true,
       priceName: String(priceName).trim(),
       priceAmount: parsedAmount,
@@ -419,7 +425,7 @@ app.post("/bookings", async (req, res) => {
 
   try {
     const result = await pool.query(
-      "INSERT INTO bookings (name, email, city, phone, organization, ticket, booth, terms, payment_status, pris) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id, name, email, city, phone, organization, ticket, booth, terms, payment_status, pris, created_at",
+      "INSERT INTO bookings (name, email, city, phone, organization, ticket, other_info, sponsor_interest, volunteer_interest, booth, terms, payment_status, pris) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id, name, email, city, phone, organization, ticket, other_info, sponsor_interest, volunteer_interest, booth, terms, payment_status, pris, created_at",
       [
         parsed.payload.name,
         parsed.payload.email,
@@ -427,6 +433,9 @@ app.post("/bookings", async (req, res) => {
         parsed.payload.phone,
         parsed.payload.organization,
         parsed.payload.priceName,
+        parsed.payload.otherInfo,
+        parsed.payload.sponsorInterest,
+        parsed.payload.volunteerInterest,
         parsed.payload.booth,
         parsed.payload.terms,
         "manual",
@@ -566,7 +575,7 @@ app.get("/payments/verify", async (req, res) => {
           const payload = current.payload;
           const finalAmount = payload.discountedAmount ?? payload.priceAmount;
           const booking = await client.query(
-            "INSERT INTO bookings (name, email, city, phone, organization, ticket, booth, terms, payment_status, pris) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id, created_at",
+            "INSERT INTO bookings (name, email, city, phone, organization, ticket, other_info, sponsor_interest, volunteer_interest, booth, terms, payment_status, pris) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id, created_at",
             [
               payload.name,
               payload.email,
@@ -574,6 +583,9 @@ app.get("/payments/verify", async (req, res) => {
               payload.phone,
               payload.organization,
               payload.priceName,
+              payload.otherInfo || "",
+              payload.sponsorInterest,
+              payload.volunteerInterest,
               payload.booth,
               payload.terms,
               "paid",
@@ -1286,6 +1298,9 @@ const ensureBookingsTable = async () => {
       phone TEXT NOT NULL,
       organization TEXT NOT NULL,
       ticket TEXT NOT NULL DEFAULT '',
+      other_info TEXT NOT NULL DEFAULT '',
+      sponsor_interest BOOLEAN NOT NULL DEFAULT FALSE,
+      volunteer_interest BOOLEAN NOT NULL DEFAULT FALSE,
       booth BOOLEAN NOT NULL DEFAULT FALSE,
       terms BOOLEAN NOT NULL DEFAULT FALSE,
       payment_status TEXT NOT NULL DEFAULT 'pending',
@@ -1297,6 +1312,9 @@ const ensureBookingsTable = async () => {
     ALTER TABLE bookings
       ADD COLUMN IF NOT EXISTS organization TEXT NOT NULL DEFAULT '',
       ADD COLUMN IF NOT EXISTS ticket TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS other_info TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS sponsor_interest BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS volunteer_interest BOOLEAN NOT NULL DEFAULT FALSE,
       ADD COLUMN IF NOT EXISTS booth BOOLEAN NOT NULL DEFAULT FALSE,
       ADD COLUMN IF NOT EXISTS terms BOOLEAN NOT NULL DEFAULT FALSE,
       ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT 'pending',

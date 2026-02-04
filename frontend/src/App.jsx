@@ -1925,6 +1925,9 @@ function App() {
     phone: "",
     organization: "",
     booth: false,
+    sponsorInterest: false,
+    volunteerInterest: false,
+    otherInfo: "",
     terms: false,
     priceId: "",
     discountCode: ""
@@ -2167,6 +2170,9 @@ function App() {
         phone: form.phone.trim(),
         organization: form.organization.trim(),
         booth: form.booth,
+        sponsorInterest: form.sponsorInterest,
+        volunteerInterest: form.volunteerInterest,
+        otherInfo: form.otherInfo.trim(),
         terms: form.terms,
         priceName: selectedPrice.name,
         priceAmount: selectedPrice.amount,
@@ -2290,13 +2296,41 @@ function App() {
             />
           </label>
           <label className="field checkbox-field">
-            <span className="field-label">Monterbord</span>
+            <span className="field-label">Jag är intresserad av Monterbord - kontakta mig</span>
             <input
               name="booth"
               type="checkbox"
               checked={form.booth}
               onChange={handleChange}
             />
+          </label>
+          <label className="field checkbox-field">
+            <span className="field-label">Jag är intresserad av sponsring av konferensen</span>
+            <input
+              name="sponsorInterest"
+              type="checkbox"
+              checked={form.sponsorInterest}
+              onChange={handleChange}
+            />
+          </label>
+          <label className="field checkbox-field">
+            <span className="field-label">Jag kan tänka mig att hjälpa till på konferensen</span>
+            <input
+              name="volunteerInterest"
+              type="checkbox"
+              checked={form.volunteerInterest}
+              onChange={handleChange}
+            />
+          </label>
+          <label className="field">
+            <span className="field-label">Övrig information ex. allergier (gäller premiumbiljett)</span>
+            <textarea
+              name="otherInfo"
+              rows="3"
+              value={form.otherInfo}
+              onChange={handleChange}
+              placeholder="Skriv här..."
+            ></textarea>
           </label>
           <label className="field checkbox-field">
             <span className="field-label">Jag godkänner villkor</span>

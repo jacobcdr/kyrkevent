@@ -1,2 +1,4 @@
 .env
 node_modules/
+db_backup1 feb.sql
+db_backup_1
