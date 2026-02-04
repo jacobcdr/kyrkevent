@@ -60,7 +60,7 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 app.use(express.json());
-app.use("/uploads", express.static(path.resolve("uploads")));
+app.use("/uploads", express.static(UPLOAD_DIR));
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
