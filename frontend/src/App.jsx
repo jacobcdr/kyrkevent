@@ -231,6 +231,7 @@ const AdminPage = () => {
     expiresAt: ""
   });
   const [discountEditingId, setDiscountEditingId] = useState(null);
+  const [testEmail, setTestEmail] = useState("");
   const [bookingsPage, setBookingsPage] = useState(1);
   const [sort, setSort] = useState({ key: "created_at", dir: "desc" });
   const [error, setError] = useState("");
@@ -419,6 +420,37 @@ const AdminPage = () => {
     setToken("");
     setBookings([]);
     localStorage.removeItem("adminToken");
+  };
+
+  const handleTestEmail = (event) => {
+    event.preventDefault();
+    if (!token) {
+      setError("Logga in för att skicka testmail.");
+      return;
+    }
+    if (!testEmail) {
+      setError("Ange en e-postadress.");
+      return;
+    }
+    setError("");
+    setLoading(true);
+    const sendTest = async () => {
+      const response = await fetch(`${API_BASE}/admin/email-test`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ email: testEmail })
+      });
+      if (!response.ok) {
+        throw new Error("Email test failed");
+      }
+      setTestEmail("");
+    };
+    sendTest()
+      .catch(() => setError("Kunde inte skicka testmail."))
+      .finally(() => setLoading(false));
   };
 
   const handleProgramChange = (event) => {
@@ -1251,6 +1283,24 @@ const AdminPage = () => {
           ) : null}
           </div>
         ) : null}
+        <form className="admin-form" onSubmit={handleTestEmail}>
+          <label className="field">
+            <span className="field-label">Testmail</span>
+            <input
+              name="testEmail"
+              type="email"
+              value={testEmail}
+              onChange={(event) => setTestEmail(event.target.value)}
+              placeholder="namn@example.com"
+              required
+            />
+          </label>
+          <div className="admin-actions">
+            <button className="button button-outline" type="submit" disabled={loading}>
+              Skicka testmail
+            </button>
+          </div>
+        </form>
       </div>
 
       {token ? (

@@ -10,6 +10,7 @@ import fs from "node:fs";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import * as xlsx from "xlsx";
+import { Resend } from "resend";
 
 dotenv.config();
 
@@ -19,6 +20,11 @@ const MOLLIE_API_KEY = process.env.MOLLIE_API_KEY || "";
 const MOLLIE_AMOUNT = process.env.MOLLIE_AMOUNT || "";
 const MOLLIE_CURRENCY = process.env.MOLLIE_CURRENCY || "SEK";
 const FRONTEND_URL = process.env.FRONTEND_URL || "";
+const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
+const RESEND_FROM = process.env.RESEND_FROM || "";
+const RECEIPT_SELLER = process.env.RECEIPT_SELLER || "Stronger Together";
+const RECEIPT_ISSUER = process.env.RECEIPT_ISSUER || "Lonetech AB";
+const RECEIPT_PAYMENT_METHOD = process.env.RECEIPT_PAYMENT_METHOD || "Online";
 const app = express();
 const useSsl =
   String(process.env.PGSSL || "").toLowerCase() === "true" ||
@@ -67,6 +73,12 @@ const paymentLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false
 });
+const adminEmailLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 6,
+  standardHeaders: true,
+  legacyHeaders: false
+});
 
 const uploadDir = path.resolve("uploads");
 if (!fs.existsSync(uploadDir)) {
@@ -95,6 +107,144 @@ const upload = multer({
 });
 
 const mollie = MOLLIE_API_KEY ? createMollieClient({ apiKey: MOLLIE_API_KEY }) : null;
+const resend = RESEND_API_KEY ? new Resend(RESEND_API_KEY) : null;
+
+const formatSek = (value) => {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "-";
+  }
+  return `${value.toLocaleString("sv-SE", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  })} SEK`;
+};
+
+const formatOrderNumber = (date) =>
+  date
+    .toLocaleString("sv-SE", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false
+    })
+    .replace(/\D/g, "");
+
+const buildReceiptEmail = ({
+  name,
+  email,
+  priceName,
+  priceAmount,
+  discountedAmount,
+  discountPercent,
+  createdAt
+}) => {
+  const createdDate = createdAt instanceof Date ? createdAt : new Date();
+  const totalAmount = typeof discountedAmount === "number" ? discountedAmount : priceAmount;
+  const unitPrice = typeof priceAmount === "number" ? priceAmount : totalAmount;
+  const discountAmount =
+    typeof unitPrice === "number" && typeof totalAmount === "number"
+      ? Math.max(0, unitPrice - totalAmount)
+      : null;
+  const vatAmount =
+    typeof totalAmount === "number"
+      ? Math.round((totalAmount * 0.25 / 1.25) * 100) / 100
+      : null;
+  const netAmount =
+    typeof totalAmount === "number"
+      ? Math.round((totalAmount - (vatAmount || 0)) * 100) / 100
+      : null;
+  const orderNumber = formatOrderNumber(createdDate);
+  const discountLabel =
+    typeof discountPercent === "number" && discountPercent > 0 ? ` (${discountPercent}%)` : "";
+
+  const lines = [
+    `Hej ${name || ""}!`,
+    "",
+    "Tack för din bokning. Här är ditt kvitto:",
+    "",
+    `Ordernummer: ${orderNumber}`,
+    `Datum & tid: ${createdDate.toLocaleString("sv-SE")}`,
+    `Betalning: ${RECEIPT_PAYMENT_METHOD}`,
+    `Säljare: ${RECEIPT_SELLER}`,
+    `Biljett såld genom: ${RECEIPT_ISSUER}`,
+    "",
+    `Biljett: ${priceName || "-"}`,
+    `Styckpris (exkl. moms): ${formatSek(netAmount)}`,
+    discountAmount ? `Rabatt${discountLabel}: -${formatSek(discountAmount)}` : null,
+    `Moms (25%): ${formatSek(vatAmount)}`,
+    `Totalbelopp: ${formatSek(totalAmount)}`,
+    "",
+    "Vänliga hälsningar,",
+    "Stronger Together"
+  ].filter(Boolean);
+
+  const htmlRows = [
+    ["Ordernummer", orderNumber],
+    ["Datum & tid", createdDate.toLocaleString("sv-SE")],
+    ["Betalning", RECEIPT_PAYMENT_METHOD],
+    ["Säljare", RECEIPT_SELLER],
+    ["Biljett såld genom", RECEIPT_ISSUER],
+    ["Biljett", priceName || "-"],
+    ["Styckpris (exkl. moms)", formatSek(netAmount)],
+    ...(discountAmount
+      ? [[`Rabatt${discountLabel}`, `-${formatSek(discountAmount)}`]]
+      : []),
+    ["Moms (25%)", formatSek(vatAmount)],
+    ["Totalbelopp", formatSek(totalAmount)]
+  ];
+
+  const html = `
+    <div style="font-family: Arial, sans-serif; color:#111827;">
+      <p>Hej ${name || ""}!</p>
+      <p>Tack för din bokning. Här är ditt kvitto:</p>
+      <table style="border-collapse: collapse; width: 100%; max-width: 520px;">
+        <tbody>
+          ${htmlRows
+            .map(
+              ([label, value]) => `
+            <tr>
+              <td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">${label}</td>
+              <td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">
+                ${value}
+              </td>
+            </tr>
+          `
+            )
+            .join("")}
+        </tbody>
+      </table>
+      <p style="margin-top:16px;">Vänliga hälsningar,<br/>Stronger Together</p>
+    </div>
+  `;
+
+  return {
+    subject: "Bokningsbekräftelse & kvitto",
+    text: lines.join("\n"),
+    html
+  };
+};
+
+const sendReceiptEmail = async (payload) => {
+  if (!resend || !RESEND_FROM || !payload?.email) {
+    return;
+  }
+  try {
+    const message = buildReceiptEmail(payload);
+    await resend.emails.send({
+      from: RESEND_FROM,
+      to: payload.email,
+      subject: message.subject,
+      text: message.text,
+      html: message.html
+    });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Failed to send receipt email", error);
+  }
+};
 
 app.get("/", (req, res) => {
   res.json({
@@ -282,7 +432,17 @@ app.post("/bookings", async (req, res) => {
         `${parsed.payload.priceName} ${parsed.payload.priceAmount}`
       ]
     );
-    res.status(201).json({ ok: true, booking: result.rows[0] });
+    const booking = result.rows[0];
+    await sendReceiptEmail({
+      name: booking.name,
+      email: booking.email,
+      priceName: parsed.payload.priceName,
+      priceAmount: parsed.payload.priceAmount,
+      discountedAmount: parsed.payload.priceAmount,
+      discountPercent: null,
+      createdAt: booking.created_at
+    });
+    res.status(201).json({ ok: true, booking });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to save booking" });
   }
@@ -407,7 +567,7 @@ app.get("/payments/verify", async (req, res) => {
           const discountSuffix =
             payload.discountCode ? ` (${payload.discountCode} -${payload.discountPercent}%)` : "";
           const booking = await client.query(
-            "INSERT INTO bookings (name, email, city, phone, organization, booth, terms, payment_status, pris) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id",
+            "INSERT INTO bookings (name, email, city, phone, organization, booth, terms, payment_status, pris) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id, created_at",
             [
               payload.name,
               payload.email,
@@ -435,6 +595,15 @@ app.get("/payments/verify", async (req, res) => {
             "UPDATE payment_orders SET status = $1, booking_id = $2 WHERE payment_id = $3",
             [status, booking.rows[0].id, paymentId]
           );
+          await sendReceiptEmail({
+            name: payload.name,
+            email: payload.email,
+            priceName: payload.priceName,
+            priceAmount: payload.priceAmount,
+            discountedAmount: finalAmount,
+            discountPercent: payload.discountPercent,
+            createdAt: booking.rows[0]?.created_at
+          });
         }
         await client.query("COMMIT");
       } catch (error) {
@@ -487,6 +656,28 @@ app.post("/admin/login", loginLimiter, (req, res) => {
   }
   const token = jwt.sign({ role: "admin" }, JWT_SECRET, { expiresIn: "2h" });
   res.json({ ok: true, token });
+});
+
+app.post("/admin/email-test", adminEmailLimiter, requireAdmin, async (req, res) => {
+  if (!resend || !RESEND_FROM) {
+    res.status(500).json({ ok: false, error: "Email not configured" });
+    return;
+  }
+  const { email } = req.body || {};
+  if (!email) {
+    res.status(400).json({ ok: false, error: "Missing email" });
+    return;
+  }
+  await sendReceiptEmail({
+    name: "Testkund",
+    email,
+    priceName: "Testbiljett",
+    priceAmount: 399,
+    discountedAmount: 299,
+    discountPercent: 25,
+    createdAt: new Date()
+  });
+  res.json({ ok: true });
 });
 
 app.post("/admin/program", requireAdmin, async (req, res) => {
