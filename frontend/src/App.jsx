@@ -1055,6 +1055,43 @@ const AdminPage = () => {
     }
   }, [bookingsPage, safeBookingsPage]);
 
+  const parsePriceFromText = (value) => {
+    if (value === null || value === undefined) {
+      return null;
+    }
+    const matches = String(value).match(/(\d+(?:[.,]\d+)?)/g);
+    if (!matches || matches.length === 0) {
+      return null;
+    }
+    const last = matches[matches.length - 1].replace(",", ".");
+    const parsed = Number(last);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  const formatPriceValue = (value) => {
+    const amount = parsePriceFromText(value);
+    if (amount === null) {
+      return String(value ?? "-");
+    }
+    return `${amount.toLocaleString("sv-SE", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    })} SEK`;
+  };
+
+  const paidBookings = bookings.filter(
+    (booking) => String(booking.payment_status || "").toLowerCase() === "paid"
+  );
+  const paidCount = paidBookings.length;
+  const paidTotal = paidBookings.reduce((sum, booking) => {
+    const amount = parsePriceFromText(booking.pris);
+    return sum + (amount || 0);
+  }, 0);
+  const paidTotalText = paidTotal.toLocaleString("sv-SE", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
+
   return (
     <div className="page admin-page">
       <div className="hero" role="img" aria-label="Stronger Together"></div>
@@ -1095,6 +1132,16 @@ const AdminPage = () => {
         {token ? (
           <div className="admin-bookings">
             <h2>Bokningar (admin)</h2>
+            <div className="admin-summary">
+              <div className="summary-item">
+                <span>Totalt paid</span>
+                <strong>{paidCount}</strong>
+              </div>
+              <div className="summary-item">
+                <span>Totala intäkter</span>
+                <strong>{paidTotalText} SEK</strong>
+              </div>
+            </div>
             <div className="admin-actions">
               <button className="button button-outline" type="button" onClick={handleExportBookings}>
                 Exportera Excel
@@ -1167,6 +1214,18 @@ const AdminPage = () => {
                     <th>
                       <button
                         type="button"
+                        className={`sort-button ${sort.key === "ticket" ? "is-active" : ""}`}
+                        onClick={() => handleSort("ticket")}
+                      >
+                        Biljett
+                        {sort.key === "ticket" ? (
+                          <span className="sort-arrow">{sort.dir === "asc" ? "▲" : "▼"}</span>
+                        ) : null}
+                      </button>
+                    </th>
+                    <th>
+                      <button
+                        type="button"
                         className={`sort-button ${sort.key === "booth" ? "is-active" : ""}`}
                         onClick={() => handleSort("booth")}
                       >
@@ -1229,7 +1288,7 @@ const AdminPage = () => {
                 <tbody>
                 {sortedBookings.length === 0 ? (
                     <tr>
-                      <td colSpan={10} className="muted">
+                      <td colSpan={11} className="muted">
                         Inga bokningar ännu.
                       </td>
                     </tr>
@@ -1241,10 +1300,11 @@ const AdminPage = () => {
                         <td>{booking.city}</td>
                         <td>{booking.phone}</td>
                         <td>{booking.organization}</td>
+                        <td>{booking.ticket || "-"}</td>
                         <td>{booking.booth ? "Ja" : "Nej"}</td>
                         <td>{booking.terms ? "Ja" : "Nej"}</td>
                         <td>{booking.payment_status || "-"}</td>
-                        <td>{booking.pris || "-"}</td>
+                        <td>{formatPriceValue(booking.pris)}</td>
                         <td>
                           {booking.created_at
                             ? new Date(booking.created_at).toLocaleString("sv-SE")

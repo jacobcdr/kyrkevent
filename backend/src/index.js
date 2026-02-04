@@ -270,7 +270,7 @@ app.get("/db", async (req, res) => {
 app.get("/bookings", async (req, res) => {
   try {
     const result = await pool.query(
-      "SELECT id, name, email, city, phone, organization, booth, terms, payment_status, pris, created_at FROM bookings ORDER BY created_at DESC"
+      "SELECT id, name, email, city, phone, organization, ticket, booth, terms, payment_status, pris, created_at FROM bookings ORDER BY created_at DESC"
     );
     res.json({ ok: true, bookings: result.rows });
   } catch (error) {
@@ -419,17 +419,18 @@ app.post("/bookings", async (req, res) => {
 
   try {
     const result = await pool.query(
-      "INSERT INTO bookings (name, email, city, phone, organization, booth, terms, payment_status, pris) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id, name, email, city, phone, organization, booth, terms, payment_status, pris, created_at",
+      "INSERT INTO bookings (name, email, city, phone, organization, ticket, booth, terms, payment_status, pris) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id, name, email, city, phone, organization, ticket, booth, terms, payment_status, pris, created_at",
       [
         parsed.payload.name,
         parsed.payload.email,
         parsed.payload.city,
         parsed.payload.phone,
         parsed.payload.organization,
+        parsed.payload.priceName,
         parsed.payload.booth,
         parsed.payload.terms,
         "manual",
-        `${parsed.payload.priceName} ${parsed.payload.priceAmount}`
+        String(parsed.payload.priceAmount)
       ]
     );
     const booking = result.rows[0];
@@ -564,20 +565,19 @@ app.get("/payments/verify", async (req, res) => {
         if (!current.booking_id) {
           const payload = current.payload;
           const finalAmount = payload.discountedAmount ?? payload.priceAmount;
-          const discountSuffix =
-            payload.discountCode ? ` (${payload.discountCode} -${payload.discountPercent}%)` : "";
           const booking = await client.query(
-            "INSERT INTO bookings (name, email, city, phone, organization, booth, terms, payment_status, pris) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id, created_at",
+            "INSERT INTO bookings (name, email, city, phone, organization, ticket, booth, terms, payment_status, pris) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id, created_at",
             [
               payload.name,
               payload.email,
               payload.city,
               payload.phone,
               payload.organization,
+              payload.priceName,
               payload.booth,
               payload.terms,
               "paid",
-              `${payload.priceName} ${finalAmount}${discountSuffix}`
+              String(finalAmount)
             ]
           );
           if (payload.discountCode) {
@@ -1151,7 +1151,7 @@ app.post("/admin/program/reorder", requireAdmin, async (req, res) => {
 app.get("/admin/bookings", requireAdmin, async (req, res) => {
   try {
     const result = await pool.query(
-      "SELECT id, name, email, city, phone, organization, booth, terms, payment_status, pris, created_at FROM bookings ORDER BY created_at DESC"
+      "SELECT id, name, email, city, phone, organization, ticket, booth, terms, payment_status, pris, created_at FROM bookings ORDER BY created_at DESC"
     );
     res.json({ ok: true, bookings: result.rows });
   } catch (error) {
@@ -1176,7 +1176,7 @@ const toCsvRow = (values) =>
 app.get("/admin/bookings/export", requireAdmin, async (req, res) => {
   try {
     const result = await pool.query(
-      "SELECT id, name, email, city, phone, organization, booth, terms, payment_status, pris, created_at FROM bookings ORDER BY created_at DESC"
+      "SELECT id, name, email, city, phone, organization, ticket, booth, terms, payment_status, pris, created_at FROM bookings ORDER BY created_at DESC"
     );
     const header = [
       "ID",
@@ -1221,7 +1221,7 @@ app.get("/admin/bookings/export", requireAdmin, async (req, res) => {
 app.get("/admin/bookings/export.xlsx", requireAdmin, async (_req, res) => {
   try {
     const result = await pool.query(
-      "SELECT id, name, email, city, phone, organization, booth, terms, payment_status, pris, created_at FROM bookings ORDER BY created_at DESC"
+      "SELECT id, name, email, city, phone, organization, ticket, booth, terms, payment_status, pris, created_at FROM bookings ORDER BY created_at DESC"
     );
     const rows = [
       [
@@ -1231,6 +1231,7 @@ app.get("/admin/bookings/export.xlsx", requireAdmin, async (_req, res) => {
         "Stad",
         "Telnr",
         "Organisation",
+        "Biljett",
         "Monterbord",
         "Villkor",
         "Betalning",
@@ -1244,6 +1245,7 @@ app.get("/admin/bookings/export.xlsx", requireAdmin, async (_req, res) => {
         row.city,
         row.phone,
         row.organization,
+        row.ticket || "",
         row.booth ? "Ja" : "Nej",
         row.terms ? "Ja" : "Nej",
         row.payment_status || "",
@@ -1283,6 +1285,7 @@ const ensureBookingsTable = async () => {
       city TEXT NOT NULL,
       phone TEXT NOT NULL,
       organization TEXT NOT NULL,
+      ticket TEXT NOT NULL DEFAULT '',
       booth BOOLEAN NOT NULL DEFAULT FALSE,
       terms BOOLEAN NOT NULL DEFAULT FALSE,
       payment_status TEXT NOT NULL DEFAULT 'pending',
@@ -1293,6 +1296,7 @@ const ensureBookingsTable = async () => {
   await pool.query(`
     ALTER TABLE bookings
       ADD COLUMN IF NOT EXISTS organization TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS ticket TEXT NOT NULL DEFAULT '',
       ADD COLUMN IF NOT EXISTS booth BOOLEAN NOT NULL DEFAULT FALSE,
       ADD COLUMN IF NOT EXISTS terms BOOLEAN NOT NULL DEFAULT FALSE,
       ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT 'pending',
