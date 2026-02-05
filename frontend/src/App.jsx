@@ -1188,7 +1188,7 @@ const AdminPage = () => {
                         className={`sort-button ${sort.key === "city" ? "is-active" : ""}`}
                         onClick={() => handleSort("city")}
                       >
-                        Stad
+                        Ort
                         {sort.key === "city" ? (
                           <span className="sort-arrow">{sort.dir === "asc" ? "▲" : "▼"}</span>
                         ) : null}
@@ -1226,6 +1226,30 @@ const AdminPage = () => {
                       >
                         Biljett
                         {sort.key === "ticket" ? (
+                          <span className="sort-arrow">{sort.dir === "asc" ? "▲" : "▼"}</span>
+                        ) : null}
+                      </button>
+                    </th>
+                    <th>
+                      <button
+                        type="button"
+                        className={`sort-button ${sort.key === "sponsor_interest" ? "is-active" : ""}`}
+                        onClick={() => handleSort("sponsor_interest")}
+                      >
+                        Sponsring
+                        {sort.key === "sponsor_interest" ? (
+                          <span className="sort-arrow">{sort.dir === "asc" ? "▲" : "▼"}</span>
+                        ) : null}
+                      </button>
+                    </th>
+                    <th>
+                      <button
+                        type="button"
+                        className={`sort-button ${sort.key === "volunteer_interest" ? "is-active" : ""}`}
+                        onClick={() => handleSort("volunteer_interest")}
+                      >
+                        Hjälpa till
+                        {sort.key === "volunteer_interest" ? (
                           <span className="sort-arrow">{sort.dir === "asc" ? "▲" : "▼"}</span>
                         ) : null}
                       </button>
@@ -1295,7 +1319,7 @@ const AdminPage = () => {
                 <tbody>
                 {sortedBookings.length === 0 ? (
                     <tr>
-                      <td colSpan={11} className="muted">
+                      <td colSpan={13} className="muted">
                         Inga bokningar ännu.
                       </td>
                     </tr>
@@ -1308,6 +1332,8 @@ const AdminPage = () => {
                         <td>{booking.phone}</td>
                         <td>{booking.organization}</td>
                         <td>{booking.ticket || "-"}</td>
+                        <td>{booking.sponsor_interest ? "Ja" : "Nej"}</td>
+                        <td>{booking.volunteer_interest ? "Ja" : "Nej"}</td>
                         <td>{booking.booth ? "Ja" : "Nej"}</td>
                         <td>{booking.terms ? "Ja" : "Nej"}</td>
                         <td>{booking.payment_status || "-"}</td>
