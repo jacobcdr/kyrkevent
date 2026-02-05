@@ -2301,7 +2301,7 @@ function App() {
             />
           </label>
           <label className="field">
-            <span className="field-label">Stad</span>
+            <span className="field-label">Ort</span>
             <input
               name="city"
               type="text"
