@@ -139,6 +139,9 @@ const PaymentStatusPage = () => {
                     Bekräftelsemail skickas till {summary.email}.
                   </p>
                 ) : null}
+                <p className="muted summary-note">
+                  Om du inte hittar bekräftelsen, kontrollera även din skräppost.
+                </p>
                 <div className="receipt">
                   <h3>Kvitto</h3>
                   <div className="receipt-row">
