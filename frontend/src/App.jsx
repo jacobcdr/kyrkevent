@@ -716,6 +716,7 @@ const AdminPage = () => {
   const [password, setPassword] = useState("");
   const [token, setToken] = useState(() => localStorage.getItem("adminToken") || "");
   const [usersExist, setUsersExist] = useState(false);
+  const [usersExistLoaded, setUsersExistLoaded] = useState(false);
   const [userForm, setUserForm] = useState({ username: "", password: "", confirm: "", email: "" });
   const [verificationEmailSent, setVerificationEmailSent] = useState("");
   const [userLoading, setUserLoading] = useState(false);
@@ -1489,7 +1490,9 @@ const AdminPage = () => {
   };
 
   useEffect(() => {
-    loadUsersExist().catch(() => setUsersExist(false));
+    loadUsersExist()
+      .catch(() => setUsersExist(false))
+      .finally(() => setUsersExistLoaded(true));
   }, []);
 
   useEffect(() => {
@@ -1497,11 +1500,13 @@ const AdminPage = () => {
       const viewParam = new URLSearchParams(window.location.search).get("view");
       if (viewParam === "signup") {
         setAuthView("signup");
-      } else {
+      } else if (usersExistLoaded) {
         setAuthView(usersExist ? "login" : "signup");
+      } else {
+        setAuthView("login");
       }
     }
-  }, [token, usersExist]);
+  }, [token, usersExist, usersExistLoaded]);
 
   useEffect(() => {
     if (!token || !selectedEventId) {
