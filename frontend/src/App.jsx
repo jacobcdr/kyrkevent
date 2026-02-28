@@ -382,7 +382,7 @@ const LandingPage = () => {
       </p>
       <p className="landing-intro">Logga in eller skapa konto för att hantera dina event.</p>
       <div className="landing-actions">
-        <a href="/admin" className="button landing-btn">
+        <a href="/admin?view=login" className="button landing-btn">
           Logga in
         </a>
         <a href="/admin?view=signup" className="button button-outline landing-btn">
@@ -1500,6 +1500,8 @@ const AdminPage = () => {
       const viewParam = new URLSearchParams(window.location.search).get("view");
       if (viewParam === "signup") {
         setAuthView("signup");
+      } else if (viewParam === "login") {
+        setAuthView("login");
       } else if (usersExistLoaded) {
         setAuthView(usersExist ? "login" : "signup");
       } else {
