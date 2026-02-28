@@ -1971,7 +1971,8 @@ const AdminPage = () => {
 
   const handlePasswordSubmit = (event) => {
     event.preventDefault();
-    if (!token) {
+    const authToken = token || localStorage.getItem("adminToken") || "";
+    if (!authToken) {
       setError("Logga in för att ändra lösenord.");
       return;
     }
@@ -1990,13 +1991,19 @@ const AdminPage = () => {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
+          Authorization: `Bearer ${authToken}`
         },
         body: JSON.stringify({
           currentPassword: passwordForm.currentPassword,
           newPassword: passwordForm.newPassword
         })
       });
+      if (response.status === 401) {
+        setToken("");
+        localStorage.removeItem("adminToken");
+        setError("Sessionen har gått ut. Logga in igen och försök byta lösenord.");
+        return;
+      }
       if (!response.ok) {
         throw new Error("Password update failed");
       }
