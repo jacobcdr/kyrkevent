@@ -334,6 +334,28 @@ const getEventSlugFromPath = () => {
   return match ? decodeURIComponent(match[1]) : null;
 };
 
+const CopyEventUrlButton = ({ url }) => {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = () => {
+    if (!url) return;
+    navigator.clipboard.writeText(url).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+  return (
+    <button
+      type="button"
+      className="button button-outline button-small"
+      onClick={handleCopy}
+      disabled={!url}
+      aria-label="Kopiera länk"
+    >
+      {copied ? "Kopierad!" : "Kopiera"}
+    </button>
+  );
+};
+
 const LandingPage = () => {
   useEffect(() => {
     document.title = "Kyrkevent";
@@ -375,7 +397,7 @@ const LandingPage = () => {
             </div>
             <ul className="landing-pricing-features">
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Flera aktiva event</li>
-              <li className="landing-pricing-feature excluded"><span className="landing-pricing-icon" aria-hidden="true">✕</span> Betalning via plattformen</li>
+              <li className="landing-pricing-feature excluded"><span className="landing-pricing-icon" aria-hidden="true">✕</span> Onlinebetalning via plattformen</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Mailbekräftelse till deltagare</li>
               <li className="landing-pricing-feature excluded"><span className="landing-pricing-icon" aria-hidden="true">✕</span> Rabattkoder</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Anmälningssida &amp; listor</li>
@@ -390,7 +412,7 @@ const LandingPage = () => {
             </div>
             <ul className="landing-pricing-features">
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Flera aktiva event</li>
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Betalning via plattformen</li>
+              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Onlinebetalning via plattformen</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Mailbekräftelse till deltagare</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Rabattkoder</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Anmälningssida &amp; listor</li>
@@ -407,7 +429,7 @@ const LandingPage = () => {
             </div>
             <ul className="landing-pricing-features">
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Flera aktiva event</li>
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Betalning via plattformen</li>
+              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Onlinebetalning via plattformen</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Mailbekräftelse till deltagare</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Rabattkoder</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Anmälningssida &amp; listor</li>
@@ -450,7 +472,8 @@ const PaymentStatusPage = () => {
             ticket: parsed.ticket || (parsed.cart ? `${parsed.count} anmälningar` : "Anmälan"),
             total: typeof parsed.amount === "number" ? parsed.amount : (parsed.cart ? 0 : null),
             eventName: parsed.eventName,
-            sellerName: parsed.sellerName || null
+            sellerName: parsed.sellerName || null,
+            orderNumber: parsed.orderNumber || null
           });
         } else {
           setStatus("paid");
@@ -477,7 +500,11 @@ const PaymentStatusPage = () => {
       localStorage.removeItem("pendingPaymentId");
       if (data.status === "paid") {
         setStatus("paid");
-        setMessage("Betalningen är genomförd. Din anmälan är registrerad.");
+        if (data.summary?.orderType === "bas") {
+          setMessage(`Bas-köp genomfört. ${data.summary.quantity || 0} eventkredit(er) är tillagda. Du kan nu lägga till priser på biljetter under Dina event.`);
+        } else {
+          setMessage("Betalningen är genomförd. Din anmälan är registrerad.");
+        }
       } else {
         setStatus(data.status || "pending");
         setMessage("Betalningen är inte genomförd ännu.");
@@ -536,6 +563,7 @@ const PaymentStatusPage = () => {
         hour12: false
       })
       .replace(/\D/g, "");
+  const hasPriceInfo = typeof totalAmount === "number" && totalAmount > 0;
 
   return (
     <div className="page">
@@ -567,29 +595,31 @@ const PaymentStatusPage = () => {
                   <span>Biljett</span>
                   <strong>{summary.ticket || "-"}</strong>
                 </div>
-                {ticketTotal != null ? (
-                  <div className="summary-row">
-                    <span>Summa (exkl. serviceavgift)</span>
-                    <strong>{formatSek(ticketTotal)}</strong>
-                  </div>
-                ) : null}
-                {serviceFee > 0 ? (
-                  <div className="summary-row">
-                    <span>Serviceavgift</span>
-                    <strong>{formatSek(serviceFee)}</strong>
-                  </div>
-                ) : null}
-                <div className="summary-row">
-                  <span>Totalbelopp</span>
-                  <strong>
-                    {formatSek(totalAmount)}
-                  </strong>
-                </div>
-                {summary.discountPercent ? (
-                  <div className="summary-row">
-                    <span>Rabatt</span>
-                    <strong>{summary.discountPercent}%</strong>
-                  </div>
+                {hasPriceInfo ? (
+                  <>
+                    {ticketTotal != null ? (
+                      <div className="summary-row">
+                        <span>Summa (exkl. serviceavgift)</span>
+                        <strong>{formatSek(ticketTotal)}</strong>
+                      </div>
+                    ) : null}
+                    {serviceFee > 0 ? (
+                      <div className="summary-row">
+                        <span>Serviceavgift</span>
+                        <strong>{formatSek(serviceFee)}</strong>
+                      </div>
+                    ) : null}
+                    <div className="summary-row">
+                      <span>Totalbelopp</span>
+                      <strong>{formatSek(totalAmount)}</strong>
+                    </div>
+                    {summary.discountPercent ? (
+                      <div className="summary-row">
+                        <span>Rabatt</span>
+                        <strong>{summary.discountPercent}%</strong>
+                      </div>
+                    ) : null}
+                  </>
                 ) : null}
                 {summary.email ? (
                   <p className="muted summary-note">
@@ -599,49 +629,74 @@ const PaymentStatusPage = () => {
                 <p className="muted summary-note">
                   Om du inte hittar bekräftelsen, kontrollera även din skräppost.
                 </p>
-                <div className="receipt">
-                  <h3>Kvitto</h3>
-                  <div className="receipt-row">
-                    <span>Datum & tid</span>
-                    <strong>
-                      {purchaseTime.toLocaleString("sv-SE", {
-                        year: "numeric",
-                        month: "2-digit",
-                        day: "2-digit",
-                        hour: "2-digit",
-                        minute: "2-digit"
-                      })}
-                    </strong>
+                {hasPriceInfo ? (
+                  <div className="receipt">
+                    <h3>Kvitto</h3>
+                    <div className="receipt-row">
+                      <span>Datum & tid</span>
+                      <strong>
+                        {purchaseTime.toLocaleString("sv-SE", {
+                          year: "numeric",
+                          month: "2-digit",
+                          day: "2-digit",
+                          hour: "2-digit",
+                          minute: "2-digit"
+                        })}
+                      </strong>
+                    </div>
+                    <div className="receipt-row">
+                      <span>Ordernummer</span>
+                      <strong>{orderNumber}</strong>
+                    </div>
+                    <div className="receipt-row">
+                      <span>Betalning</span>
+                      <strong>Online</strong>
+                    </div>
+                    <div className="receipt-row">
+                      <span>Säljare</span>
+                      <strong>{summary.sellerName || "–"}</strong>
+                    </div>
+                    <div className="receipt-row">
+                      <span>Biljett såld genom</span>
+                      <strong>Lonetec AB</strong>
+                    </div>
+                    <div className="receipt-row">
+                      <span>Styckpris (exkl. moms)</span>
+                      <strong>{formatSek(netAmount)}</strong>
+                    </div>
+                    <div className="receipt-row">
+                      <span>Moms (25%)</span>
+                      <strong>{formatSek(vatAmount)}</strong>
+                    </div>
+                    <div className="receipt-total">
+                      <span>Totalbelopp</span>
+                      <strong>{formatSek(totalAmount)}</strong>
+                    </div>
                   </div>
-                  <div className="receipt-row">
-                    <span>Ordernummer</span>
-                    <strong>{orderNumber}</strong>
+                ) : (
+                  <div className="receipt receipt-confirmation-only">
+                    <div className="receipt-row">
+                      <span>Ordernummer</span>
+                      <strong>{orderNumber}</strong>
+                    </div>
+                    <div className="receipt-row">
+                      <span>Datum & tid</span>
+                      <strong>
+                        {purchaseTime.toLocaleString("sv-SE", {
+                          year: "numeric",
+                          month: "2-digit",
+                          day: "2-digit",
+                          hour: "2-digit",
+                          minute: "2-digit"
+                        })}
+                      </strong>
+                    </div>
+                    <div className="receipt-row">
+                      <span>Arrangör</span>
+                      <strong>{summary.sellerName || "–"}</strong>
+                    </div>
                   </div>
-                  <div className="receipt-row">
-                    <span>Betalning</span>
-                    <strong>Online</strong>
-                  </div>
-                  <div className="receipt-row">
-                    <span>Säljare</span>
-                    <strong>{summary.sellerName || "–"}</strong>
-                  </div>
-                  <div className="receipt-row">
-                    <span>Biljett såld genom</span>
-                    <strong>Lonetec AB</strong>
-                  </div>
-                  <div className="receipt-row">
-                    <span>Styckpris (exkl. moms)</span>
-                    <strong>{formatSek(netAmount)}</strong>
-                  </div>
-                  <div className="receipt-row">
-                    <span>Moms (25%)</span>
-                    <strong>{formatSek(vatAmount)}</strong>
-                  </div>
-                  <div className="receipt-total">
-                    <span>Totalbelopp</span>
-                    <strong>{formatSek(totalAmount)}</strong>
-                  </div>
-                </div>
+                )}
               </div>
             ) : null}
             {status === "paid" ? (
@@ -755,10 +810,18 @@ const AdminPage = () => {
     showName: true,
     showEmail: true,
     showPhone: true,
+    showCity: true,
     showOrganization: true,
     showTranslate: true,
     showDiscountCode: true
   });
+  const [adminSectionLabels, setAdminSectionLabels] = useState({
+    program: "",
+    speakers: "",
+    partners: ""
+  });
+  const DEFAULT_SECTION_ORDER = ["text", "program", "form", "speakers", "partners", "place"];
+  const [adminSectionOrder, setAdminSectionOrder] = useState([...DEFAULT_SECTION_ORDER]);
   const [pendingTheme, setPendingTheme] = useState("default");
   const [themeSaving, setThemeSaving] = useState(false);
   const [registrationDeadlineInput, setRegistrationDeadlineInput] = useState("");
@@ -816,6 +879,12 @@ const AdminPage = () => {
     phone: "",
     bgNumber: ""
   });
+  const [activeSubscriptionPlan, setActiveSubscriptionPlan] = useState("gratis");
+  const [showPremiumConfirm, setShowPremiumConfirm] = useState(false);
+  const [showPremiumAvslutaInfo, setShowPremiumAvslutaInfo] = useState(false);
+  const [showBasConfirm, setShowBasConfirm] = useState(false);
+  const [basQuantity, setBasQuantity] = useState(1);
+  const [basPaymentLoading, setBasPaymentLoading] = useState(false);
   const [passwordForm, setPasswordForm] = useState({
     currentPassword: "",
     newPassword: "",
@@ -832,6 +901,9 @@ const AdminPage = () => {
   const [payoutLoading, setPayoutLoading] = useState(false);
   const [myPayoutRequests, setMyPayoutRequests] = useState([]);
   const [payoutMessage, setPayoutMessage] = useState("");
+  const [anonymizeEligibleEvents, setAnonymizeEligibleEvents] = useState([]);
+  const [anonymizeEligibleLoading, setAnonymizeEligibleLoading] = useState(false);
+  const [anonymizeInProgress, setAnonymizeInProgress] = useState(null);
   const [adminPaymentsSeries, setAdminPaymentsSeries] = useState([]);
   const [adminPaymentsTotal, setAdminPaymentsTotal] = useState(0);
   const [adminPaymentsRows, setAdminPaymentsRows] = useState([]);
@@ -856,6 +928,12 @@ const AdminPage = () => {
   const [adminPayoutRequestsLoading, setAdminPayoutRequestsLoading] = useState(false);
   const [adminPayoutRequestsPageSize, setAdminPayoutRequestsPageSize] = useState(10);
   const [adminPayoutRequestsPage, setAdminPayoutRequestsPage] = useState(1);
+  const [adminPayoutAnonymizeInProgressId, setAdminPayoutAnonymizeInProgressId] = useState(null);
+  const [adminAnonymizeConfirmRequestId, setAdminAnonymizeConfirmRequestId] = useState(null);
+  const [adminOrganizations, setAdminOrganizations] = useState([]);
+  const [adminOrganizationsLoading, setAdminOrganizationsLoading] = useState(false);
+  const [adminOrgCreditsEdit, setAdminOrgCreditsEdit] = useState({});
+  const [adminOrgSavingProfileId, setAdminOrgSavingProfileId] = useState(null);
 
   const payoutEventIdsWithOngoingRequest = useMemo(
     () =>
@@ -1048,9 +1126,21 @@ const AdminPage = () => {
       showName: data.sections?.showName !== false,
       showEmail: data.sections?.showEmail !== false,
       showPhone: data.sections?.showPhone !== false,
+      showCity: data.sections?.showCity !== false,
       showOrganization: data.sections?.showOrganization !== false,
       showTranslate: data.sections?.showTranslate !== false,
       showDiscountCode: data.sections?.showDiscountCode !== false
+    });
+    const order = data.sections?.sectionOrder;
+    setAdminSectionOrder(
+      Array.isArray(order) && order.length === 6
+        ? order
+        : [...DEFAULT_SECTION_ORDER]
+    );
+    setAdminSectionLabels({
+      program: data.sections?.sectionLabelProgram ?? "",
+      speakers: data.sections?.sectionLabelSpeakers ?? "",
+      partners: data.sections?.sectionLabelPartners ?? ""
     });
   };
 
@@ -1074,11 +1164,13 @@ const AdminPage = () => {
     }
     const data = await response.json();
     const profile = data.profile || {};
+    const plan = ["gratis", "bas", "premium"].includes((profile.subscription_plan || "").toLowerCase())
+      ? (profile.subscription_plan || "gratis").toLowerCase()
+      : "gratis";
+    setActiveSubscriptionPlan(plan);
     setProfileForm({
       profileId: profile.profile_id || "",
-      subscriptionPlan: ["gratis", "bas", "premium"].includes((profile.subscription_plan || "").toLowerCase())
-        ? (profile.subscription_plan || "gratis").toLowerCase()
-        : "gratis",
+      subscriptionPlan: plan,
       firstName: profile.first_name || "",
       lastName: profile.last_name || "",
       organization: profile.organization || "",
@@ -1088,7 +1180,10 @@ const AdminPage = () => {
       city: profile.city || "",
       email: profile.email || "",
       phone: profile.phone || "",
-      bgNumber: profile.bg_number || ""
+      bgNumber: profile.bg_number || "",
+      bas_event_credits: profile.bas_event_credits ?? 0,
+      premium_activated_at: profile.premium_activated_at || null,
+      premium_ends_at: profile.premium_ends_at || null
     });
   };
 
@@ -1155,11 +1250,29 @@ const AdminPage = () => {
     }
   };
 
+  const loadAnonymizeEligible = async (authToken) => {
+    if (!authToken) return;
+    setAnonymizeEligibleLoading(true);
+    try {
+      const response = await fetch(`${API_BASE}/admin/payout-anonymize-eligible`, {
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      if (!response.ok) throw new Error("Kunde inte ladda");
+      const data = await response.json();
+      setAnonymizeEligibleEvents(data.events || []);
+    } catch {
+      setAnonymizeEligibleEvents([]);
+    } finally {
+      setAnonymizeEligibleLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (token && adminSection === "payout") {
       setPayoutMessage("");
       loadPayoutSummary(token).catch(() => setPayoutSummary({ events: [], grandTotal: 0 }));
       loadMyPayoutRequests(token);
+      loadAnonymizeEligible(token);
     }
   }, [token, adminSection]);
 
@@ -1201,6 +1314,83 @@ const AdminPage = () => {
       setAdminPayoutRequests([]);
     } finally {
       setAdminPayoutRequestsLoading(false);
+    }
+  };
+
+  const loadAdminOrganizations = async () => {
+    if (!token || !isAdminUser) return;
+    setAdminOrganizationsLoading(true);
+    try {
+      const response = await fetch(`${API_BASE}/admin/organizations`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!response.ok) throw new Error("Failed to load");
+      const data = await response.json();
+      setAdminOrganizations(data.rows || []);
+      setAdminOrgCreditsEdit({});
+    } catch {
+      setAdminOrganizations([]);
+    } finally {
+      setAdminOrganizationsLoading(false);
+    }
+  };
+
+  const handleSaveOrgBasCredits = async (profileId, value) => {
+    if (!token || profileId == null || profileId === "") return;
+    setAdminOrgSavingProfileId(profileId);
+    try {
+      const response = await fetch(`${API_BASE}/admin/profiles/${encodeURIComponent(profileId)}/bas-credits`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ bas_event_credits: value })
+      });
+      const data = await response.json();
+      if (data.ok) {
+        setAdminOrganizations((prev) =>
+          prev.map((row) =>
+            row.profileId === profileId ? { ...row, basEventCredits: data.basEventCredits ?? value } : row
+          )
+        );
+        setAdminOrgCreditsEdit((prev) => {
+          const next = { ...prev };
+          delete next[profileId];
+          return next;
+        });
+      }
+    } finally {
+      setAdminOrgSavingProfileId(null);
+    }
+  };
+
+  const handleSaveOrgSubscriptionPlan = async (profileId, plan) => {
+    if (!token || profileId == null || profileId === "" || !plan) return;
+    setAdminOrgSavingProfileId(profileId);
+    try {
+      const response = await fetch(`${API_BASE}/admin/profiles/${encodeURIComponent(profileId)}/subscription-plan`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ subscription_plan: plan })
+      });
+      const data = await response.json();
+      if (data.ok) {
+        setAdminOrganizations((prev) =>
+          prev.map((row) =>
+            row.profileId === profileId ? { ...row, subscriptionPlan: data.subscriptionPlan ?? plan } : row
+          )
+        );
+      } else {
+        setError(data.error || "Kunde inte spara abonnemangsform");
+      }
+    } catch {
+      setError("Kunde inte spara abonnemangsform");
+    } finally {
+      setAdminOrgSavingProfileId(null);
     }
   };
 
@@ -1263,6 +1453,7 @@ const AdminPage = () => {
     if (token && isAdminUser && adminSection === "admin") {
       loadAdminPayments();
       loadAdminPayoutRequests();
+      loadAdminOrganizations();
     }
   }, [token, isAdminUser, adminSection]);
 
@@ -1326,11 +1517,13 @@ const AdminPage = () => {
         showName: true,
         showEmail: true,
         showPhone: true,
+        showCity: true,
         showOrganization: true,
         showTranslate: true,
         showDiscountCode: true
       })
     );
+    setAdminSectionLabels({ program: "", speakers: "", partners: "" });
   }, [selectedEventId, token]);
 
   useEffect(() => {
@@ -1615,43 +1808,109 @@ const AdminPage = () => {
     setProfileForm((prev) => ({ ...prev, [name]: value }));
   };
 
+  const performProfileSave = async () => {
+    const response = await fetch(`${API_BASE}/admin/profile`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        subscriptionPlan: profileForm.subscriptionPlan,
+        firstName: profileForm.firstName,
+        lastName: profileForm.lastName,
+        organization: profileForm.organization,
+        orgNumber: profileForm.orgNumber,
+        address: profileForm.address,
+        postalCode: profileForm.postalCode,
+        city: profileForm.city,
+        email: profileForm.email,
+        phone: profileForm.phone,
+        bgNumber: profileForm.bgNumber
+      })
+    });
+    if (!response.ok) {
+      throw new Error("Profile save failed");
+    }
+    await loadProfile(token);
+  };
+
   const handleProfileSubmit = (event) => {
     event.preventDefault();
     if (!token) {
       setError("Logga in för att spara profilen.");
       return;
     }
+    const plan = (profileForm.subscriptionPlan || "gratis").toLowerCase();
+    if (plan === "premium") {
+      setShowPremiumConfirm(true);
+      return;
+    }
+    if (plan === "bas") {
+      setShowBasConfirm(true);
+      return;
+    }
     setError("");
     setProfileLoading(true);
-    const saveProfile = async () => {
-      const response = await fetch(`${API_BASE}/admin/profile`, {
-        method: "PUT",
+    performProfileSave()
+      .catch(() => setError("Kunde inte spara profilen."))
+      .finally(() => setProfileLoading(false));
+  };
+
+  const handleBasKop = async () => {
+    if (!token || basPaymentLoading) return;
+    setBasPaymentLoading(true);
+    setError("");
+    try {
+      const response = await fetch(`${API_BASE}/admin/payments/start-bas`, {
+        method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`
         },
-        body: JSON.stringify({
-          subscriptionPlan: profileForm.subscriptionPlan,
-          firstName: profileForm.firstName,
-          lastName: profileForm.lastName,
-          organization: profileForm.organization,
-          orgNumber: profileForm.orgNumber,
-          address: profileForm.address,
-          postalCode: profileForm.postalCode,
-          city: profileForm.city,
-          email: profileForm.email,
-          phone: profileForm.phone,
-          bgNumber: profileForm.bgNumber
-        })
+        body: JSON.stringify({ quantity: basQuantity })
       });
-      if (!response.ok) {
-        throw new Error("Profile save failed");
+      const data = await response.json();
+      if (!data.ok || !data.checkoutUrl || !data.paymentId) {
+        setError(data.error || "Kunde inte starta betalning.");
+        return;
       }
-      await loadProfile(token);
-    };
-    saveProfile()
+      localStorage.setItem("pendingPaymentId", data.paymentId);
+      window.location.href = data.checkoutUrl;
+    } catch (err) {
+      setError(err?.message || "Kunde inte starta betalning.");
+    } finally {
+      setBasPaymentLoading(false);
+    }
+  };
+
+  const handlePremiumConfirmYes = () => {
+    setShowPremiumConfirm(false);
+    setError("");
+    setProfileLoading(true);
+    performProfileSave()
       .catch(() => setError("Kunde inte spara profilen."))
       .finally(() => setProfileLoading(false));
+  };
+
+  const handlePremiumAvslut = async () => {
+    if (!token) return;
+    setError("");
+    try {
+      const response = await fetch(`${API_BASE}/admin/profile/premium-avslut`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
+      });
+      const data = await response.json();
+      if (data.ok) {
+        loadProfile(token).catch(() => {});
+        setShowPremiumAvslutaInfo(true);
+      } else {
+        setError(data.error || "Kunde inte registrera avslut.");
+      }
+    } catch (err) {
+      setError(err?.message || "Kunde inte registrera avslut.");
+    }
   };
 
   const handlePayoutRequest = (event) => {
@@ -1664,6 +1923,13 @@ const AdminPage = () => {
     }
     if (payoutSelectedEventIds.length === 0) {
       setPayoutMessage("Välj minst ett event för utbetalning.");
+      return;
+    }
+    const selectedTotal = (payoutSummary.events || [])
+      .filter((ev) => payoutSelectedEventIds.includes(ev.id))
+      .reduce((sum, ev) => sum + (Number(ev.totalRevenue) || 0), 0);
+    if (selectedTotal <= 0) {
+      setPayoutMessage("Beloppet är 0 SEK. Utbetalning kan inte begäras när det inte finns några intäkter att utbetala.");
       return;
     }
     setPayoutLoading(true);
@@ -1855,7 +2121,12 @@ const AdminPage = () => {
       await loadAdminPrices(token, selectedEventId);
       localStorage.setItem(buildStorageKey("pricesUpdatedAt", selectedEventId), String(Date.now()));
     };
-    savePrice().catch(() => setPriceSectionError("Kunde inte spara priset."));
+    savePrice().catch((err) =>
+      setPriceSectionError(
+        err?.message ||
+          "Kunde inte spara priset. Priser är endast tillgängligt för abonnemang Bas eller Premium."
+      )
+    );
   };
 
   const handleDiscountSubmit = (event) => {
@@ -2297,7 +2568,11 @@ const AdminPage = () => {
         },
         body: JSON.stringify({
           eventId: Number(selectedEventId),
-          ...next
+          ...next,
+          sectionOrder: adminSectionOrder,
+          sectionLabelProgram: adminSectionLabels.program,
+          sectionLabelSpeakers: adminSectionLabels.speakers,
+          sectionLabelPartners: adminSectionLabels.partners
         })
       });
       if (!response.ok) {
@@ -2305,6 +2580,72 @@ const AdminPage = () => {
       }
     };
     saveSections().catch(() => setError("Kunde inte spara sektionerna."));
+  };
+
+  const saveAdminSectionLabels = () => {
+    if (!token || !selectedEventId) return;
+    const saveSections = async () => {
+      const response = await fetch(`${API_BASE}/admin/sections`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          eventId: Number(selectedEventId),
+          ...adminSectionVisibility,
+          sectionOrder: adminSectionOrder,
+          sectionLabelProgram: adminSectionLabels.program,
+          sectionLabelSpeakers: adminSectionLabels.speakers,
+          sectionLabelPartners: adminSectionLabels.partners
+        })
+      });
+      if (!response.ok) throw new Error("Sections save failed");
+    };
+    saveSections().catch(() => setError("Kunde inte spara rubrikerna."));
+  };
+
+  const handleSectionLabelChange = (field, value) => {
+    setAdminSectionLabels((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const sectionOrderLabels = {
+    text: "Text",
+    program: "Program",
+    form: "Anmäl dig här",
+    speakers: "Talare",
+    partners: "Partner",
+    place: "Plats"
+  };
+
+  const handleSectionOrderMove = (fromIndex, direction) => {
+    const toIndex = direction === "up" ? fromIndex - 1 : fromIndex + 1;
+    if (toIndex < 0 || toIndex >= adminSectionOrder.length) return;
+    const next = [...adminSectionOrder];
+    const tmp = next[fromIndex];
+    next[fromIndex] = next[toIndex];
+    next[toIndex] = tmp;
+    setAdminSectionOrder(next);
+    if (!token || !selectedEventId) return;
+    const saveSections = async () => {
+      const response = await fetch(`${API_BASE}/admin/sections`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          eventId: Number(selectedEventId),
+          ...adminSectionVisibility,
+          sectionOrder: next,
+          sectionLabelProgram: adminSectionLabels.program,
+          sectionLabelSpeakers: adminSectionLabels.speakers,
+          sectionLabelPartners: adminSectionLabels.partners
+        })
+      });
+      if (!response.ok) throw new Error("Sections save failed");
+    };
+    saveSections().catch(() => setError("Kunde inte spara sektionsordningen."));
   };
 
   const handleCustomFieldFormChange = (event) => {
@@ -2861,7 +3202,7 @@ const AdminPage = () => {
         >
           ☰
         </button>
-        <a href="/admin" className="admin-topbar-logo" aria-label="Kyrkevent.se">
+        <a href="/" className="admin-topbar-logo" aria-label="Kyrkevent.se">
           <img src="/kyrkevent-logo.png" alt="" className="admin-topbar-logo-img" />
         </a>
         {adminMenuOpen ? (
@@ -2971,6 +3312,72 @@ const AdminPage = () => {
       <div className="admin-content">
         {token && isAdminUser && adminSection === "admin" ? (
           <div className="section">
+            {adminAnonymizeConfirmRequestId != null ? (
+              <div
+                className="admin-toaster-overlay"
+                style={{
+                  position: "fixed",
+                  inset: 0,
+                  zIndex: 10000,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  background: "rgba(0,0,0,0.4)"
+                }}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="admin-anonymize-toaster-title"
+              >
+                <div
+                  className="admin-toaster"
+                  style={{
+                    background: "var(--bg, #fff)",
+                    padding: "1.25rem 1.5rem",
+                    borderRadius: "8px",
+                    boxShadow: "0 4px 20px rgba(0,0,0,0.2)",
+                    maxWidth: "360px"
+                  }}
+                >
+                  <p id="admin-anonymize-toaster-title" style={{ margin: "0 0 1rem 0", fontWeight: 600 }}>
+                    Vill du enligt GDPR verkligen anonymisera detta event?
+                  </p>
+                  <div style={{ display: "flex", gap: "0.75rem", justifyContent: "flex-end" }}>
+                    <button
+                      type="button"
+                      className="button button-outline"
+                      onClick={() => setAdminAnonymizeConfirmRequestId(null)}
+                    >
+                      Nej
+                    </button>
+                    <button
+                      type="button"
+                      className="button"
+                      onClick={async () => {
+                        const requestId = adminAnonymizeConfirmRequestId;
+                        if (!token || requestId == null) return;
+                        setAdminAnonymizeConfirmRequestId(null);
+                        setAdminPayoutAnonymizeInProgressId(requestId);
+                        try {
+                          const response = await fetch(
+                            `${API_BASE}/admin/payout-requests/${requestId}/anonymize-bookings`,
+                            { method: "POST", headers: { Authorization: `Bearer ${token}` } }
+                          );
+                          const data = await response.json();
+                          if (!response.ok) throw new Error(data.error || "Kunde inte anonymisera.");
+                          await loadAdminPayoutRequests();
+                        } catch (err) {
+                          console.error(err);
+                        } finally {
+                          setAdminPayoutAnonymizeInProgressId(null);
+                        }
+                      }}
+                    >
+                      Ja
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
             <h2>Admin</h2>
             <p className="muted">
               Samtliga betalda anmälningar i systemet. Filtrera på datum (när bokningen skapades).
@@ -3381,6 +3788,7 @@ const AdminPage = () => {
                         <th>Eventdatum</th>
                         <th>Belopp</th>
                         <th>Datum</th>
+                        <th>Anonymisera</th>
                         <th>Åtgärd</th>
                       </tr>
                     </thead>
@@ -3421,6 +3829,40 @@ const AdminPage = () => {
                                     timeStyle: "short"
                                   })
                                 : "–"}
+                            </td>
+                            <td>
+                              {r.status === "betald" ? (
+                                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "0.25rem" }}>
+                                  {r.isAnonymized ? (
+                                    <span className="muted" style={{ fontSize: "0.85rem" }}>Anonymiserad</span>
+                                  ) : (
+                                    <>
+                                      <button
+                                        type="button"
+                                        className="button button-small button-outline"
+                                        disabled={!r.canAnonymize || adminPayoutAnonymizeInProgressId === r.id}
+                                        onClick={() => setAdminAnonymizeConfirmRequestId(r.id)}
+                                      >
+                                        {adminPayoutAnonymizeInProgressId === r.id ? "Anonymiserar..." : "Anonymisera"}
+                                      </button>
+                                      {!r.canAnonymize && r.anonymizeAvailableFrom ? (
+                                        <span className="muted" style={{ fontSize: "0.75rem" }}>
+                                          Tillgänglig från{" "}
+                                          {new Date(r.anonymizeAvailableFrom + "T12:00:00").toLocaleDateString("sv-SE", {
+                                            day: "numeric",
+                                            month: "short",
+                                            year: "numeric"
+                                          })}
+                                        </span>
+                                      ) : null}
+                                    </>
+                                  )}
+                                </div>
+                              ) : (
+                                <span className="muted" style={{ fontSize: "0.8rem" }}>
+                                  –
+                                </span>
+                              )}
                             </td>
                             <td>
                               {r.status === "pågår" && r.id != null ? (
@@ -3564,6 +4006,90 @@ const AdminPage = () => {
               </>
             ) : (
               <p className="muted">Inga utbetalningsbegäran.</p>
+            )}
+
+            <h3 style={{ marginTop: "2.5rem", marginBottom: "0.75rem" }}>Organisationer – abonnemang och eventkrediter</h3>
+            <p className="muted" style={{ marginBottom: "1rem" }}>
+              Antal event med pris kvar = hur många event (med biljettpriser) organisationen kan lägga till. Du kan ändra värdet och spara för att tilldela krediter utan att kunden betalar.
+            </p>
+            {adminOrganizationsLoading ? (
+              <p className="muted">Laddar...</p>
+            ) : adminOrganizations.length === 0 ? (
+              <p className="muted">Inga organisationer.</p>
+            ) : (
+              <div className="table-wrap">
+                <table className="table admin-organizations-table">
+                  <thead>
+                    <tr>
+                      <th>Organisation</th>
+                      <th>Profil ID</th>
+                      <th>Abonnemangsform</th>
+                      <th>Startdatum</th>
+                      <th>Slutdatum</th>
+                      <th>Avslut anmält</th>
+                      <th>Antal event med pris kvar</th>
+                      <th style={{ width: "6rem" }}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {adminOrganizations.map((row) => {
+                      const rowKey = row.profileId || `user-${row.userId}`;
+                      const draft = adminOrgCreditsEdit[rowKey];
+                      const value = draft !== undefined ? draft : row.basEventCredits;
+                      const isSaving = adminOrgSavingProfileId === row.profileId;
+                      const fmt = (iso) => (iso ? new Date(iso).toLocaleDateString("sv-SE", { year: "numeric", month: "short", day: "numeric" }) : "–");
+                      return (
+                        <tr key={rowKey}>
+                          <td>{row.organization || "–"}</td>
+                          <td>{row.profileId || "–"}</td>
+                          <td>
+                            <select
+                              value={(row.subscriptionPlan || "gratis").toLowerCase()}
+                              onChange={(e) => handleSaveOrgSubscriptionPlan(row.profileId, e.target.value)}
+                              disabled={adminOrgSavingProfileId === row.profileId || !row.profileId}
+                              className={`field-input admin-org-plan-select admin-org-plan-select-${(row.subscriptionPlan || "gratis").toLowerCase()}`}
+                              style={{ minWidth: "6rem" }}
+                              aria-label="Abonnemangsform"
+                              data-plan={(row.subscriptionPlan || "gratis").toLowerCase()}
+                            >
+                              <option value="gratis">Gratis</option>
+                              <option value="bas">Bas</option>
+                              <option value="premium">Premium</option>
+                            </select>
+                            {adminOrgSavingProfileId === row.profileId ? (
+                              <span className="muted" style={{ marginLeft: "0.35rem", fontSize: "0.8rem" }}>Sparar…</span>
+                            ) : null}
+                          </td>
+                          <td className="admin-org-date">{fmt(row.premiumActivatedAt)}</td>
+                          <td className="admin-org-date">{fmt(row.premiumEndsAt)}</td>
+                          <td className="admin-org-date">{fmt(row.premiumAvslutRequestedAt)}</td>
+                          <td>
+                            <input
+                              type="number"
+                              min={0}
+                              step={1}
+                              value={value}
+                              onChange={(e) => setAdminOrgCreditsEdit((prev) => ({ ...prev, [rowKey]: Math.max(0, parseInt(e.target.value, 10) || 0) }))}
+                              className="field-input admin-org-credits-input"
+                              style={{ width: "4.5rem", padding: "0.35rem 0.5rem" }}
+                            />
+                          </td>
+                          <td>
+                            <button
+                              type="button"
+                              className="button button-small"
+                              disabled={isSaving || !row.profileId || value === row.basEventCredits}
+                              onClick={() => handleSaveOrgBasCredits(row.profileId, value)}
+                            >
+                              {isSaving ? "Sparar…" : "Spara"}
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
         ) : null}
@@ -3750,7 +4276,10 @@ const AdminPage = () => {
                             </td>
                             <td>
                               {r.requestedAt
-                                ? new Date(r.requestedAt).toLocaleString("sv-SE", { dateStyle: "short", timeStyle: "short" })
+                                ? new Date(r.requestedAt).toLocaleString("sv-SE", {
+                                    dateStyle: "short",
+                                    timeStyle: "short"
+                                  })
                                 : "–"}
                             </td>
                             <td style={{ textAlign: "right" }}>
@@ -3781,7 +4310,17 @@ const AdminPage = () => {
                                 }}
                                 aria-label="Ladda ner kvitto PDF"
                               >
-                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                <svg
+                                  width="18"
+                                  height="18"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth="2"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  aria-hidden="true"
+                                >
                                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                                   <polyline points="7 10 12 15 17 10" />
                                   <line x1="12" y1="15" x2="12" y2="3" />
@@ -3804,40 +4343,77 @@ const AdminPage = () => {
               <div className="subscription-plan-box">
                 <span className="field-label">Abonnemang</span>
                 <fieldset className="subscription-plan-options" aria-label="Välj abonnemang">
-                  <label className="subscription-plan-option">
-                    <input
-                      type="radio"
-                      name="subscriptionPlan"
-                      value="gratis"
-                      checked={(profileForm.subscriptionPlan || "gratis") === "gratis"}
-                      onChange={() => setProfileForm((prev) => ({ ...prev, subscriptionPlan: "gratis" }))}
-                    />
-                    <span>Gratis</span>
-                  </label>
-                  <label className="subscription-plan-option">
-                    <input
-                      type="radio"
-                      name="subscriptionPlan"
-                      value="bas"
-                      checked={(profileForm.subscriptionPlan || "gratis") === "bas"}
-                      onChange={() => setProfileForm((prev) => ({ ...prev, subscriptionPlan: "bas" }))}
-                    />
-                    <span>Bas</span>
-                  </label>
-                  <label className="subscription-plan-option">
-                    <input
-                      type="radio"
-                      name="subscriptionPlan"
-                      value="premium"
-                      checked={(profileForm.subscriptionPlan || "gratis") === "premium"}
-                      onChange={() => setProfileForm((prev) => ({ ...prev, subscriptionPlan: "premium" }))}
-                    />
-                    <span>Premium</span>
-                  </label>
+                  {(() => {
+                    const premiumEndsAt = profileForm.premium_ends_at ? new Date(profileForm.premium_ends_at) : null;
+                    const todayStart = new Date();
+                    todayStart.setHours(0, 0, 0, 0);
+                    const isPremiumActive = (activeSubscriptionPlan || "gratis") === "premium" && (!premiumEndsAt || premiumEndsAt >= todayStart);
+                    const gratisDisabled = (profileForm.bas_event_credits ?? 0) > 0 || isPremiumActive;
+                    const basDisabled = isPremiumActive;
+                    return (
+                      <>
+                        <label className={`subscription-plan-option ${gratisDisabled ? "is-disabled" : ""}`} title={gratisDisabled ? ((profileForm.bas_event_credits ?? 0) > 0 ? "Gratis kan inte väljas när du har obrukade Bas-eventkrediter." : "Gratis kan inte väljas med aktivt Premium-abonnemang.") : ""}>
+                          <input
+                            type="radio"
+                            name="subscriptionPlan"
+                            value="gratis"
+                            checked={(profileForm.subscriptionPlan || "gratis") === "gratis"}
+                            onChange={() => setProfileForm((prev) => ({ ...prev, subscriptionPlan: "gratis" }))}
+                            disabled={gratisDisabled}
+                            aria-disabled={gratisDisabled}
+                          />
+                          <span>Gratis</span>
+                        </label>
+                        <label className={`subscription-plan-option ${basDisabled ? "is-disabled" : ""}`} title={basDisabled ? "Bas kan inte väljas med aktivt Premium-abonnemang." : ""}>
+                          <input
+                            type="radio"
+                            name="subscriptionPlan"
+                            value="bas"
+                            checked={(profileForm.subscriptionPlan || "gratis") === "bas"}
+                            onChange={() => setProfileForm((prev) => ({ ...prev, subscriptionPlan: "bas" }))}
+                            disabled={basDisabled}
+                            aria-disabled={basDisabled}
+                          />
+                          <span>Bas</span>
+                        </label>
+                        <label className="subscription-plan-option">
+                          <input
+                            type="radio"
+                            name="subscriptionPlan"
+                            value="premium"
+                            checked={(profileForm.subscriptionPlan || "gratis") === "premium"}
+                            onChange={() => setProfileForm((prev) => ({ ...prev, subscriptionPlan: "premium" }))}
+                          />
+                          <span>Premium</span>
+                        </label>
+                      </>
+                    );
+                  })()}
                 </fieldset>
                 <button type="submit" className="button subscription-plan-activate" disabled={profileLoading}>
-                  Aktivera
+                  Fortsätt
                 </button>
+                <div className="subscription-plan-status">
+                  <div className="subscription-plan-status-row">
+                    <span className="subscription-plan-status-label">Abonnemang:</span>
+                    <span className={`subscription-plan-badge subscription-plan-badge-${(activeSubscriptionPlan || "gratis").toLowerCase()}`}>
+                      {(activeSubscriptionPlan || "gratis") === "gratis" ? "Gratis" : (activeSubscriptionPlan || "gratis") === "bas" ? "Bas" : "Premium"}
+                    </span>
+                  </div>
+                  {(activeSubscriptionPlan || "gratis") === "bas" && (profileForm.bas_event_credits ?? 0) >= 0 ? (
+                    <div className="subscription-plan-credits">Bas-eventkrediter: {profileForm.bas_event_credits ?? 0}</div>
+                  ) : null}
+                  {(activeSubscriptionPlan || "gratis") === "premium" && (profileForm.premium_activated_at || profileForm.premium_ends_at) ? (
+                    <div className="subscription-plan-premium-dates">
+                      {profileForm.premium_activated_at ? (
+                        <div className="subscription-plan-credits">Aktiv från {new Date(profileForm.premium_activated_at).toLocaleDateString("sv-SE", { year: "numeric", month: "long", day: "numeric" })}</div>
+                      ) : null}
+                      {profileForm.premium_ends_at ? (
+                        <div className="subscription-plan-credits">Giltig till {new Date(profileForm.premium_ends_at).toLocaleDateString("sv-SE", { year: "numeric", month: "long", day: "numeric" })}</div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
               </div>
               <label className="field">
                 <span className="field-label">Profil-ID (kan inte ändras)</span>
@@ -3981,6 +4557,140 @@ const AdminPage = () => {
               </div>
             </form>
 
+            {showPremiumConfirm ? (
+              <div className="modal-overlay" onClick={() => { setShowPremiumConfirm(false); setShowPremiumAvslutaInfo(false); }}>
+                <div className="modal premium-confirm-modal" onClick={(e) => e.stopPropagation()}>
+                  <div className="modal-header">
+                    <h3>{(() => {
+                      const pe = profileForm.premium_ends_at ? new Date(profileForm.premium_ends_at) : null;
+                      const todayStart = new Date();
+                      todayStart.setHours(0, 0, 0, 0);
+                      const hasActivePremium = (activeSubscriptionPlan || "gratis") === "premium" && pe && pe >= todayStart;
+                      return hasActivePremium ? "Premium-abonnemang" : "Aktivera Premium";
+                    })()}</h3>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      onClick={() => { setShowPremiumConfirm(false); setShowPremiumAvslutaInfo(false); }}
+                      aria-label="Stäng"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <div className="modal-body">
+                    {(() => {
+                      const pe = profileForm.premium_ends_at ? new Date(profileForm.premium_ends_at) : null;
+                      const todayStart = new Date();
+                      todayStart.setHours(0, 0, 0, 0);
+                      const hasActivePremium = (activeSubscriptionPlan || "gratis") === "premium" && pe && pe >= todayStart;
+                      if (hasActivePremium && showPremiumAvslutaInfo) {
+                        return (
+                          <p className="premium-confirm-text">
+                            Abonnemanget upphör automatiskt att gälla när utgångsdatumet ({profileForm.premium_ends_at ? new Date(profileForm.premium_ends_at).toLocaleDateString("sv-SE", { year: "numeric", month: "long", day: "numeric" }) : ""}) har passerat. Du behöver inte göra något – du behåller Premium till dess.
+                          </p>
+                        );
+                      }
+                      if (hasActivePremium) {
+                        return (
+                          <p className="premium-confirm-text">
+                            Du har redan Premium-abonnemang, giltigt till {profileForm.premium_ends_at ? new Date(profileForm.premium_ends_at).toLocaleDateString("sv-SE", { year: "numeric", month: "long", day: "numeric" }) : "–"}.
+                          </p>
+                        );
+                      }
+                      return (
+                        <>
+                          <p className="premium-confirm-text">
+                            När du aktiverar Premium startar du ett månadsabonnemang, pris 1995 kr/år. Kostnaderna faktureras till de uppgifter som finns i profilinställningarna.
+                          </p>
+                          <p className="premium-confirm-question">Vill du aktivera Premium-abonnemang?</p>
+                        </>
+                      );
+                    })()}
+                  </div>
+                  <div className="modal-footer">
+                    {(() => {
+                      const pe = profileForm.premium_ends_at ? new Date(profileForm.premium_ends_at) : null;
+                      const todayStart = new Date();
+                      todayStart.setHours(0, 0, 0, 0);
+                      const hasActivePremium = (activeSubscriptionPlan || "gratis") === "premium" && pe && pe >= todayStart;
+                      if (hasActivePremium && showPremiumAvslutaInfo) {
+                        return (
+                          <button type="button" className="button" onClick={() => { setShowPremiumConfirm(false); setShowPremiumAvslutaInfo(false); }}>
+                            Stäng
+                          </button>
+                        );
+                      }
+                      if (hasActivePremium) {
+                        return (
+                          <button type="button" className="button" onClick={handlePremiumAvslut}>
+                            Avsluta abonnemang
+                          </button>
+                        );
+                      }
+                      return (
+                        <>
+                          <button type="button" className="button button-outline" onClick={() => setShowPremiumConfirm(false)}>
+                            Nej
+                          </button>
+                          <button type="button" className="button" onClick={handlePremiumConfirmYes} disabled={profileLoading}>
+                            Ja
+                          </button>
+                        </>
+                      );
+                    })()}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {showBasConfirm ? (
+              <div className="modal-overlay" onClick={() => setShowBasConfirm(false)}>
+                <div className="modal premium-confirm-modal bas-confirm-modal" onClick={(e) => e.stopPropagation()}>
+                  <div className="modal-header">
+                    <h3>Köp Bas – eventkrediter</h3>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      onClick={() => setShowBasConfirm(false)}
+                      aria-label="Stäng"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <div className="modal-body">
+                    {(profileForm.bas_event_credits ?? 0) > 0 ? (
+                      <p className="premium-confirm-text bas-confirm-has-credits">
+                        Du har redan {profileForm.bas_event_credits ?? 0} {((profileForm.bas_event_credits ?? 0) === 1 ? "användbar eventkredit" : "användbara eventkrediter")} till ditt event, vill du ändå köpa mer?
+                      </p>
+                    ) : null}
+                    <p className="premium-confirm-text">
+                      Med Bas-abonnemang så kan du lägga till biljettpriser på dina event, för varje kredit kan du skapa en eller flera priser per event. Välj hur många eventsidor (1–5) du vill aktivera biljettpriser för. Betalning sker via onlinebetalning och krediter dras av när du lägger till priser för ditt event.
+                    </p>
+                    <label className="field">
+                      <span className="field-label">Antal eventsidor med biljettpriser (1–5)</span>
+                      <select
+                        value={basQuantity}
+                        onChange={(e) => setBasQuantity(Number(e.target.value))}
+                        className="field-input"
+                      >
+                        {[1, 2, 3, 4, 5].map((n) => (
+                          <option key={n} value={n}>{n}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <div className="modal-footer">
+                    <button type="button" className="button button-outline" onClick={() => setShowBasConfirm(false)}>
+                      Avbryt
+                    </button>
+                    <button type="button" className="button" onClick={handleBasKop} disabled={basPaymentLoading}>
+                      {basPaymentLoading ? "Startar…" : "Köp"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
             <h2 className="profile-password-title">Byt lösenord</h2>
             <form className="admin-form" onSubmit={handlePasswordSubmit}>
               <label className="field">
@@ -4047,17 +4757,35 @@ const AdminPage = () => {
 
             {token && !selectedEventId ? (
               <div className="admin-events">
-                <div className="admin-info-text">
-                  <p style={{ marginTop: 0, fontWeight: 600 }}>Skapa ditt nya event här!</p>
-                  <ul style={{ marginBottom: 0, paddingLeft: "1.25rem" }}>
-                    <li>Var noga med att ange rätt namn eftersom det inte går att ändra efteråt.</li>
-                    <li>Ange specifikt datum för när ditt event äger rum.</li>
-                    <li>Glöm inte att ha din profil uppdaterad med samtliga uppgifter innan du börjar skapa event.</li>
-                    <li>I menyn efter att du har gått in på ditt skapade event kan du ändra färger, lägga till formulär, skapa biljetter och rabattkoder m.m.</li>
-                    <li>När du är klar med ditt event – Klicka på Förhandsgranska event – Detta är också den länk som du skall dela med dig av för anmälan</li>
-                  </ul>
+                <div className="admin-events-top-row">
+                  <div className="admin-info-text">
+                    <p style={{ marginTop: 0, fontWeight: 600 }}>Skapa ditt nya event här!</p>
+                    <ul style={{ marginBottom: 0, paddingLeft: "1.25rem" }}>
+                      <li>Var noga med att ange rätt namn eftersom det inte går att ändra efteråt.</li>
+                      <li>Ange specifikt datum för när ditt event äger rum.</li>
+                      <li>Glöm inte att ha din profil uppdaterad med samtliga uppgifter innan du börjar skapa event.</li>
+                      <li>I menyn efter att du har gått in på ditt skapade event kan du ändra färger, lägga till formulär, skapa biljetter och rabattkoder m.m.</li>
+                      <li>När du är klar med ditt event – Klicka på Förhandsgranska event – Detta är också den länk som du skall dela med dig av för anmälan</li>
+                    </ul>
+                  </div>
+                  <div className="admin-events-plan-wrap">
+                    <span className="admin-events-plan-label">Abonnemang</span>
+                    <span className={`admin-events-plan-badge subscription-plan-badge subscription-plan-badge-${(activeSubscriptionPlan || "gratis").toLowerCase()}`}>
+                      {(activeSubscriptionPlan || "gratis") === "gratis" ? "Gratis" : (activeSubscriptionPlan || "gratis") === "bas" ? "Bas" : "Premium"}
+                    </span>
+                    {(activeSubscriptionPlan || "gratis") === "premium" && (profileForm.premium_activated_at || profileForm.premium_ends_at) ? (
+                      <div className="admin-events-premium-dates">
+                        {profileForm.premium_activated_at ? (
+                          <span className="admin-events-date">Från {new Date(profileForm.premium_activated_at).toLocaleDateString("sv-SE", { year: "numeric", month: "short", day: "numeric" })}</span>
+                        ) : null}
+                        {profileForm.premium_ends_at ? (
+                          <span className="admin-events-date">Till {new Date(profileForm.premium_ends_at).toLocaleDateString("sv-SE", { year: "numeric", month: "short", day: "numeric" })}</span>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
-                <h2>Event (admin)</h2>
+                <h2>Dina event</h2>
                 <form className="admin-form" onSubmit={handleEventSubmit}>
                   <label className="field">
                     <span className="field-label">Nytt event (namn)</span>
@@ -4220,7 +4948,22 @@ const AdminPage = () => {
 
           {token && selectedEventId && adminSection === "bookings" ? (
             <div className="section admin-bookings">
-              <h2>Bokningar (admin)</h2>
+              <div className="admin-event-url-row">
+                <label className="field">
+                  <span className="field-label">Sidans URL</span>
+                  <div className="field-with-action field-with-copy">
+                    <input
+                      type="text"
+                      readOnly
+                      value={selectedEvent?.slug ? `${window.location.origin}/e/${selectedEvent.slug}` : ""}
+                      className="admin-event-url-input"
+                      aria-label="Eventets webbadress"
+                    />
+                    <CopyEventUrlButton url={selectedEvent?.slug ? `${window.location.origin}/e/${selectedEvent.slug}` : ""} />
+                  </div>
+                </label>
+              </div>
+              <h2>Bokningar</h2>
               {(() => {
                 const startRaw = selectedEvent?.event_start_date;
                 const endRaw = selectedEvent?.event_end_date;
@@ -4615,8 +5358,60 @@ const AdminPage = () => {
           {token && selectedEventId && adminSection === "frontpage" ? (
             <>
               <div className="section">
-                <div className="section-header">
-                  <h2>Program (admin)</h2>
+                <h2>Sektionsordning på framsidan</h2>
+                <p className="muted">Ordningen nedan styr i vilken ordning sektionerna visas på den publika sidan. Använd pilarna för att flytta.</p>
+                <ul className="section-order-list">
+                  {adminSectionOrder.map((key, index) => (
+                    <li key={key} className="section-order-item">
+                      <span className="section-order-label">{sectionOrderLabels[key] ?? key}</span>
+                      <span className="section-order-arrows">
+                        <button
+                          type="button"
+                          className="icon-button"
+                          aria-label="Flytta upp"
+                          disabled={index === 0}
+                          onClick={() => handleSectionOrderMove(index, "up")}
+                        >
+                          ↑
+                        </button>
+                        <button
+                          type="button"
+                          className="icon-button"
+                          aria-label="Flytta ner"
+                          disabled={index === adminSectionOrder.length - 1}
+                          onClick={() => handleSectionOrderMove(index, "down")}
+                        >
+                          ↓
+                        </button>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div className="section">
+                <div
+                  className="section-header"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "1rem",
+                    flexWrap: "wrap",
+                    justifyContent: "space-between"
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
+                    <h2>Program</h2>
+                    <label className="field" style={{ marginBottom: 0, maxWidth: "260px" }}>
+                      <input
+                        type="text"
+                        value={adminSectionLabels.program}
+                        onChange={(e) => handleSectionLabelChange("program", e.target.value)}
+                        onBlur={saveAdminSectionLabels}
+                        placeholder="Byt ut rubriknamn"
+                        aria-label="Byt ut rubriknamn för Program"
+                      />
+                    </label>
+                  </div>
                   <label className="field checkbox-field section-toggle">
                     <span className="field-label">Visa</span>
                     <input
@@ -4706,7 +5501,7 @@ const AdminPage = () => {
 
               <div className="section">
                 <div className="section-header">
-                  <h2>Plats (admin)</h2>
+                  <h2>Plats</h2>
                   <label className="field checkbox-field section-toggle">
                     <span className="field-label">Visa</span>
                     <input
@@ -4784,7 +5579,7 @@ const AdminPage = () => {
 
               <div className="section">
                 <div className="section-header">
-                  <h2>Text (admin)</h2>
+                  <h2>Text</h2>
                   <label className="field checkbox-field section-toggle">
                     <span className="field-label">Visa</span>
                     <input
@@ -4867,8 +5662,29 @@ const AdminPage = () => {
               </div>
 
               <div className="section">
-                <div className="section-header">
-                  <h2>Talare (admin)</h2>
+                <div
+                  className="section-header"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "1rem",
+                    flexWrap: "wrap",
+                    justifyContent: "space-between"
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
+                    <h2>Talare</h2>
+                    <label className="field" style={{ marginBottom: 0, maxWidth: "260px" }}>
+                      <input
+                        type="text"
+                        value={adminSectionLabels.speakers}
+                        onChange={(e) => handleSectionLabelChange("speakers", e.target.value)}
+                        onBlur={saveAdminSectionLabels}
+                        placeholder="Byt ut rubriknamn"
+                        aria-label="Byt ut rubriknamn för Talare"
+                      />
+                    </label>
+                  </div>
                   <label className="field checkbox-field section-toggle">
                     <span className="field-label">Visa</span>
                     <input
@@ -4958,8 +5774,29 @@ const AdminPage = () => {
               </div>
 
               <div className="section">
-                <div className="section-header">
-                  <h2>Partner (admin)</h2>
+                <div
+                  className="section-header"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "1rem",
+                    flexWrap: "wrap",
+                    justifyContent: "space-between"
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
+                    <h2>Partner</h2>
+                    <label className="field" style={{ marginBottom: 0, maxWidth: "260px" }}>
+                      <input
+                        type="text"
+                        value={adminSectionLabels.partners}
+                        onChange={(e) => handleSectionLabelChange("partners", e.target.value)}
+                        onBlur={saveAdminSectionLabels}
+                        placeholder="Byt ut rubriknamn"
+                        aria-label="Byt ut rubriknamn för Partner"
+                      />
+                    </label>
+                  </div>
                   <label className="field checkbox-field section-toggle">
                     <span className="field-label">Visa</span>
                     <input
@@ -5298,6 +6135,15 @@ const AdminPage = () => {
                     />
                   </label>
                   <label className="field checkbox-field">
+                    <span className="field-label">Ort</span>
+                    <input
+                      name="showCity"
+                      type="checkbox"
+                      checked={adminSectionVisibility.showCity}
+                      onChange={handleSectionVisibilityChange}
+                    />
+                  </label>
+                  <label className="field checkbox-field">
                     <span className="field-label">Telnr</span>
                     <input
                       name="showPhone"
@@ -5408,7 +6254,7 @@ const AdminPage = () => {
                 )}
               </div>
               <div className="section">
-                <h2>Priser (admin)</h2>
+                <h2>Biljettpriser</h2>
                 {(profileForm.subscriptionPlan || "gratis").toLowerCase() === "gratis" ? (
                   <p className="admin-info-text admin-subscription-block">
                     Priser är endast tillgängligt för abonnemang Bas eller Premium. Byt abonnemang under Profil för att kunna lägga till och redigera priser.
@@ -5523,7 +6369,7 @@ const AdminPage = () => {
               </div>
 
               <div className="section">
-                <h2>Rabattkoder (admin)</h2>
+                <h2>Rabattkoder</h2>
                 <form className="admin-form" onSubmit={handleDiscountSubmit}>
                   <label className="field">
                     <span className="field-label">Kod</span>
@@ -5726,6 +6572,7 @@ function App() {
     priceId: "",
     discountCode: ""
   });
+  const [showTermsInfo, setShowTermsInfo] = useState(false);
   const [customFields, setCustomFields] = useState([]);
   const [customFieldValues, setCustomFieldValues] = useState({});
   const [paymentError, setPaymentError] = useState("");
@@ -5762,9 +6609,17 @@ function App() {
     showName: true,
     showEmail: true,
     showPhone: true,
+    showCity: true,
     showOrganization: true,
     showTranslate: true,
     showDiscountCode: true
+  });
+  const publicDefaultSectionOrder = ["text", "program", "form", "speakers", "partners", "place"];
+  const [sectionOrder, setSectionOrder] = useState([...publicDefaultSectionOrder]);
+  const [sectionLabels, setSectionLabels] = useState({
+    program: "",
+    speakers: "",
+    partners: ""
   });
   const [mapCoords, setMapCoords] = useState(null);
   const [mapError, setMapError] = useState("");
@@ -5946,9 +6801,19 @@ function App() {
       showName: data.sections?.showName !== false,
       showEmail: data.sections?.showEmail !== false,
       showPhone: data.sections?.showPhone !== false,
+      showCity: data.sections?.showCity !== false,
       showOrganization: data.sections?.showOrganization !== false,
       showTranslate: data.sections?.showTranslate !== false,
       showDiscountCode: data.sections?.showDiscountCode !== false
+    });
+    const order = data.sections?.sectionOrder;
+    setSectionOrder(
+      Array.isArray(order) && order.length === 6 ? order : [...publicDefaultSectionOrder]
+    );
+    setSectionLabels({
+      program: data.sections?.sectionLabelProgram ?? "",
+      speakers: data.sections?.sectionLabelSpeakers ?? "",
+      partners: data.sections?.sectionLabelPartners ?? ""
     });
   };
 
@@ -6232,6 +7097,7 @@ function App() {
 
   const handleCheckout = async () => {
     if (bookingCart.length === 0) return;
+    if (paymentLoading) return;
     setPaymentError("");
     setPaymentLoading(true);
     try {
@@ -6256,7 +7122,8 @@ function App() {
             cart: true,
             count: data.bookings?.length ?? bookingCart.length,
             eventName: data.eventName || event?.name || "Event",
-            sellerName: data.sellerName || null
+            sellerName: data.sellerName || null,
+            orderNumber: data.orderNumber || null
           })
         );
         setBookingCart([]);
@@ -6316,40 +7183,127 @@ function App() {
       ) : null}
       {eventLoading ? <p className="muted">Laddar event...</p> : null}
       {eventError ? <p className="admin-error">{eventError}</p> : null}
-      {sectionVisibility.showText ? (
-        <div className="section">
-          {hero.title ? <h2>{hero.title}</h2> : null}
-          {hero.bodyHtml ? (
-            <div
-              className="hero-body"
-              dangerouslySetInnerHTML={{ __html: hero.bodyHtml }}
-            ></div>
-          ) : (
-            <p className="muted">Texten uppdateras snart.</p>
-          )}
-        </div>
-      ) : null}
-      {sectionVisibility.showProgram ? (
-        <div className="section">
-          <h2>Program</h2>
-          {programItems.length > 0 ? (
-            <div className="program">
-              {programItems.map((item) => (
-                <div className="program-item" key={item.id}>
-                  <span className="program-time">{item.time_text}</span>
-                  <span className="program-title">{item.description}</span>
-                </div>
-              ))}
+      {sectionOrder.map((key) => {
+        if (key === "text" && sectionVisibility.showText) {
+          return (
+            <div className="section" key="text">
+              {hero.title ? <h2>{hero.title}</h2> : null}
+              {hero.bodyHtml ? (
+                <div
+                  className="hero-body"
+                  dangerouslySetInnerHTML={{ __html: hero.bodyHtml }}
+                />
+              ) : (
+                <p className="muted">Texten uppdateras snart.</p>
+              )}
             </div>
-          ) : (
-            <p className="muted">Programmet uppdateras snart.</p>
-          )}
-        </div>
-      ) : null}
-
-      <div className="section">
-        <h2>Anmäl dig här</h2>
-        <form className="form" onSubmit={handleAddToCart} id="booking-form">
+          );
+        }
+        if (key === "program" && sectionVisibility.showProgram) {
+          return (
+            <div className="section" key="program">
+              <h2>{sectionLabels.program.trim() || "Program"}</h2>
+              {programItems.length > 0 ? (
+                <div className="program">
+                  {programItems.map((item) => (
+                    <div className="program-item" key={item.id}>
+                      <span className="program-time">{item.time_text}</span>
+                      <span className="program-title">{item.description}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="muted">Programmet uppdateras snart.</p>
+              )}
+            </div>
+          );
+        }
+        if (key === "speakers" && sectionVisibility.showSpeakers) {
+          return (
+            <div className="section" key="speakers">
+              <h2>{sectionLabels.speakers.trim() || "Talare"}</h2>
+              {speakers.length > 0 ? (
+                <div className="speakers">
+                  {speakers.map((speaker) => (
+                    <div className="speaker-card" key={speaker.id}>
+                      <img
+                        className="speaker-photo"
+                        src={resolveAssetUrl(speaker.image_url)}
+                        alt={speaker.name}
+                      />
+                      <div className="speaker-name">{speaker.name}</div>
+                      <div className="speaker-bio">{speaker.bio}</div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="muted">Talare uppdateras snart.</p>
+              )}
+            </div>
+          );
+        }
+        if (key === "partners" && sectionVisibility.showPartners) {
+          return (
+            <div className="section" key="partners">
+              <h2>{sectionLabels.partners.trim() || "Partner"}</h2>
+              {partners.length > 0 ? (
+                <div className="partner-grid">
+                  {partners.map((partner) => (
+                    <div className="partner-card" key={partner.id}>
+                      {partner.url ? (
+                        <a href={partner.url} target="_blank" rel="noreferrer">
+                          <img
+                            className="partner-logo"
+                            src={resolveAssetUrl(partner.image_url)}
+                            alt={partner.name || "Partnerlogo"}
+                          />
+                        </a>
+                      ) : (
+                        <img
+                          className="partner-logo"
+                          src={resolveAssetUrl(partner.image_url)}
+                          alt={partner.name || "Partnerlogo"}
+                        />
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="muted">Partners uppdateras snart.</p>
+              )}
+            </div>
+          );
+        }
+        if (key === "place" && sectionVisibility.showPlace) {
+          return (
+            <div className="section" key="place">
+              <h2>Plats</h2>
+              <div className="place-card">
+                {place.address && mapCoords ? (
+                  <div className="place-map" role="img" aria-label={`Karta: ${place.address}`}>
+                    <div className="place-map-inner" ref={mapContainerRef}></div>
+                  </div>
+                ) : (
+                  <div className="place-map placeholder" aria-hidden="true"></div>
+                )}
+                <div className="place-address">
+                  {place.address ? (
+                    <span>{place.address}</span>
+                  ) : (
+                    <span className="muted">Adress kommer snart.</span>
+                  )}
+                  {mapError ? <span className="muted"> {mapError}</span> : null}
+                </div>
+                {place.description ? <div className="place-desc">{place.description}</div> : null}
+              </div>
+            </div>
+          );
+        }
+        if (key === "form") {
+          return (
+            <div className="section" key="form">
+              <h2>Anmäl dig här</h2>
+              <form className="form" onSubmit={handleAddToCart} id="booking-form">
           {sectionVisibility.showName ? (
             <label className="field">
               <span className="field-label">Namn</span>
@@ -6374,16 +7328,18 @@ function App() {
               />
             </label>
           ) : null}
-          <label className="field">
-            <span className="field-label">Ort</span>
-            <input
-              name="city"
-              type="text"
-              value={form.city}
-              onChange={handleChange}
-              required
-            />
-          </label>
+          {sectionVisibility.showCity ? (
+            <label className="field">
+              <span className="field-label">Ort</span>
+              <input
+                name="city"
+                type="text"
+                value={form.city}
+                onChange={handleChange}
+                required
+              />
+            </label>
+          ) : null}
           {sectionVisibility.showPhone ? (
             <label className="field">
               <span className="field-label">Telnr</span>
@@ -6448,7 +7404,16 @@ function App() {
             )
           )}
           <label className="field checkbox-field">
-            <span className="field-label">Jag godkänner villkor</span>
+            <span className="field-label">
+              Jag godkänner villkor{" "}
+              <button
+                type="button"
+                className="link-button"
+                onClick={() => setShowTermsInfo(true)}
+              >
+                Läs villkor
+              </button>
+            </span>
             <input
               name="terms"
               type="checkbox"
@@ -6522,7 +7487,7 @@ function App() {
             type="submit"
             disabled={isEventInPast}
           >
-            Registrera
+            Lägg till
           </button>
           {bookingCart.length > 0 ? (
             <>
@@ -6540,15 +7505,17 @@ function App() {
                         <div>
                           <strong>{item.name}</strong> – {item.priceName}
                         </div>
-                        <div className="booking-cart-price-row">
-                          <span>Pris: {base.toLocaleString("sv-SE")} kr</span>
-                          {percent > 0 ? (
-                            <>
-                              <span>Rabatt {percent}%: -{rabatt.toLocaleString("sv-SE")} kr</span>
-                              <span>Att betala: {discounted.toLocaleString("sv-SE")} kr</span>
-                            </>
-                          ) : null}
-                        </div>
+                        {prices.length > 0 ? (
+                          <div className="booking-cart-price-row">
+                            <span>Pris: {base.toLocaleString("sv-SE")} kr</span>
+                            {percent > 0 ? (
+                              <>
+                                <span>Rabatt {percent}%: -{rabatt.toLocaleString("sv-SE")} kr</span>
+                                <span>Att betala: {discounted.toLocaleString("sv-SE")} kr</span>
+                              </>
+                            ) : null}
+                          </div>
+                        ) : null}
                       </div>
                       <button
                         type="button"
@@ -6561,50 +7528,52 @@ function App() {
                     </div>
                   );
                 })}
-                <div className="booking-cart-summary">
-                  {(() => {
-                    const baseTotal = bookingCart.reduce(
-                      (sum, item) => sum + (Number(item.priceAmount) || 0),
-                      0
-                    );
-                    const percent = cartDiscountPercent || 0;
-                    const discountedTotal =
-                      percent > 0
-                        ? bookingCart.reduce((sum, item) => {
-                            const base = Number(item.priceAmount) || 0;
-                            const d = Math.max(0.01, base * (1 - percent / 100));
-                            return sum + d;
-                          }, 0)
-                        : baseTotal;
-                    const rabattTotal = Math.max(0, baseTotal - discountedTotal);
-                    const serviceFeeCart = discountedTotal > 0 ? 10 : 0;
-                    const payableTotal = discountedTotal + serviceFeeCart;
-                    return (
-                      <>
-                        <div>
-                          <strong>Summa ord. pris:</strong>{" "}
-                          {baseTotal.toLocaleString("sv-SE")} kr
-                        </div>
-                        {percent > 0 ? (
+                {prices.length > 0 ? (
+                  <div className="booking-cart-summary">
+                    {(() => {
+                      const baseTotal = bookingCart.reduce(
+                        (sum, item) => sum + (Number(item.priceAmount) || 0),
+                        0
+                      );
+                      const percent = cartDiscountPercent || 0;
+                      const discountedTotal =
+                        percent > 0
+                          ? bookingCart.reduce((sum, item) => {
+                              const base = Number(item.priceAmount) || 0;
+                              const d = Math.max(0.01, base * (1 - percent / 100));
+                              return sum + d;
+                            }, 0)
+                          : baseTotal;
+                      const rabattTotal = Math.max(0, baseTotal - discountedTotal);
+                      const serviceFeeCart = discountedTotal > 0 ? 10 : 0;
+                      const payableTotal = discountedTotal + serviceFeeCart;
+                      return (
+                        <>
                           <div>
-                            <strong>Rabatt totalt:</strong>{" "}
-                            -{rabattTotal.toLocaleString("sv-SE")} kr ({percent}%)
+                            <strong>Summa ord. pris:</strong>{" "}
+                            {baseTotal.toLocaleString("sv-SE")} kr
                           </div>
-                        ) : null}
-                        {serviceFeeCart > 0 ? (
+                          {percent > 0 ? (
+                            <div>
+                              <strong>Rabatt totalt:</strong>{" "}
+                              -{rabattTotal.toLocaleString("sv-SE")} kr ({percent}%)
+                            </div>
+                          ) : null}
+                          {serviceFeeCart > 0 ? (
+                            <div>
+                              <strong>Serviceavgift:</strong>{" "}
+                              {serviceFeeCart.toLocaleString("sv-SE")} kr
+                            </div>
+                          ) : null}
                           <div>
-                            <strong>Serviceavgift:</strong>{" "}
-                            {serviceFeeCart.toLocaleString("sv-SE")} kr
+                            <strong>Att betala:</strong>{" "}
+                            {payableTotal.toLocaleString("sv-SE")} kr
                           </div>
-                        ) : null}
-                        <div>
-                          <strong>Att betala:</strong>{" "}
-                          {payableTotal.toLocaleString("sv-SE")} kr
-                        </div>
-                      </>
-                    );
-                  })()}
-                </div>
+                        </>
+                      );
+                    })()}
+                  </div>
+                ) : null}
               </div>
               <button
                 type="button"
@@ -6612,88 +7581,90 @@ function App() {
                 onClick={handleCheckout}
                 disabled={paymentLoading || isEventInPast}
               >
-                {paymentLoading ? "Startar betalning..." : "Checka ut"}
+                {paymentLoading ? "Startar betalning..." : "Checka ut och skicka in bokningen"}
               </button>
             </>
           ) : null}
           {paymentError ? <p className="admin-error">{paymentError}</p> : null}
-        </form>
-      </div>
-
-      {sectionVisibility.showSpeakers ? (
-        <div className="section">
-          <h2>Talare</h2>
-          {speakers.length > 0 ? (
-            <div className="speakers">
-              {speakers.map((speaker) => (
-                <div className="speaker-card" key={speaker.id}>
-                  <img
-                    className="speaker-photo"
-                    src={resolveAssetUrl(speaker.image_url)}
-                    alt={speaker.name}
-                  />
-                  <div className="speaker-name">{speaker.name}</div>
-                  <div className="speaker-bio">{speaker.bio}</div>
-                </div>
-              ))}
+              </form>
             </div>
-          ) : (
-            <p className="muted">Talare uppdateras snart.</p>
-          )}
-        </div>
-      ) : null}
+          );
+        }
+        return null;
+      })}
 
-      {sectionVisibility.showPartners ? (
-        <div className="section">
-          <h2>Partner</h2>
-          {partners.length > 0 ? (
-            <div className="partner-grid">
-              {partners.map((partner) => (
-                <div className="partner-card" key={partner.id}>
-                  {partner.url ? (
-                    <a href={partner.url} target="_blank" rel="noreferrer">
-                      <img
-                        className="partner-logo"
-                        src={resolveAssetUrl(partner.image_url)}
-                        alt={partner.name || "Partnerlogo"}
-                      />
-                    </a>
-                  ) : (
-                    <img
-                      className="partner-logo"
-                      src={resolveAssetUrl(partner.image_url)}
-                      alt={partner.name || "Partnerlogo"}
-                    />
-                  )}
-                </div>
-              ))}
+      {showTermsInfo ? (
+        <div
+          className="terms-toast"
+          role="dialog"
+          aria-modal="false"
+          aria-label="Villkor för anmälan och personuppgiftsbehandling"
+        >
+          <div className="terms-toast-inner">
+            <div className="terms-toast-header">
+              <h3>Villkor för anmälan och personuppgiftsbehandling</h3>
+              <button
+                type="button"
+                className="icon-button-clear"
+                onClick={() => setShowTermsInfo(false)}
+                aria-label="Stäng villkor"
+              >
+                <span aria-hidden="true">✕</span>
+              </button>
             </div>
-          ) : (
-            <p className="muted">Partners uppdateras snart.</p>
-          )}
-        </div>
-      ) : null}
+            <div className="terms-toast-body">
+              <p>Genom att skicka in min anmälan godkänner jag följande villkor:</p>
 
-      {sectionVisibility.showPlace ? (
-        <div className="section">
-          <h2>Plats</h2>
-          <div className="place-card">
-            {place.address && mapCoords ? (
-              <div className="place-map" role="img" aria-label={`Karta: ${place.address}`}>
-                <div className="place-map-inner" ref={mapContainerRef}></div>
-              </div>
-            ) : (
-              <div className="place-map placeholder" aria-hidden="true"></div>
-            )}
-            <div className="place-address">
-              {place.address ? (
-                <span>{place.address}</span>
-              ) : (
-                <span className="muted">Adress kommer snart.</span>
-              )}
-              {mapError ? <span className="muted"> {mapError}</span> : null}
+              <h4>Ändamål med personuppgiftsbehandling</h4>
+              <p>
+                Jag samtycker till att mina personuppgifter (exempelvis namn, e‑postadress,
+                telefonnummer och övriga uppgifter jag frivilligt lämnar) behandlas i syfte
+                att administrera min anmälan, kommunicera viktig information inför och efter
+                eventet samt hantera praktiska arrangemang.
+              </p>
+
+              <h4>Rättslig grund</h4>
+              <p>
+                Behandlingen av mina uppgifter är nödvändig för att fullgöra avtalet om mitt
+                deltagande i eventet. Eventuella ytterligare uppgifter som inte krävs för
+                anmälan (t.ex. marknadsföringssamtycke) behandlas endast om jag väljer att
+                lämna ett separat samtycke.
+              </p>
+
+              <h4>Lagringstid</h4>
+              <p>
+                Uppgifterna sparas endast så länge de behövs för arrangemanget och relaterad
+                administration, och raderas därefter eller avidentifieras enligt gällande
+                rutiner.
+              </p>
+
+              <h4>Delning av uppgifter</h4>
+              <p>
+                Uppgifterna kan delas med samarbetspartners som är direkt involverade i
+                arrangemanget (t.ex. lokalvärdar, säkerhetsansvariga eller tekniska
+                leverantörer), men endast i den omfattning som krävs för eventets
+                genomförande. Uppgifterna lämnas aldrig vidare för externa
+                marknadsföringsändamål utan uttryckligt samtycke.
+              </p>
+
+              <h4>Dina rättigheter</h4>
+              <p>Jag informeras om att jag har rätt att:</p>
+              <ul>
+                <li>få tillgång till mina uppgifter</li>
+                <li>begära rättelse eller radering</li>
+                <li>invända mot behandling</li>
+                <li>inge klagomål till Integritetsskyddsmyndigheten (IMY)</li>
+              </ul>
+
+              <h4>Kontaktuppgifter till personuppgiftsansvarig</h4>
+              <p>
+                Lonetec AB är personuppgiftsansvarig.
+                <br />
+                Kontakt: <a href="mailto:bokning@lonetec.se">bokning@lonetec.se</a>
+                <br />
+                Organisationsnummer: 556907–4189
+              </p>
             </div>
-            {place.description ? <div className="place-desc">{place.description}</div> : null}
           </div>
         </div>
       ) : null}

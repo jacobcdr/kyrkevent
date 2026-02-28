@@ -29,6 +29,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "";
 const MOLLIE_API_KEY = process.env.MOLLIE_API_KEY || "";
 const MOLLIE_AMOUNT = process.env.MOLLIE_AMOUNT || "";
 const MOLLIE_CURRENCY = process.env.MOLLIE_CURRENCY || "SEK";
+const BAS_PRICE_PER_EVENT = Math.max(1, Number(process.env.BAS_PRICE_PER_EVENT || "129") || 129);
 const SERVICE_FEE_AMOUNT =
   Math.max(0, Number(process.env.SERVICE_FEE_AMOUNT || "10") || 0);
 const FRONTEND_URL = process.env.FRONTEND_URL || "";
@@ -45,14 +46,23 @@ const app = express();
 const useSsl =
   String(process.env.PGSSL || "").toLowerCase() === "true" ||
   String(process.env.NODE_ENV || "").toLowerCase() === "production";
-const pool = new pg.Pool({
-  host: process.env.PGHOST,
-  port: process.env.PGPORT,
-  user: process.env.PGUSER,
-  password: process.env.PGPASSWORD,
-  database: process.env.PGDATABASE,
-  ssl: useSsl ? { rejectUnauthorized: false } : undefined
-});
+
+// Railway (och andra moln) ger ofta en enda connection string. Föredra privat URL om tillgänglig.
+const databaseUrl = process.env.DATABASE_PRIVATE_URL || process.env.DATABASE_URL;
+const poolConfig = databaseUrl
+  ? {
+      connectionString: databaseUrl,
+      ssl: useSsl ? { rejectUnauthorized: false } : undefined
+    }
+  : {
+      host: process.env.PGHOST,
+      port: process.env.PGPORT,
+      user: process.env.PGUSER,
+      password: process.env.PGPASSWORD,
+      database: process.env.PGDATABASE,
+      ssl: useSsl ? { rejectUnauthorized: false } : undefined
+    };
+const pool = new pg.Pool(poolConfig);
 
 app.set("trust proxy", 1);
 app.use(
@@ -200,10 +210,30 @@ const defaultSectionVisibility = {
   showName: true,
   showEmail: true,
   showPhone: true,
+  showCity: true,
   showOrganization: true,
   showTranslate: true,
-  showDiscountCode: true
+  showDiscountCode: true,
+  sectionLabelProgram: "",
+  sectionLabelSpeakers: "",
+  sectionLabelPartners: ""
 };
+
+const DEFAULT_SECTION_ORDER = ["text", "program", "form", "speakers", "partners", "place"];
+const VALID_SECTION_ORDER_KEYS = new Set(DEFAULT_SECTION_ORDER);
+
+function parseSectionOrder(raw) {
+  if (!raw) return [...DEFAULT_SECTION_ORDER];
+  try {
+    const arr = Array.isArray(raw) ? raw : JSON.parse(raw);
+    if (!Array.isArray(arr) || arr.length !== DEFAULT_SECTION_ORDER.length) return [...DEFAULT_SECTION_ORDER];
+    const filtered = arr.filter((k) => VALID_SECTION_ORDER_KEYS.has(k));
+    const missing = DEFAULT_SECTION_ORDER.filter((k) => !filtered.includes(k));
+    return [...filtered, ...missing];
+  } catch {
+    return [...DEFAULT_SECTION_ORDER];
+  }
+}
 
 const normalizeCustomFieldType = (value) => {
   const type = String(value || "").trim().toLowerCase();
@@ -237,10 +267,56 @@ const buildReceiptEmail = ({
   serviceFee: serviceFeePayload,
   createdAt,
   sellerName: sellerNamePayload,
-  orderNumber: orderNumberPayload
+  orderNumber: orderNumberPayload,
+  eventHasPrices: eventHasPricesPayload
 }) => {
   const sellerName = sellerNamePayload && String(sellerNamePayload).trim() ? sellerNamePayload : RECEIPT_SELLER;
   const createdDate = createdAt instanceof Date ? createdAt : new Date();
+  const orderNumber =
+    orderNumberPayload && String(orderNumberPayload).trim()
+      ? String(orderNumberPayload).trim()
+      : formatOrderNumber(createdDate);
+
+  const eventHasPrices = eventHasPricesPayload !== false;
+  const hasPrice =
+    eventHasPrices &&
+    typeof priceAmount === "number" &&
+    Number.isFinite(priceAmount);
+
+  if (!hasPrice) {
+    const lines = [
+      `Hej ${name || ""}!`,
+      "",
+      "Tack för din anmälan.",
+      "",
+      `Ordernummer: ${orderNumber}`,
+      `Datum & tid: ${createdDate.toLocaleString("sv-SE")}`,
+      `Arrangör: ${sellerName}`,
+      "",
+      "Vänliga hälsningar,",
+      sellerName
+    ];
+    const html = `
+    <div style="font-family: Arial, sans-serif; color:#111827;">
+      <p>Hej ${name || ""}!</p>
+      <p>Tack för din anmälan.</p>
+      <table style="border-collapse: collapse; width: 100%; max-width: 520px;">
+        <tbody>
+          <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Ordernummer</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">${orderNumber}</td></tr>
+          <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Datum &amp; tid</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">${createdDate.toLocaleString("sv-SE")}</td></tr>
+          <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Arrangör</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">${sellerName}</td></tr>
+        </tbody>
+      </table>
+      <p style="margin-top:16px;">Vänliga hälsningar,<br/>${sellerName}</p>
+    </div>
+  `;
+    return {
+      subject: "Bokningsbekräftelse",
+      text: lines.join("\n"),
+      html
+    };
+  }
+
   const ticketAmount = typeof discountedAmount === "number" ? discountedAmount : priceAmount;
   const serviceFee = typeof serviceFeePayload === "number" && serviceFeePayload > 0 ? serviceFeePayload : 0;
   const totalAmount = typeof ticketAmount === "number" ? ticketAmount + serviceFee : null;
@@ -257,10 +333,6 @@ const buildReceiptEmail = ({
     typeof totalAmount === "number"
       ? Math.round((totalAmount - (vatAmount || 0)) * 100) / 100
       : null;
-  const orderNumber =
-    orderNumberPayload && String(orderNumberPayload).trim()
-      ? String(orderNumberPayload).trim()
-      : formatOrderNumber(createdDate);
   const discountLabel =
     typeof discountPercent === "number" && discountPercent > 0 ? ` (${discountPercent}%)` : "";
 
@@ -504,14 +576,15 @@ app.get("/sections", async (req, res) => {
     const result = await pool.query(
       `
         SELECT show_program, show_place, show_text, show_speakers, show_partners,
-               show_name, show_email, show_phone, show_organization, show_translate, show_discount_code
+               show_name, show_email, show_phone, show_city, show_organization, show_translate, show_discount_code,
+               section_order, section_label_program, section_label_speakers, section_label_partners
         FROM event_sections
         WHERE event_id = $1
       `,
       [eventId]
     );
     if (result.rowCount === 0) {
-      res.json({ ok: true, sections: defaultSectionVisibility });
+      res.json({ ok: true, sections: { ...defaultSectionVisibility, sectionOrder: DEFAULT_SECTION_ORDER } });
       return;
     }
     const row = result.rows[0];
@@ -526,9 +599,14 @@ app.get("/sections", async (req, res) => {
         showName: row.show_name,
         showEmail: row.show_email,
         showPhone: row.show_phone,
+        showCity: row.show_city,
         showOrganization: row.show_organization,
         showTranslate: row.show_translate,
-        showDiscountCode: row.show_discount_code
+        showDiscountCode: row.show_discount_code,
+        sectionOrder: parseSectionOrder(row.section_order),
+        sectionLabelProgram: row.section_label_program ?? "",
+        sectionLabelSpeakers: row.section_label_speakers ?? "",
+        sectionLabelPartners: row.section_label_partners ?? ""
       }
     });
   } catch (error) {
@@ -734,7 +812,7 @@ const validateBaseFields = (payload, sections) => {
   if (sections.showEmail && !payload.email) errors.push("email");
   if (sections.showPhone && !payload.phone) errors.push("phone");
   if (sections.showOrganization && !payload.organization) errors.push("organization");
-  if (!payload.city) errors.push("city");
+  if (sections.showCity && !payload.city) errors.push("city");
   if (errors.length > 0) {
     return { ok: false, error: "Missing required fields" };
   }
@@ -798,6 +876,7 @@ app.post("/bookings", async (req, res) => {
           showName: sectionsResult.rows[0].show_name,
           showEmail: sectionsResult.rows[0].show_email,
           showPhone: sectionsResult.rows[0].show_phone,
+          showCity: sectionsResult.rows[0].show_city,
           showOrganization: sectionsResult.rows[0].show_organization
         };
     const baseValidation = validateBaseFields(parsed.payload, sections);
@@ -830,8 +909,9 @@ app.post("/bookings", async (req, res) => {
       ]
     );
     const booking = result.rows[0];
-    const sellerName = await getSellerNameForEvent(parsed.payload.eventId);
     const orderNumber = formatOrderNumber(booking.created_at);
+    await pool.query("UPDATE bookings SET order_number = $1 WHERE id = $2", [orderNumber, booking.id]);
+    const sellerName = await getSellerNameForEvent(parsed.payload.eventId);
     await sendReceiptEmail({
       name: booking.name,
       email: booking.email,
@@ -883,15 +963,16 @@ app.post("/payments/start", paymentLimiter, async (req, res) => {
         `,
         [parsed.payload.eventId]
       );
-      const sections = sectionsResult.rowCount === 0
-        ? defaultSectionVisibility
-        : {
-            ...defaultSectionVisibility,
-            showName: sectionsResult.rows[0].show_name,
-            showEmail: sectionsResult.rows[0].show_email,
-            showPhone: sectionsResult.rows[0].show_phone,
-            showOrganization: sectionsResult.rows[0].show_organization
-          };
+    const sections = sectionsResult.rowCount === 0
+      ? defaultSectionVisibility
+      : {
+          ...defaultSectionVisibility,
+          showName: sectionsResult.rows[0].show_name,
+          showEmail: sectionsResult.rows[0].show_email,
+          showPhone: sectionsResult.rows[0].show_phone,
+          showCity: sectionsResult.rows[0].show_city,
+          showOrganization: sectionsResult.rows[0].show_organization
+        };
       const baseValidation = validateBaseFields(parsed.payload, sections);
       if (!baseValidation.ok) {
         res.status(400).json({ ok: false, error: baseValidation.error });
@@ -921,13 +1002,14 @@ app.post("/payments/start", paymentLimiter, async (req, res) => {
         ]
       );
       const booking = insertResult.rows[0];
+      const orderNumber = formatOrderNumber(booking.created_at);
+      await pool.query("UPDATE bookings SET order_number = $1 WHERE id = $2", [orderNumber, booking.id]);
       const eventNameRow = await pool.query(
         "SELECT name FROM events WHERE id = $1",
         [parsed.payload.eventId]
       );
       const eventName = eventNameRow.rows[0]?.name || "Event";
       const sellerName = await getSellerNameForEvent(parsed.payload.eventId);
-      const orderNumber = formatOrderNumber(booking.created_at);
       await sendReceiptEmail({
         name: booking.name,
         email: booking.email,
@@ -938,7 +1020,8 @@ app.post("/payments/start", paymentLimiter, async (req, res) => {
         serviceFee: 0,
         createdAt: booking.created_at,
         sellerName,
-        orderNumber
+        orderNumber,
+        eventHasPrices: false
       });
       return res.json({
         ok: true,
@@ -952,7 +1035,8 @@ app.post("/payments/start", paymentLimiter, async (req, res) => {
           created_at: booking.created_at
         },
         eventName,
-        sellerName
+        sellerName,
+        orderNumber
       });
     } catch (error) {
       return res.status(500).json({ ok: false, error: "Failed to save booking" });
@@ -985,6 +1069,7 @@ app.post("/payments/start", paymentLimiter, async (req, res) => {
           showName: sectionsResult.rows[0].show_name,
           showEmail: sectionsResult.rows[0].show_email,
           showPhone: sectionsResult.rows[0].show_phone,
+          showCity: sectionsResult.rows[0].show_city,
           showOrganization: sectionsResult.rows[0].show_organization
         };
     const baseValidation = validateBaseFields(parsed.payload, sections);
@@ -1141,13 +1226,14 @@ app.post("/payments/start-cart", paymentLimiter, async (req, res) => {
   if (pricesCount === 0) {
     try {
       const sectionsResult = await pool.query(
-        "SELECT show_name, show_email, show_phone, show_organization FROM event_sections WHERE event_id = $1",
+      "SELECT show_name, show_email, show_phone, show_city, show_organization FROM event_sections WHERE event_id = $1",
         [eventId]
       );
       const sections = sectionsResult.rowCount === 0 ? defaultSectionVisibility : {
         showName: sectionsResult.rows[0].show_name,
         showEmail: sectionsResult.rows[0].show_email,
         showPhone: sectionsResult.rows[0].show_phone,
+        showCity: sectionsResult.rows[0].show_city,
         showOrganization: sectionsResult.rows[0].show_organization
       };
       const allowedFields = await loadCustomFieldsForEvent(eventId);
@@ -1184,6 +1270,7 @@ app.post("/payments/start-cart", paymentLimiter, async (req, res) => {
           ]
         );
         const booking = insertResult.rows[0];
+        await pool.query("UPDATE bookings SET order_number = $1 WHERE id = $2", [orderNumber, booking.id]);
         bookings.push(booking);
         const itemSellerName = await getSellerNameForEvent(payload.eventId);
         await sendReceiptEmail({
@@ -1196,7 +1283,8 @@ app.post("/payments/start-cart", paymentLimiter, async (req, res) => {
           serviceFee: 0,
           createdAt: booking.created_at,
           sellerName: itemSellerName,
-          orderNumber
+          orderNumber,
+          eventHasPrices: false
         });
       }
       const sellerName = await getSellerNameForEvent(eventId);
@@ -1206,7 +1294,8 @@ app.post("/payments/start-cart", paymentLimiter, async (req, res) => {
         cart: true,
         bookings,
         eventName,
-        sellerName
+        sellerName,
+        orderNumber
       });
     } catch (error) {
       return res.status(500).json({ ok: false, error: "Failed to save bookings" });
@@ -1225,13 +1314,14 @@ app.post("/payments/start-cart", paymentLimiter, async (req, res) => {
 
   try {
     const sectionsResult = await pool.query(
-      "SELECT show_name, show_email, show_phone, show_organization FROM event_sections WHERE event_id = $1",
+      "SELECT show_name, show_email, show_phone, show_city, show_organization FROM event_sections WHERE event_id = $1",
       [eventId]
     );
     const sections = sectionsResult.rowCount === 0 ? defaultSectionVisibility : {
       showName: sectionsResult.rows[0].show_name,
       showEmail: sectionsResult.rows[0].show_email,
       showPhone: sectionsResult.rows[0].show_phone,
+      showCity: sectionsResult.rows[0].show_city,
       showOrganization: sectionsResult.rows[0].show_organization
     };
     const allowedFields = await loadCustomFieldsForEvent(eventId);
@@ -1372,6 +1462,10 @@ app.get("/payments/verify", async (req, res) => {
       sellerName,
       orderNumber: payload.orderNumber || null
     };
+    if (payload.type === "bas") {
+      summary.orderType = "bas";
+      summary.quantity = payload.quantity;
+    }
 
     const alreadyFulfilled = order.booking_id || (order.booking_ids && order.booking_ids.length > 0);
     if (status === "paid" && !alreadyFulfilled) {
@@ -1386,7 +1480,17 @@ app.get("/payments/verify", async (req, res) => {
         const stillUnfulfilled = !current.booking_id && (!current.booking_ids || current.booking_ids.length === 0);
         if (stillUnfulfilled) {
           const pay = current.payload;
-          if (Array.isArray(pay.items) && pay.items.length > 0) {
+          if (pay && pay.type === "bas" && pay.profile_id && pay.quantity >= 1 && pay.quantity <= 5) {
+            const qty = Math.floor(Number(pay.quantity)) || 1;
+            await client.query(
+              "UPDATE admin_user_profiles SET bas_event_credits = bas_event_credits + $1, subscription_plan = 'bas' WHERE profile_id = $2",
+              [qty, pay.profile_id]
+            );
+            await client.query(
+              "UPDATE payment_orders SET status = $1, booking_id = -1 WHERE payment_id = $2",
+              [status, paymentId]
+            );
+          } else if (Array.isArray(pay.items) && pay.items.length > 0) {
             const bookingIds = [];
             for (const item of pay.items) {
               const finalAmount = item.discountedAmount ?? item.priceAmount;
@@ -1407,7 +1511,11 @@ app.get("/payments/verify", async (req, res) => {
                   JSON.stringify(item.customFields || [])
                 ]
               );
-              bookingIds.push(booking.rows[0].id);
+              const bid = booking.rows[0].id;
+              const bCreatedAt = booking.rows[0].created_at;
+              const orderNum = pay.orderNumber && String(pay.orderNumber).trim() ? String(pay.orderNumber).trim() : formatOrderNumber(bCreatedAt);
+              await client.query("UPDATE bookings SET order_number = $1 WHERE id = $2", [orderNum, bid]);
+              bookingIds.push(bid);
               if (item.discountCode) {
                 await client.query(
                   "UPDATE discount_codes SET used_count = used_count + 1 WHERE code = $1 AND event_id = $2 AND (max_uses IS NULL OR used_count < max_uses)",
@@ -1452,6 +1560,10 @@ app.get("/payments/verify", async (req, res) => {
                 JSON.stringify(pay.customFields || [])
               ]
             );
+            const bid = booking.rows[0].id;
+            const bCreatedAt = booking.rows[0].created_at;
+            const orderNum = pay.orderNumber && String(pay.orderNumber).trim() ? String(pay.orderNumber).trim() : formatOrderNumber(bCreatedAt);
+            await client.query("UPDATE bookings SET order_number = $1 WHERE id = $2", [orderNum, bid]);
             if (pay.discountCode) {
               await client.query(
                 "UPDATE discount_codes SET used_count = used_count + 1 WHERE code = $1 AND event_id = $2 AND (max_uses IS NULL OR used_count < max_uses)",
@@ -1460,7 +1572,7 @@ app.get("/payments/verify", async (req, res) => {
             }
             await client.query(
               "UPDATE payment_orders SET status = $1, booking_id = $2 WHERE payment_id = $3",
-              [status, booking.rows[0].id, paymentId]
+              [status, bid, paymentId]
             );
             const sellerName = await getSellerNameForEvent(pay.eventId);
             await sendReceiptEmail({
@@ -1471,7 +1583,7 @@ app.get("/payments/verify", async (req, res) => {
               discountedAmount: finalAmount,
               discountPercent: pay.discountPercent,
               serviceFee: typeof pay.serviceFee === "number" ? pay.serviceFee : 0,
-              createdAt: booking.rows[0]?.created_at,
+              createdAt: bCreatedAt,
               sellerName,
               orderNumber: pay.orderNumber || null
             });
@@ -1771,13 +1883,26 @@ app.get("/admin/profile", requireAdmin, async (req, res) => {
   try {
     const result = await pool.query(
       `
-        SELECT profile_id, first_name, last_name, organization, org_number, address, postal_code, city, email, phone, bg_number, subscription_plan
+        SELECT profile_id, first_name, last_name, organization, org_number, address, postal_code, city, email, phone, bg_number, subscription_plan, bas_event_credits, premium_activated_at, premium_ends_at, premium_avslut_requested_at
         FROM admin_user_profiles
         WHERE user_id = $1
       `,
       [req.userId]
     );
     let profile = result.rows[0] || null;
+    if (profile && profile.subscription_plan === "premium" && profile.premium_ends_at) {
+      const expired = await pool.query(
+        "SELECT (premium_ends_at::date < CURRENT_DATE) AS expired FROM admin_user_profiles WHERE user_id = $1",
+        [req.userId]
+      );
+      if (expired.rows[0]?.expired === true) {
+        await pool.query(
+          "UPDATE admin_user_profiles SET subscription_plan = 'gratis' WHERE user_id = $1",
+          [req.userId]
+        );
+        profile = { ...profile, subscription_plan: "gratis" };
+      }
+    }
     if (profile && !profile.profile_id) {
       for (let attempt = 0; attempt < 10; attempt++) {
         const newId = generateShortProfileId();
@@ -1806,12 +1931,56 @@ app.get("/admin/profile", requireAdmin, async (req, res) => {
       email: "",
       phone: "",
       bg_number: "",
-      subscription_plan: "gratis"
+      subscription_plan: "gratis",
+      bas_event_credits: 0,
+      premium_activated_at: null,
+      premium_ends_at: null,
+      premium_avslut_requested_at: null
     };
     if (!out.subscription_plan) out.subscription_plan = "gratis";
+    if (out.bas_event_credits == null) out.bas_event_credits = 0;
     res.json({ ok: true, profile: out });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to load profile" });
+  }
+});
+
+app.post("/admin/payments/start-bas", requireAdmin, paymentLimiter, async (req, res) => {
+  if (!mollie) {
+    res.status(500).json({ ok: false, error: "MOLLIE_API_KEY is not set" });
+    return;
+  }
+  const quantity = Math.min(5, Math.max(1, Math.floor(Number(req.body?.quantity) || 1)));
+  try {
+    const profileRow = await pool.query(
+      "SELECT profile_id FROM admin_user_profiles WHERE user_id = $1",
+      [req.userId]
+    );
+    const profileId = profileRow.rows[0]?.profile_id || "";
+    if (!profileId) {
+      res.status(400).json({ ok: false, error: "Profil saknas. Spara profilen först." });
+      return;
+    }
+    const amountSek = quantity * BAS_PRICE_PER_EVENT;
+    const origin = (req.get("origin") || FRONTEND_URL || req.protocol + "://" + req.get("host") || "").replace(/\/$/, "");
+    const payment = await mollie.payments.create({
+      amount: { currency: MOLLIE_CURRENCY, value: amountSek.toFixed(2) },
+      description: `${profileId} Bas ${quantity}`,
+      redirectUrl: `${origin}/payment-status`
+    });
+    const checkoutUrl = payment.getCheckoutUrl ? payment.getCheckoutUrl() : payment?._links?.checkout?.href;
+    if (!checkoutUrl) {
+      res.status(500).json({ ok: false, error: "Missing checkout URL" });
+      return;
+    }
+    await pool.query(
+      `INSERT INTO payment_orders (payment_id, payload, status) VALUES ($1, $2, $3)
+       ON CONFLICT (payment_id) DO UPDATE SET payload = EXCLUDED.payload, status = EXCLUDED.status`,
+      [payment.id, { type: "bas", profile_id: profileId, quantity }, payment.status]
+    );
+    res.json({ ok: true, checkoutUrl, paymentId: payment.id });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message || "Kunde inte starta betalning." });
   }
 });
 
@@ -1834,9 +2003,16 @@ app.put("/admin/profile", requireAdmin, async (req, res) => {
     : "gratis";
   try {
     const existing = await pool.query(
-      "SELECT profile_id FROM admin_user_profiles WHERE user_id = $1",
+      "SELECT profile_id, subscription_plan, premium_activated_at, premium_ends_at FROM admin_user_profiles WHERE user_id = $1",
       [req.userId]
     );
+    const wasPremium = (existing.rows[0]?.subscription_plan || "").toLowerCase() === "premium";
+    const hadPremiumDates = existing.rows[0]?.premium_activated_at != null;
+    const premiumEndsAt = existing.rows[0]?.premium_ends_at;
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const endsAtStr = premiumEndsAt ? new Date(premiumEndsAt).toISOString().slice(0, 10) : "";
+    const premiumStillActive = wasPremium && endsAtStr && endsAtStr >= todayStr;
+    const effectivePlan = premiumStillActive && (plan === "gratis" || plan === "bas") ? "premium" : plan;
     let profileId = existing.rows[0]?.profile_id;
     for (let attempt = 0; attempt < 10; attempt++) {
       if (!profileId) profileId = generateShortProfileId();
@@ -1876,10 +2052,22 @@ app.put("/admin/profile", requireAdmin, async (req, res) => {
             String(email || "").trim(),
             String(phone || "").trim(),
             String(bgNumber || "").trim(),
-            plan
+            effectivePlan
           ]
         );
-        res.json({ ok: true, profile: result.rows[0] });
+        if (effectivePlan === "premium" && (!wasPremium || !hadPremiumDates)) {
+          await pool.query(
+            `UPDATE admin_user_profiles
+             SET premium_activated_at = NOW(), premium_ends_at = NOW() + interval '1 year'
+             WHERE user_id = $1`,
+            [req.userId]
+          );
+        }
+        const profileRow = await pool.query(
+          "SELECT profile_id, first_name, last_name, organization, org_number, address, postal_code, city, email, phone, bg_number, subscription_plan, premium_activated_at, premium_ends_at FROM admin_user_profiles WHERE user_id = $1",
+          [req.userId]
+        );
+        res.json({ ok: true, profile: profileRow.rows[0] || result.rows[0] });
         return;
       } catch (err) {
         if (err.code === "23505" && !existing.rows[0]?.profile_id) {
@@ -1892,6 +2080,24 @@ app.put("/admin/profile", requireAdmin, async (req, res) => {
     res.status(500).json({ ok: false, error: "Failed to generate unique profile ID" });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to update profile" });
+  }
+});
+
+app.post("/admin/profile/premium-avslut", requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `UPDATE admin_user_profiles
+       SET premium_avslut_requested_at = NOW()
+       WHERE user_id = $1 AND subscription_plan = 'premium' AND premium_ends_at IS NOT NULL AND premium_ends_at::date >= CURRENT_DATE
+       RETURNING user_id, premium_avslut_requested_at`,
+      [req.userId]
+    );
+    if (result.rowCount === 0) {
+      return res.status(400).json({ ok: false, error: "Inget aktivt Premium-abonnemang att avsluta." });
+    }
+    res.json({ ok: true, premium_avslut_requested_at: result.rows[0].premium_avslut_requested_at });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Kunde inte registrera avslut." });
   }
 });
 
@@ -2121,6 +2327,13 @@ app.post("/admin/payout-request", requireAdmin, async (req, res) => {
         .filter(Boolean);
       grandTotal = eventsWithRevenue.reduce((s, e) => s + e.totalRevenue, 0);
     }
+    if (grandTotal <= 0) {
+      res.status(400).json({
+        ok: false,
+        error: "Beloppet är 0 SEK. Utbetalning kan inte begäras när det inte finns några intäkter att utbetala."
+      });
+      return;
+    }
     const profile = profileResult.rows[0] || {};
     const eventNamesStr = eventsWithRevenue.map((e) => e.name).join(", ");
     const lines = eventsWithRevenue.map(
@@ -2180,7 +2393,7 @@ app.get("/admin/admin-payments", requireAdmin, requireSuperAdmin, async (req, re
   const toDate = (req.query.toDate || "").toString().trim() || null;
   try {
     let query =
-      "SELECT b.id, b.created_at, b.pris, b.organization, b.event_id, e.name AS event_name, p.profile_id FROM bookings b LEFT JOIN events e ON e.id = b.event_id LEFT JOIN admin_user_profiles p ON p.user_id = e.user_id WHERE b.payment_status = $1";
+      "SELECT b.id, b.created_at, b.pris, b.event_id, e.name AS event_name, p.profile_id, p.organization AS profile_organization FROM bookings b LEFT JOIN events e ON e.id = b.event_id LEFT JOIN admin_user_profiles p ON p.user_id = e.user_id WHERE b.payment_status = $1";
     const params = ["paid"];
     if (fromDate) {
       params.push(fromDate);
@@ -2204,7 +2417,7 @@ app.get("/admin/admin-payments", requireAdmin, requireSuperAdmin, async (req, re
       return {
         id: row.id,
         profileId: row.profile_id || "",
-        organization: row.organization || "",
+        organization: row.profile_organization || "",
         eventName: row.event_name || "",
         amount: Math.round(amount * 100) / 100,
         created_at: row.created_at
@@ -2231,7 +2444,7 @@ app.get("/admin/admin-payments", requireAdmin, requireSuperAdmin, async (req, re
 app.get("/admin/payout-requests", requireAdmin, requireSuperAdmin, async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT pr.id, pr.profile_id, pr.user_id, pr.organization, pr.status, pr.event_ids, pr.event_names, pr.amount, pr.requested_at, p.bg_number
+      `SELECT pr.id, pr.profile_id, pr.user_id, pr.organization, pr.status, pr.event_ids, pr.event_names, pr.amount, pr.requested_at, pr.bookings_anonymized_at, p.bg_number
        FROM payout_requests pr
        LEFT JOIN admin_user_profiles p ON p.user_id = pr.user_id
        ORDER BY pr.requested_at DESC`
@@ -2239,6 +2452,7 @@ app.get("/admin/payout-requests", requireAdmin, requireSuperAdmin, async (req, r
     const rawRows = result.rows || [];
     const allEventIds = [...new Set(rawRows.flatMap((r) => (Array.isArray(r.event_ids) ? r.event_ids : [])))];
     let eventDatesMap = {};
+    let eventEndDateMap = {};
     if (allEventIds.length > 0) {
       const eventsResult = await pool.query(
         "SELECT id, event_start_date, event_end_date FROM events WHERE id = ANY($1::int[])",
@@ -2250,12 +2464,29 @@ app.get("/admin/payout-requests", requireAdmin, requireSuperAdmin, async (req, r
         const startFmt = start ? new Date(start + "T12:00:00").toLocaleDateString("sv-SE", { day: "numeric", month: "short", year: "numeric" }) : "–";
         const endFmt = end && end !== start ? new Date(end + "T12:00:00").toLocaleDateString("sv-SE", { day: "numeric", month: "short", year: "numeric" }) : null;
         eventDatesMap[e.id] = endFmt ? `${startFmt} – ${endFmt}` : startFmt;
+        const endDateOnly = end || start;
+        if (endDateOnly) {
+          eventEndDateMap[e.id] = endDateOnly;
+        }
       }
     }
+    const today = todayDateStr();
     const rows = rawRows.map((row) => {
       const eventIds = Array.isArray(row.event_ids) ? row.event_ids : [];
       const dateParts = eventIds.map((id) => eventDatesMap[id]).filter(Boolean);
       const eventDatesStr = dateParts.length > 0 ? dateParts.join("; ") : "–";
+      let anonymizeAvailableFrom = null;
+      for (const id of eventIds) {
+        const endDate = eventEndDateMap[id];
+        if (!endDate) continue;
+        const candidate = addDaysToDateStr(endDate, GDPR_ANONYMIZE_DAYS_AFTER_EVENT);
+        if (!candidate) continue;
+        if (!anonymizeAvailableFrom || candidate > anonymizeAvailableFrom) {
+          anonymizeAvailableFrom = candidate;
+        }
+      }
+      const isAnonymized = !!row.bookings_anonymized_at;
+      const canAnonymize = !isAnonymized && anonymizeAvailableFrom && anonymizeAvailableFrom <= today;
       return {
         id: row.id,
         profileId: row.profile_id || "",
@@ -2264,6 +2495,10 @@ app.get("/admin/payout-requests", requireAdmin, requireSuperAdmin, async (req, r
         status: row.status || "pågår",
         eventNames: row.event_names || "",
         eventDates: eventDatesStr,
+        eventIds,
+        anonymizeAvailableFrom,
+        canAnonymize: !!canAnonymize,
+        isAnonymized,
         amount: Number(row.amount) || 0,
         requestedAt: row.requested_at
       };
@@ -2316,6 +2551,182 @@ app.delete("/admin/payout-requests/:id", requireAdmin, requireSuperAdmin, async 
   }
 });
 
+app.post("/admin/payout-requests/:id/anonymize-bookings", requireAdmin, requireSuperAdmin, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id) || id < 1) {
+    return res.status(400).json({ ok: false, error: "Ogiltigt id" });
+  }
+  try {
+    const payoutResult = await pool.query(
+      "SELECT user_id, event_ids, status, bookings_anonymized_at FROM payout_requests WHERE id = $1",
+      [id]
+    );
+    const payoutRow = payoutResult.rows[0];
+    if (!payoutRow) {
+      return res.status(404).json({ ok: false, error: "Utbetalningsbegäran hittades inte." });
+    }
+    if (payoutRow.status !== "betald") {
+      return res.status(400).json({ ok: false, error: "Endast utbetalda begäran kan anonymiseras." });
+    }
+    if (payoutRow.bookings_anonymized_at) {
+      return res.status(400).json({ ok: false, error: "Bokningar för denna utbetalning är redan anonymiserade." });
+    }
+    const eventIds = Array.isArray(payoutRow.event_ids) ? payoutRow.event_ids : [];
+    if (eventIds.length === 0) {
+      return res.status(400).json({ ok: false, error: "Begäran saknar kopplade event." });
+    }
+    const eventsResult = await pool.query(
+      "SELECT id, event_start_date, event_end_date FROM events WHERE id = ANY($1::int[])",
+      [eventIds]
+    );
+    const today = todayDateStr();
+    const eligibleEventIds = [];
+    let latestAllowedFrom = null;
+    for (const ev of eventsResult.rows || []) {
+      const endDate = toDateOnlyString(ev.event_end_date ?? ev.event_start_date);
+      if (!endDate) continue;
+      const anonymizeFrom = addDaysToDateStr(endDate, GDPR_ANONYMIZE_DAYS_AFTER_EVENT);
+      if (!anonymizeFrom) continue;
+      if (!latestAllowedFrom || anonymizeFrom > latestAllowedFrom) {
+        latestAllowedFrom = anonymizeFrom;
+      }
+      if (anonymizeFrom <= today) {
+        eligibleEventIds.push(ev.id);
+      }
+    }
+    if (eligibleEventIds.length === 0) {
+      if (latestAllowedFrom) {
+        return res.status(400).json({
+          ok: false,
+          error: `Anonymisering tillåts först ${GDPR_ANONYMIZE_DAYS_AFTER_EVENT} dagar efter eventens slut (senast från ${latestAllowedFrom}).`
+        });
+      }
+      return res.status(400).json({
+        ok: false,
+        error: "Inga event i denna utbetalningsbegäran har giltigt slutdatum för anonymisering."
+      });
+    }
+    const updateResult = await pool.query(
+      `UPDATE bookings
+       SET name = $1, email = $2, phone = $3, organization = $4
+       WHERE event_id = ANY($5::int[])`,
+      ["GDPRNamn", "GDPREmail", "GDPRTelnr", "GDPROrganisation", eligibleEventIds]
+    );
+    await pool.query(
+      "UPDATE payout_requests SET bookings_anonymized_at = NOW() WHERE id = $1",
+      [id]
+    );
+    res.json({ ok: true, updated: updateResult.rowCount ?? 0, anonymizedEventIds: eligibleEventIds });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Kunde inte anonymisera bokningar." });
+  }
+});
+
+app.get("/admin/organizations", requireAdmin, requireSuperAdmin, async (_req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT p.user_id, p.profile_id, p.organization, p.subscription_plan, COALESCE(p.bas_event_credits, 0) AS bas_event_credits,
+              p.premium_activated_at, p.premium_ends_at, p.premium_avslut_requested_at
+       FROM admin_user_profiles p
+       ORDER BY p.organization ASC, p.profile_id ASC`
+    );
+    const rows = (result.rows || []).map((row) => ({
+      userId: row.user_id,
+      profileId: row.profile_id || "",
+      organization: row.organization || "",
+      subscriptionPlan: (row.subscription_plan || "gratis").toLowerCase(),
+      basEventCredits: Number(row.bas_event_credits) || 0,
+      premiumActivatedAt: row.premium_activated_at ? row.premium_activated_at.toISOString() : null,
+      premiumEndsAt: row.premium_ends_at ? row.premium_ends_at.toISOString() : null,
+      premiumAvslutRequestedAt: row.premium_avslut_requested_at ? row.premium_avslut_requested_at.toISOString() : null
+    }));
+    res.json({ ok: true, rows });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Kunde inte ladda organisationer" });
+  }
+});
+
+app.patch("/admin/profiles/:profileId/bas-credits", requireAdmin, requireSuperAdmin, async (req, res) => {
+  const profileId = (req.params.profileId || "").toString().trim();
+  if (!profileId) {
+    return res.status(400).json({ ok: false, error: "Profil-ID saknas" });
+  }
+  let value = req.body?.bas_event_credits ?? req.body?.basEventCredits;
+  if (value === undefined || value === null) {
+    return res.status(400).json({ ok: false, error: "bas_event_credits saknas" });
+  }
+  const num = Math.max(0, Math.floor(Number(value)) || 0);
+  try {
+    const result = await pool.query(
+      "UPDATE admin_user_profiles SET bas_event_credits = $1 WHERE profile_id = $2 RETURNING profile_id, bas_event_credits",
+      [num, profileId]
+    );
+    if (result.rowCount === 0) {
+      return res.status(404).json({ ok: false, error: "Profil hittades inte" });
+    }
+    res.json({ ok: true, profileId, basEventCredits: result.rows[0].bas_event_credits });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Kunde inte uppdatera krediter" });
+  }
+});
+
+app.patch("/admin/profiles/:profileId/subscription-plan", requireAdmin, requireSuperAdmin, async (req, res) => {
+  const profileId = (req.params.profileId || "").toString().trim();
+  if (!profileId) {
+    return res.status(400).json({ ok: false, error: "Profil-ID saknas" });
+  }
+  const raw = (req.body?.subscription_plan ?? req.body?.subscriptionPlan ?? "").toString().trim().toLowerCase();
+  const allowed = ["gratis", "bas", "premium"];
+  const plan = allowed.includes(raw) ? raw : null;
+  if (!plan) {
+    return res.status(400).json({ ok: false, error: "Ogiltig abonnemangsform. Använd gratis, bas eller premium." });
+  }
+  try {
+    let result;
+    if (plan === "premium") {
+      // När admin väljer Premium på nytt ska ett nytt abonnemang startas
+      // med nya start- och slutdatum, och eventuell tidigare avslutsanmälan tas bort.
+      result = await pool.query(
+        `
+          UPDATE admin_user_profiles
+          SET subscription_plan = $1,
+              premium_activated_at = NOW(),
+              premium_ends_at = NOW() + interval '1 year',
+              premium_avslut_requested_at = NULL
+          WHERE profile_id = $2
+          RETURNING profile_id, subscription_plan, premium_activated_at, premium_ends_at, premium_avslut_requested_at
+        `,
+        [plan, profileId]
+      );
+    } else {
+      // För Gratis/Bas ändrar vi bara abonnemangsformen och låter ev. gamla premium-datum ligga kvar som historik.
+      result = await pool.query(
+        `
+          UPDATE admin_user_profiles
+          SET subscription_plan = $1
+          WHERE profile_id = $2
+          RETURNING profile_id, subscription_plan, premium_activated_at, premium_ends_at, premium_avslut_requested_at
+        `,
+        [plan, profileId]
+      );
+    }
+    if (result.rowCount === 0) {
+      return res.status(404).json({ ok: false, error: "Profil hittades inte" });
+    }
+    const row = result.rows[0];
+    res.json({
+      ok: true,
+      profileId,
+      subscriptionPlan: row.subscription_plan,
+      premiumActivatedAt: row.premium_activated_at || null,
+      premiumEndsAt: row.premium_ends_at || null,
+      premiumAvslutRequestedAt: row.premium_avslut_requested_at || null
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Kunde inte uppdatera abonnemangsform" });
+  }
+});
+
 app.get("/admin/my-payout-requests", requireAdmin, async (req, res) => {
   try {
     const result = await pool.query(
@@ -2333,6 +2744,86 @@ app.get("/admin/my-payout-requests", requireAdmin, async (req, res) => {
     res.json({ ok: true, rows });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to load payout requests" });
+  }
+});
+
+const GDPR_ANONYMIZE_DAYS_AFTER_EVENT = 60;
+
+app.get("/admin/payout-anonymize-eligible", requireAdmin, async (req, res) => {
+  try {
+    const paidResult = await pool.query(
+      "SELECT event_ids FROM payout_requests WHERE user_id = $1 AND status = $2",
+      [req.userId, "betald"]
+    );
+    const allPaidEventIds = [...new Set((paidResult.rows || []).flatMap((r) => (Array.isArray(r.event_ids) ? r.event_ids : [])))];
+    if (allPaidEventIds.length === 0) {
+      return res.json({ ok: true, events: [] });
+    }
+    const eventsResult = await pool.query(
+      "SELECT id, name, event_start_date, event_end_date FROM events WHERE user_id = $1 AND id = ANY($2::int[])",
+      [req.userId, allPaidEventIds]
+    );
+    const today = todayDateStr();
+    const events = (eventsResult.rows || []).map((row) => {
+      const endDate = toDateOnlyString(row.event_end_date ?? row.event_start_date);
+      const anonymizeAvailableFrom = endDate ? addDaysToDateStr(endDate, GDPR_ANONYMIZE_DAYS_AFTER_EVENT) : null;
+      const canAnonymize = anonymizeAvailableFrom && anonymizeAvailableFrom <= today;
+      return {
+        id: row.id,
+        name: row.name,
+        endDate: endDate || null,
+        anonymizeAvailableFrom,
+        canAnonymize: !!canAnonymize
+      };
+    });
+    res.json({ ok: true, events });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Kunde inte ladda listan." });
+  }
+});
+
+app.post("/admin/events/:eventId/anonymize-bookings", requireAdmin, async (req, res) => {
+  const eventId = parseInt(req.params.eventId, 10);
+  if (!Number.isInteger(eventId) || eventId < 1) {
+    return res.status(400).json({ ok: false, error: "Ogiltigt event-id." });
+  }
+  const ownership = await ensureEventOwnership(eventId, req.userId, res);
+  if (!ownership) return;
+  try {
+    const eventRow = await pool.query(
+      "SELECT event_end_date, event_start_date FROM events WHERE id = $1 AND user_id = $2",
+      [eventId, req.userId]
+    );
+    if (!eventRow.rows[0]) {
+      return res.status(404).json({ ok: false, error: "Eventet hittades inte." });
+    }
+    const endDate = toDateOnlyString(eventRow.rows[0].event_end_date ?? eventRow.rows[0].event_start_date);
+    if (!endDate) {
+      return res.status(400).json({ ok: false, error: "Eventet saknar slutdatum." });
+    }
+    const anonymizeFrom = addDaysToDateStr(endDate, GDPR_ANONYMIZE_DAYS_AFTER_EVENT);
+    if (!anonymizeFrom || anonymizeFrom > todayDateStr()) {
+      return res.status(400).json({
+        ok: false,
+        error: `Anonymisering tillåts först ${GDPR_ANONYMIZE_DAYS_AFTER_EVENT} dagar efter eventets slut (från ${anonymizeFrom}).`
+      });
+    }
+    const paidContaining = await pool.query(
+      "SELECT 1 FROM payout_requests WHERE user_id = $2 AND status = $3 AND $1 = ANY(event_ids) LIMIT 1",
+      [eventId, req.userId, "betald"]
+    );
+    if (paidContaining.rowCount === 0) {
+      return res.status(400).json({ ok: false, error: "Eventet måste ha utbetald status för att anonymisera bokningar." });
+    }
+    const updateResult = await pool.query(
+      `UPDATE bookings
+       SET name = $1, email = $2, phone = $3, organization = $4
+       WHERE event_id = $5`,
+      ["GDPRNamn", "GDPREmail", "GDPRTelnr", "GDPROrganisation", eventId]
+    );
+    res.json({ ok: true, updated: updateResult.rowCount });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Kunde inte anonymisera bokningar." });
   }
 });
 
@@ -2438,14 +2929,15 @@ app.get("/admin/sections", requireAdmin, async (req, res) => {
     const result = await pool.query(
       `
         SELECT show_program, show_place, show_text, show_speakers, show_partners,
-               show_name, show_email, show_phone, show_organization, show_translate, show_discount_code
+               show_name, show_email, show_phone, show_city, show_organization, show_translate, show_discount_code,
+               section_order, section_label_program, section_label_speakers, section_label_partners
         FROM event_sections
         WHERE event_id = $1
       `,
       [eventId]
     );
     if (result.rowCount === 0) {
-      res.json({ ok: true, sections: defaultSectionVisibility });
+      res.json({ ok: true, sections: { ...defaultSectionVisibility, sectionOrder: DEFAULT_SECTION_ORDER } });
       return;
     }
     const row = result.rows[0];
@@ -2460,9 +2952,14 @@ app.get("/admin/sections", requireAdmin, async (req, res) => {
         showName: row.show_name,
         showEmail: row.show_email,
         showPhone: row.show_phone,
+        showCity: row.show_city,
         showOrganization: row.show_organization,
         showTranslate: row.show_translate,
-        showDiscountCode: row.show_discount_code
+        showDiscountCode: row.show_discount_code,
+        sectionOrder: parseSectionOrder(row.section_order),
+        sectionLabelProgram: row.section_label_program ?? "",
+        sectionLabelSpeakers: row.section_label_speakers ?? "",
+        sectionLabelPartners: row.section_label_partners ?? ""
       }
     });
   } catch (error) {
@@ -2481,22 +2978,32 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
     showName,
     showEmail,
     showPhone,
+    showCity,
     showOrganization,
     showTranslate,
-    showDiscountCode
+    showDiscountCode,
+    sectionOrder,
+    sectionLabelProgram,
+    sectionLabelSpeakers,
+    sectionLabelPartners
   } = req.body || {};
   const parsedEventId = await ensureEventOwnership(eventId, req.userId, res);
   if (!parsedEventId) {
     return;
   }
+  const orderJson = JSON.stringify(parseSectionOrder(sectionOrder));
+  const labelProgram = typeof sectionLabelProgram === "string" ? sectionLabelProgram.trim() : "";
+  const labelSpeakers = typeof sectionLabelSpeakers === "string" ? sectionLabelSpeakers.trim() : "";
+  const labelPartners = typeof sectionLabelPartners === "string" ? sectionLabelPartners.trim() : "";
   try {
     const result = await pool.query(
       `
         INSERT INTO event_sections
           (event_id, show_program, show_place, show_text, show_speakers, show_partners,
-           show_name, show_email, show_phone, show_organization, show_translate, show_discount_code)
+           show_name, show_email, show_phone, show_city, show_organization, show_translate, show_discount_code, section_order,
+           section_label_program, section_label_speakers, section_label_partners)
         VALUES
-          ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
         ON CONFLICT (event_id) DO UPDATE SET
           show_program = EXCLUDED.show_program,
           show_place = EXCLUDED.show_place,
@@ -2506,11 +3013,17 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
           show_name = EXCLUDED.show_name,
           show_email = EXCLUDED.show_email,
           show_phone = EXCLUDED.show_phone,
+          show_city = EXCLUDED.show_city,
           show_organization = EXCLUDED.show_organization,
           show_translate = EXCLUDED.show_translate,
-          show_discount_code = EXCLUDED.show_discount_code
+          show_discount_code = EXCLUDED.show_discount_code,
+          section_order = EXCLUDED.section_order,
+          section_label_program = EXCLUDED.section_label_program,
+          section_label_speakers = EXCLUDED.section_label_speakers,
+          section_label_partners = EXCLUDED.section_label_partners
         RETURNING show_program, show_place, show_text, show_speakers, show_partners,
-                  show_name, show_email, show_phone, show_organization, show_translate, show_discount_code
+                  show_name, show_email, show_phone, show_city, show_organization, show_translate, show_discount_code, section_order,
+                  section_label_program, section_label_speakers, section_label_partners
       `,
       [
         parsedEventId,
@@ -2522,9 +3035,14 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
         showName !== false,
         showEmail !== false,
         showPhone !== false,
+        showCity !== false,
         showOrganization !== false,
         showTranslate !== false,
-        showDiscountCode !== false
+        showDiscountCode !== false,
+        orderJson,
+        labelProgram,
+        labelSpeakers,
+        labelPartners
       ]
     );
     const row = result.rows[0];
@@ -2539,9 +3057,14 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
         showName: row.show_name,
         showEmail: row.show_email,
         showPhone: row.show_phone,
+        showCity: row.show_city,
         showOrganization: row.show_organization,
         showTranslate: row.show_translate,
-        showDiscountCode: row.show_discount_code
+        showDiscountCode: row.show_discount_code,
+        sectionOrder: parseSectionOrder(row.section_order),
+        sectionLabelProgram: row.section_label_program ?? "",
+        sectionLabelSpeakers: row.section_label_speakers ?? "",
+        sectionLabelPartners: row.section_label_partners ?? ""
       }
     });
   } catch (error) {
@@ -2888,18 +3411,36 @@ app.get("/admin/prices", requireAdmin, async (req, res) => {
   }
 });
 
-const requireSubscriptionForPrices = async (req, res) => {
-  const planRow = await pool.query(
-    "SELECT subscription_plan FROM admin_user_profiles WHERE user_id = $1",
+const requireSubscriptionForPrices = async (req, res, eventId = null) => {
+  const profileRow = await pool.query(
+    "SELECT subscription_plan, COALESCE(bas_event_credits, 0) AS bas_event_credits FROM admin_user_profiles WHERE user_id = $1",
     [req.userId]
   );
-  const plan = (planRow.rows[0]?.subscription_plan || "gratis").toLowerCase();
+  const plan = (profileRow.rows[0]?.subscription_plan || "gratis").toLowerCase();
+  const basCredits = Number(profileRow.rows[0]?.bas_event_credits) || 0;
   if (plan === "gratis") {
     res.status(403).json({
       ok: false,
       error: "Priser är endast tillgängligt för abonnemang Bas eller Premium. Byt abonnemang under Profil."
     });
     return false;
+  }
+  if (plan === "bas") {
+    let eventCreditUsed = false;
+    if (eventId) {
+      const eventRow = await pool.query(
+        "SELECT bas_credit_used FROM events WHERE id = $1 AND user_id = $2",
+        [eventId, req.userId]
+      );
+      eventCreditUsed = eventRow.rows[0]?.bas_credit_used === true;
+    }
+    if (basCredits <= 0 && !eventCreditUsed) {
+      res.status(403).json({
+        ok: false,
+        error: "Du har inga Bas-eventkrediter kvar. Köp fler under Profil → Abonnemang Bas eller Premium."
+      });
+      return false;
+    }
   }
   return true;
 };
@@ -2910,7 +3451,7 @@ app.post("/admin/prices", requireAdmin, async (req, res) => {
   if (!parsedEventId) {
     return;
   }
-  if (!(await requireSubscriptionForPrices(req, res))) {
+  if (!(await requireSubscriptionForPrices(req, res, parsedEventId))) {
     return;
   }
   if (!name || amount === undefined || amount === null || amount === "") {
@@ -2939,6 +3480,29 @@ app.post("/admin/prices", requireAdmin, async (req, res) => {
         parsedEventId
       ]
     );
+    const planRow = await pool.query(
+      "SELECT subscription_plan, COALESCE(bas_event_credits, 0) AS bas_event_credits FROM admin_user_profiles WHERE user_id = $1",
+      [req.userId]
+    );
+    const plan = (planRow.rows[0]?.subscription_plan || "gratis").toLowerCase();
+    const basCredits = Number(planRow.rows[0]?.bas_event_credits) || 0;
+    if (plan === "bas" && parsedAmount > 0 && basCredits > 0) {
+      const eventRow = await pool.query(
+        "SELECT bas_credit_used FROM events WHERE id = $1 AND user_id = $2",
+        [parsedEventId, req.userId]
+      );
+      const alreadyUsed = eventRow.rows[0]?.bas_credit_used === true;
+      if (!alreadyUsed) {
+        await pool.query(
+          "UPDATE admin_user_profiles SET bas_event_credits = bas_event_credits - 1 WHERE user_id = $1",
+          [req.userId]
+        );
+        await pool.query(
+          "UPDATE events SET bas_credit_used = true WHERE id = $1 AND user_id = $2",
+          [parsedEventId, req.userId]
+        );
+      }
+    }
     res.status(201).json({ ok: true, price: result.rows[0] });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to save price" });
@@ -2952,7 +3516,7 @@ app.put("/admin/prices/:id", requireAdmin, async (req, res) => {
   if (!parsedEventId) {
     return;
   }
-  if (!(await requireSubscriptionForPrices(req, res))) {
+  if (!(await requireSubscriptionForPrices(req, res, parsedEventId))) {
     return;
   }
   if (!name || amount === undefined || amount === null || amount === "") {
@@ -2991,7 +3555,7 @@ app.delete("/admin/prices/:id", requireAdmin, async (req, res) => {
   if (!eventId) {
     return;
   }
-  if (!(await requireSubscriptionForPrices(req, res))) {
+  if (!(await requireSubscriptionForPrices(req, res, eventId))) {
     return;
   }
   try {
@@ -3002,6 +3566,34 @@ app.delete("/admin/prices/:id", requireAdmin, async (req, res) => {
     if (result.rowCount === 0) {
       res.status(404).json({ ok: false, error: "Price not found" });
       return;
+    }
+    const planRow = await pool.query(
+      "SELECT subscription_plan FROM admin_user_profiles WHERE user_id = $1",
+      [req.userId]
+    );
+    const plan = (planRow.rows[0]?.subscription_plan || "gratis").toLowerCase();
+    if (plan === "bas") {
+      const countRow = await pool.query(
+        "SELECT COUNT(*)::int AS cnt FROM prices WHERE event_id = $1",
+        [eventId]
+      );
+      const remainingPrices = countRow.rows[0]?.cnt ?? 0;
+      if (remainingPrices === 0) {
+        const eventRow = await pool.query(
+          "SELECT bas_credit_used FROM events WHERE id = $1 AND user_id = $2",
+          [eventId, req.userId]
+        );
+        if (eventRow.rows[0]?.bas_credit_used === true) {
+          await pool.query(
+            "UPDATE admin_user_profiles SET bas_event_credits = bas_event_credits + 1 WHERE user_id = $1",
+            [req.userId]
+          );
+          await pool.query(
+            "UPDATE events SET bas_credit_used = false WHERE id = $1 AND user_id = $2",
+            [eventId, req.userId]
+          );
+        }
+      }
     }
     res.json({ ok: true });
   } catch (error) {
@@ -3526,9 +4118,10 @@ app.get("/admin/bookings", requireAdmin, async (req, res) => {
     }
     const result = await pool.query(
       `SELECT b.id, b.event_id, b.name, b.email, b.city, b.phone, b.organization, b.ticket, b.terms, b.payment_status, b.pris, b.custom_fields, b.created_at,
-        (SELECT po.payload->>'orderNumber' FROM payment_orders po
-         WHERE po.booking_id = b.id OR b.id = ANY(COALESCE(po.booking_ids, ARRAY[]::integer[]))
-         LIMIT 1) AS order_number
+        COALESCE(b.order_number,
+          (SELECT po.payload->>'orderNumber' FROM payment_orders po
+           WHERE po.booking_id = b.id OR b.id = ANY(COALESCE(po.booking_ids, ARRAY[]::integer[]))
+           LIMIT 1)) AS order_number
        FROM bookings b WHERE b.event_id = $1 ORDER BY b.created_at DESC`,
       [eventId]
     );
@@ -3717,7 +4310,11 @@ const ensureBookingsTable = async () => {
     ALTER TABLE admin_user_profiles
       ADD COLUMN IF NOT EXISTS profile_id TEXT UNIQUE,
       ADD COLUMN IF NOT EXISTS org_number TEXT NOT NULL DEFAULT '',
-      ADD COLUMN IF NOT EXISTS subscription_plan TEXT NOT NULL DEFAULT 'gratis'
+      ADD COLUMN IF NOT EXISTS subscription_plan TEXT NOT NULL DEFAULT 'gratis',
+      ADD COLUMN IF NOT EXISTS bas_event_credits INTEGER NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS premium_activated_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS premium_ends_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS premium_avslut_requested_at TIMESTAMPTZ
   `);
   const profilesToFix = await pool.query(`
     SELECT user_id FROM admin_user_profiles
@@ -3755,7 +4352,8 @@ const ensureBookingsTable = async () => {
       ADD COLUMN IF NOT EXISTS theme TEXT NOT NULL DEFAULT 'default',
       ADD COLUMN IF NOT EXISTS event_start_date DATE,
       ADD COLUMN IF NOT EXISTS event_end_date DATE,
-      ADD COLUMN IF NOT EXISTS registration_deadline DATE
+      ADD COLUMN IF NOT EXISTS registration_deadline DATE,
+      ADD COLUMN IF NOT EXISTS bas_credit_used BOOLEAN NOT NULL DEFAULT FALSE
   `);
   const defaultEventResult = await pool.query(
     `
@@ -3795,6 +4393,7 @@ const ensureBookingsTable = async () => {
       show_name BOOLEAN NOT NULL DEFAULT TRUE,
       show_email BOOLEAN NOT NULL DEFAULT TRUE,
       show_phone BOOLEAN NOT NULL DEFAULT TRUE,
+      show_city BOOLEAN NOT NULL DEFAULT TRUE,
       show_organization BOOLEAN NOT NULL DEFAULT TRUE,
       show_translate BOOLEAN NOT NULL DEFAULT TRUE,
       show_discount_code BOOLEAN NOT NULL DEFAULT TRUE
@@ -3805,9 +4404,14 @@ const ensureBookingsTable = async () => {
       ADD COLUMN IF NOT EXISTS show_name BOOLEAN NOT NULL DEFAULT TRUE,
       ADD COLUMN IF NOT EXISTS show_email BOOLEAN NOT NULL DEFAULT TRUE,
       ADD COLUMN IF NOT EXISTS show_phone BOOLEAN NOT NULL DEFAULT TRUE,
+      ADD COLUMN IF NOT EXISTS show_city BOOLEAN NOT NULL DEFAULT TRUE,
       ADD COLUMN IF NOT EXISTS show_organization BOOLEAN NOT NULL DEFAULT TRUE,
       ADD COLUMN IF NOT EXISTS show_translate BOOLEAN NOT NULL DEFAULT TRUE,
-      ADD COLUMN IF NOT EXISTS show_discount_code BOOLEAN NOT NULL DEFAULT TRUE
+      ADD COLUMN IF NOT EXISTS show_discount_code BOOLEAN NOT NULL DEFAULT TRUE,
+      ADD COLUMN IF NOT EXISTS section_order TEXT,
+      ADD COLUMN IF NOT EXISTS section_label_program TEXT DEFAULT '',
+      ADD COLUMN IF NOT EXISTS section_label_speakers TEXT DEFAULT '',
+      ADD COLUMN IF NOT EXISTS section_label_partners TEXT DEFAULT ''
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS event_custom_fields (
@@ -3828,7 +4432,8 @@ const ensureBookingsTable = async () => {
       ADD COLUMN IF NOT EXISTS terms BOOLEAN NOT NULL DEFAULT FALSE,
       ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT 'pending',
       ADD COLUMN IF NOT EXISTS pris TEXT NOT NULL DEFAULT '',
-      ADD COLUMN IF NOT EXISTS custom_fields JSONB NOT NULL DEFAULT '[]'
+      ADD COLUMN IF NOT EXISTS custom_fields JSONB NOT NULL DEFAULT '[]',
+      ADD COLUMN IF NOT EXISTS order_number TEXT
   `);
 
   await pool.query(`
@@ -4025,6 +4630,7 @@ const ensureBookingsTable = async () => {
   await pool.query("ALTER TABLE payout_requests ADD COLUMN IF NOT EXISTS event_ids INTEGER[] NOT NULL DEFAULT '{}'");
   await pool.query("ALTER TABLE payout_requests ADD COLUMN IF NOT EXISTS event_names TEXT NOT NULL DEFAULT ''");
   await pool.query("ALTER TABLE payout_requests ADD COLUMN IF NOT EXISTS amount NUMERIC(12, 2) NOT NULL DEFAULT 0");
+  await pool.query("ALTER TABLE payout_requests ADD COLUMN IF NOT EXISTS bookings_anonymized_at TIMESTAMPTZ");
 
   if (defaultEventId) {
     await pool.query("UPDATE bookings SET event_id = $1 WHERE event_id IS NULL", [
