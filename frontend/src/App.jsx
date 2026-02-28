@@ -362,18 +362,20 @@ const LandingPage = () => {
   }, []);
   return (
     <div className="page landing-page">
-      <div className="landing-logo-wrap">
+      <div className="landing-hero-block">
+        <div className="landing-logo-wrap">
+          <img
+            src="/kyrkevent-logo.png"
+            alt="Kyrkevent.se"
+            className="landing-logo"
+          />
+        </div>
         <img
-          src="/kyrkevent-logo.png"
-          alt="Kyrkevent.se"
-          className="landing-logo"
+          src="/landing-hero.png"
+          alt="Bokning, evenemang och aktiviteter"
+          className="landing-image"
         />
       </div>
-      <img
-        src="/landing-hero.png"
-        alt="Bokning, evenemang och aktiviteter"
-        className="landing-image"
-      />
       <h2 className="landing-events-heading">Konserter, fester, läger, församlingshelger, hajk, julshow, middagar, nyår ?</h2>
       <p className="landing-intro landing-description">
         En plattform som gör det enkelt och snyggt att skapa anmälningssidor och biljettförsäljning för alla typer av evenemang. Oavsett om du arrangerar ett läger, en konferens, en konsert, en middag eller något helt annat kan du snabbt bygga en professionell sida som tar emot bokningar i stilren design. Vill du dessutom ta betalt för ditt arrangemang gör du det lika smidigt direkt via plattformen. Du skapar din sida på ett par minuter, testa får du se...
