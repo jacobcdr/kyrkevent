@@ -936,6 +936,8 @@ const AdminPage = () => {
   const [adminOrganizationsLoading, setAdminOrganizationsLoading] = useState(false);
   const [adminOrgCreditsEdit, setAdminOrgCreditsEdit] = useState({});
   const [adminOrgSavingProfileId, setAdminOrgSavingProfileId] = useState(null);
+  const [adminDeleteProfileConfirm, setAdminDeleteProfileConfirm] = useState(null);
+  const [adminDeleteProfileLoading, setAdminDeleteProfileLoading] = useState(false);
 
   const payoutEventIdsWithOngoingRequest = useMemo(
     () =>
@@ -1365,6 +1367,11 @@ const AdminPage = () => {
     } finally {
       setAdminOrgSavingProfileId(null);
     }
+  };
+
+  const handleDeleteOrgAccount = (row) => {
+    if (!row?.profileId) return;
+    setAdminDeleteProfileConfirm({ profileId: row.profileId, organization: row.organization || "denna organisation" });
   };
 
   const handleSaveOrgSubscriptionPlan = async (profileId, plan) => {
@@ -3387,6 +3394,77 @@ const AdminPage = () => {
                 </div>
               </div>
             ) : null}
+            {adminDeleteProfileConfirm != null ? (
+              <div
+                className="admin-toaster-overlay"
+                style={{
+                  position: "fixed",
+                  inset: 0,
+                  zIndex: 10000,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  background: "rgba(0,0,0,0.4)"
+                }}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="admin-delete-account-toaster-title"
+              >
+                <div
+                  className="admin-toaster"
+                  style={{
+                    background: "var(--bg, #fff)",
+                    padding: "1.25rem 1.5rem",
+                    borderRadius: "8px",
+                    boxShadow: "0 4px 20px rgba(0,0,0,0.2)",
+                    maxWidth: "360px"
+                  }}
+                >
+                  <p id="admin-delete-account-toaster-title" style={{ margin: "0 0 1rem 0", fontWeight: 600 }}>
+                    Ta bort konto för {adminDeleteProfileConfirm.organization}?
+                  </p>
+                  <p className="muted" style={{ margin: "0 0 1rem 0", fontSize: "0.9rem" }}>
+                    Användaren och profilen tas bort. Event kopplas bort från kontot.
+                  </p>
+                  <div style={{ display: "flex", gap: "0.75rem", justifyContent: "flex-end" }}>
+                    <button
+                      type="button"
+                      className="button button-outline"
+                      disabled={adminDeleteProfileLoading}
+                      onClick={() => setAdminDeleteProfileConfirm(null)}
+                    >
+                      Nej
+                    </button>
+                    <button
+                      type="button"
+                      className="button danger"
+                      disabled={adminDeleteProfileLoading}
+                      onClick={async () => {
+                        const { profileId } = adminDeleteProfileConfirm;
+                        if (!token || !profileId) return;
+                        setAdminDeleteProfileLoading(true);
+                        try {
+                          const response = await fetch(`${API_BASE}/admin/profiles/${encodeURIComponent(profileId)}`, {
+                            method: "DELETE",
+                            headers: { Authorization: `Bearer ${token}` }
+                          });
+                          const data = await response.json();
+                          if (!response.ok) throw new Error(data.error || "Kunde inte ta bort kontot.");
+                          setAdminDeleteProfileConfirm(null);
+                          await loadAdminOrganizations();
+                        } catch (err) {
+                          setError(err.message || "Kunde inte ta bort kontot.");
+                        } finally {
+                          setAdminDeleteProfileLoading(false);
+                        }
+                      }}
+                    >
+                      {adminDeleteProfileLoading ? "Tar bort…" : "Ja, ta bort"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
             <h2>Admin</h2>
             <p className="muted">
               Samtliga betalda anmälningar i systemet. Filtrera på datum (när bokningen skapades).
@@ -4031,6 +4109,7 @@ const AdminPage = () => {
                   <thead>
                     <tr>
                       <th>Organisation</th>
+                      <th>Användarnamn</th>
                       <th>Profil ID</th>
                       <th>Abonnemangsform</th>
                       <th>Startdatum</th>
@@ -4038,6 +4117,7 @@ const AdminPage = () => {
                       <th>Avslut anmält</th>
                       <th>Antal event med pris kvar</th>
                       <th style={{ width: "6rem" }}></th>
+                      <th style={{ width: "2.5rem" }} aria-label="Ta bort konto"></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -4046,10 +4126,12 @@ const AdminPage = () => {
                       const draft = adminOrgCreditsEdit[rowKey];
                       const value = draft !== undefined ? draft : row.basEventCredits;
                       const isSaving = adminOrgSavingProfileId === row.profileId;
+                      const isOwnProfile = row.profileId && profileForm.profileId && row.profileId === profileForm.profileId;
                       const fmt = (iso) => (iso ? new Date(iso).toLocaleDateString("sv-SE", { year: "numeric", month: "short", day: "numeric" }) : "–");
                       return (
                         <tr key={rowKey}>
                           <td>{row.organization || "–"}</td>
+                          <td>{row.username || "–"}</td>
                           <td>{row.profileId || "–"}</td>
                           <td>
                             <select
@@ -4092,6 +4174,20 @@ const AdminPage = () => {
                             >
                               {isSaving ? "Sparar…" : "Spara"}
                             </button>
+                          </td>
+                          <td>
+                            {!isOwnProfile && row.profileId ? (
+                              <button
+                                type="button"
+                                className="icon-button danger"
+                                disabled={adminDeleteProfileLoading}
+                                onClick={() => handleDeleteOrgAccount(row)}
+                                aria-label="Ta bort konto"
+                                title="Ta bort konto"
+                              >
+                                🗑
+                              </button>
+                            ) : null}
                           </td>
                         </tr>
                       );

@@ -2626,14 +2626,17 @@ app.get("/admin/organizations", requireAdmin, requireSuperAdmin, async (_req, re
   try {
     const result = await pool.query(
       `SELECT p.user_id, p.profile_id, p.organization, p.subscription_plan, COALESCE(p.bas_event_credits, 0) AS bas_event_credits,
-              p.premium_activated_at, p.premium_ends_at, p.premium_avslut_requested_at
+              p.premium_activated_at, p.premium_ends_at, p.premium_avslut_requested_at,
+              u.username
        FROM admin_user_profiles p
+       LEFT JOIN admin_users u ON u.id = p.user_id
        ORDER BY p.organization ASC, p.profile_id ASC`
     );
     const rows = (result.rows || []).map((row) => ({
       userId: row.user_id,
       profileId: row.profile_id || "",
       organization: row.organization || "",
+      username: row.username || "",
       subscriptionPlan: (row.subscription_plan || "gratis").toLowerCase(),
       basEventCredits: Number(row.bas_event_credits) || 0,
       premiumActivatedAt: row.premium_activated_at ? row.premium_activated_at.toISOString() : null,
@@ -2724,6 +2727,44 @@ app.patch("/admin/profiles/:profileId/subscription-plan", requireAdmin, requireS
     });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Kunde inte uppdatera abonnemangsform" });
+  }
+});
+
+app.delete("/admin/profiles/:profileId", requireAdmin, requireSuperAdmin, async (req, res) => {
+  const profileId = (req.params.profileId || "").toString().trim();
+  if (!profileId) {
+    return res.status(400).json({ ok: false, error: "Profil-ID saknas" });
+  }
+  try {
+    const profileRow = await pool.query(
+      "SELECT user_id FROM admin_user_profiles WHERE profile_id = $1",
+      [profileId]
+    );
+    if (!profileRow.rows || profileRow.rows.length === 0) {
+      return res.status(404).json({ ok: false, error: "Profil hittades inte" });
+    }
+    const targetUserId = profileRow.rows[0].user_id;
+    if (targetUserId === req.userId) {
+      return res.status(400).json({ ok: false, error: "Du kan inte ta bort ditt eget konto här" });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("UPDATE events SET user_id = NULL WHERE user_id = $1", [targetUserId]);
+      await client.query("DELETE FROM payout_requests WHERE user_id = $1", [targetUserId]);
+      await client.query("DELETE FROM admin_user_profiles WHERE user_id = $1", [targetUserId]);
+      await client.query("DELETE FROM admin_users WHERE id = $1", [targetUserId]);
+      await client.query("COMMIT");
+      res.json({ ok: true, message: "Konto borttaget" });
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error("DELETE /admin/profiles/:profileId error:", error);
+    res.status(500).json({ ok: false, error: error.message || "Kunde inte ta bort kontot" });
   }
 });
 
