@@ -352,8 +352,8 @@ h2 {
   align-items: center;
   padding: 0.75rem 1rem;
   border-radius: 12px;
-  background: #fff6d6;
-  border: 1px solid #f3d794;
+  background: var(--card);
+  border: 1px solid var(--border);
 }
 
 .program-admin-item {
@@ -527,8 +527,8 @@ h2 {
 }
 
 .pricing-card {
-  background: #fff6d6;
-  border: 1px solid #f3d794;
+  background: var(--card);
+  border: 1px solid var(--border);
   border-radius: 14px;
   padding: 1rem;
   text-align: center;
@@ -555,7 +555,7 @@ h2 {
 .pricing-desc {
   margin-top: 0.35rem;
   font-size: 0.95rem;
-  color: #5f4a2a;
+  color: var(--muted);
 }
 
 .place-card {
