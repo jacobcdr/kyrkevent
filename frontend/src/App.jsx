@@ -398,7 +398,7 @@ const LandingPage = () => {
               <h3 className="landing-pricing-card-title">Gratis</h3>
             </div>
             <ul className="landing-pricing-features">
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Flera aktiva event</li>
+              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Två aktiva event samtidigt</li>
               <li className="landing-pricing-feature excluded"><span className="landing-pricing-icon" aria-hidden="true">✕</span> Onlinebetalning via plattformen</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Mailbekräftelse till deltagare</li>
               <li className="landing-pricing-feature excluded"><span className="landing-pricing-icon" aria-hidden="true">✕</span> Rabattkoder</li>
@@ -413,7 +413,7 @@ const LandingPage = () => {
               <h3 className="landing-pricing-card-title">Bas</h3>
             </div>
             <ul className="landing-pricing-features">
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Flera aktiva event</li>
+              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Obegränsat aktiva event samtidigt</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Onlinebetalning via plattformen</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Mailbekräftelse till deltagare</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Rabattkoder</li>
@@ -430,7 +430,7 @@ const LandingPage = () => {
               <h3 className="landing-pricing-card-title">Premium</h3>
             </div>
             <ul className="landing-pricing-features">
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Flera aktiva event</li>
+              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Obegränsat aktiva event samtidigt</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Onlinebetalning via plattformen</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Mailbekräftelse till deltagare</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Rabattkoder</li>
