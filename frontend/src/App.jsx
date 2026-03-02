@@ -904,6 +904,7 @@ const AdminPage = () => {
   const [payoutLoading, setPayoutLoading] = useState(false);
   const [myPayoutRequests, setMyPayoutRequests] = useState([]);
   const [payoutMessage, setPayoutMessage] = useState("");
+  const [showPayoutTermsToaster, setShowPayoutTermsToaster] = useState(false);
   const [anonymizeEligibleEvents, setAnonymizeEligibleEvents] = useState([]);
   const [anonymizeEligibleLoading, setAnonymizeEligibleLoading] = useState(false);
   const [anonymizeInProgress, setAnonymizeInProgress] = useState(null);
@@ -972,6 +973,15 @@ const AdminPage = () => {
       (payoutSummary.events || []).filter((ev) => !payoutEventIdsWithPaidRequest.has(ev.id)),
     [payoutSummary.events, payoutEventIdsWithPaidRequest]
   );
+  const payoutTotals = useMemo(() => {
+    const selected = payoutEventsToShow.filter((e) => payoutSelectedEventIds.includes(e.id));
+    const selectedSum = selected.reduce((s, e) => s + e.totalRevenue, 0);
+    const threshold = payoutSummary.payoutFeeThreshold ?? 500;
+    const feeAmount = payoutSummary.payoutFeeAmount ?? 50;
+    const fee = selectedSum > threshold ? feeAmount : 0;
+    const net = Math.round((selectedSum - fee) * 100) / 100;
+    return { selectedSum, fee, net };
+  }, [payoutEventsToShow, payoutSelectedEventIds, payoutSummary.payoutFeeThreshold, payoutSummary.payoutFeeAmount]);
 
   const fetchCompanyByOrgNumber = async () => {
     const nr = (profileForm.orgNumber || "").toString().trim().replace(/\D/g, "");
@@ -1203,7 +1213,9 @@ const AdminPage = () => {
     setPayoutSummary({
       events: data.events || [],
       grandTotal: data.grandTotal ?? 0,
-      payoutDaysAfterEvent: data.payoutDaysAfterEvent ?? 1
+      payoutDaysAfterEvent: data.payoutDaysAfterEvent ?? 1,
+      payoutFeeThreshold: data.payoutFeeThreshold ?? 500,
+      payoutFeeAmount: data.payoutFeeAmount ?? 50
     });
   };
 
@@ -1234,7 +1246,7 @@ const AdminPage = () => {
       if (["bookings", "frontpage", "settings"].includes(adminSection)) {
         setAdminSection("home");
       }
-      if (adminSection !== "payout" && adminSection !== "profile" && adminSection !== "admin") return;
+      if (adminSection !== "payout" && adminSection !== "profile" && adminSection !== "admin" && adminSection !== "help") return;
     }
     if (adminSection === "home") {
       setAdminSection("bookings");
@@ -3320,6 +3332,16 @@ const AdminPage = () => {
             ) : null}
             <button
               type="button"
+              className={`admin-nav-item ${adminSection === "help" ? "is-active" : ""}`}
+              onClick={() => {
+                setAdminSection("help");
+                setAdminMenuOpen(false);
+              }}
+            >
+              Hjälp
+            </button>
+            <button
+              type="button"
               className="admin-nav-item admin-nav-logout"
               onClick={() => {
                 handleLogout();
@@ -3881,6 +3903,7 @@ const AdminPage = () => {
                         <th>Event</th>
                         <th>Eventdatum</th>
                         <th>Belopp</th>
+                        <th>Utbetalning</th>
                         <th>Datum</th>
                         <th>Anonymisera</th>
                         <th>Åtgärd</th>
@@ -3911,6 +3934,13 @@ const AdminPage = () => {
                             <td>{r.eventDates || "–"}</td>
                             <td>
                               {(r.amount ?? 0).toLocaleString("sv-SE", {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2
+                              })}{" "}
+                              SEK
+                            </td>
+                            <td>
+                              {(r.netAmount != null ? r.netAmount : r.amount ?? 0).toLocaleString("sv-SE", {
                                 minimumFractionDigits: 2,
                                 maximumFractionDigits: 2
                               })}{" "}
@@ -4219,19 +4249,20 @@ const AdminPage = () => {
                     <th>Event</th>
                     <th>Antal betalda</th>
                     <th>Intäkter</th>
+                    <th>Utbetalning</th>
                     <th>Status</th>
                   </tr>
                 </thead>
                 <tbody>
                   {payoutSummary.events.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="muted">
+                      <td colSpan={6} className="muted">
                         Inga event med betalda anmälningar.
                       </td>
                     </tr>
                   ) : payoutEventsToShow.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="muted">
+                      <td colSpan={6} className="muted">
                         Inga event kvar att begära utbetalning för (alla är utbetald eller pågår).
                       </td>
                     </tr>
@@ -4292,6 +4323,11 @@ const AdminPage = () => {
                             SEK
                           </td>
                           <td>
+                            {payoutSelectedEventIds.includes(ev.id) && payoutTotals.selectedSum > 0
+                              ? `${(Math.round((ev.totalRevenue * payoutTotals.net / payoutTotals.selectedSum) * 100) / 100).toLocaleString("sv-SE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} SEK`
+                              : "–"}
+                          </td>
+                          <td>
                             {isLocked ? (
                               <span className="payout-status-badge">Begäran pågår</span>
                             ) : eligibleFromText ? (
@@ -4317,10 +4353,13 @@ const AdminPage = () => {
                       <td />
                       <td>
                         <strong>
-                          {payoutEventsToShow
-                            .filter((e) => payoutSelectedEventIds.includes(e.id))
-                            .reduce((s, e) => s + e.totalRevenue, 0)
-                            .toLocaleString("sv-SE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{" "}
+                          {payoutTotals.selectedSum.toLocaleString("sv-SE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{" "}
+                          SEK
+                        </strong>
+                      </td>
+                      <td>
+                        <strong>
+                          {payoutTotals.net.toLocaleString("sv-SE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{" "}
                           SEK
                         </strong>
                       </td>
@@ -4330,6 +4369,64 @@ const AdminPage = () => {
                 ) : null}
               </table>
             </div>
+            {showPayoutTermsToaster ? (
+              <div
+                className="admin-toaster-overlay"
+                style={{
+                  position: "fixed",
+                  inset: 0,
+                  zIndex: 10000,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  background: "rgba(0,0,0,0.4)"
+                }}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="payout-terms-toaster-title"
+              >
+                <div
+                  className="admin-toaster"
+                  style={{
+                    background: "var(--bg, #fff)",
+                    padding: "1.25rem 1.5rem",
+                    borderRadius: "8px",
+                    boxShadow: "0 4px 20px rgba(0,0,0,0.2)",
+                    maxWidth: "420px",
+                    maxHeight: "85vh",
+                    overflow: "auto"
+                  }}
+                >
+                  <h3 id="payout-terms-toaster-title" style={{ margin: "0 0 1rem 0", fontWeight: 600 }}>
+                    Villkor för utbetalning
+                  </h3>
+                  <div style={{ fontSize: "0.95rem", lineHeight: 1.5 }}>
+                    <p style={{ margin: "0 0 0.75rem 0" }}>
+                      Utbetalning sker enligt gällande avtal. Du begär att intäkterna från valda event betalas ut till din angivna organisation och bankkonto.
+                    </p>
+                    <p style={{ margin: "0 0 0.75rem 0" }}>
+                      Om det sammanlagda utbetalningsbeloppet överstiger{" "}
+                      <strong>{(payoutSummary.payoutFeeThreshold ?? 500).toLocaleString("sv-SE")} kr</strong>{" "}
+                      dras en administrationsavgift på{" "}
+                      <strong>{(payoutSummary.payoutFeeAmount ?? 50).toLocaleString("sv-SE")} kr</strong>{" "}
+                      per utbetalning. Det belopp som faktiskt utbetalas är intäkterna minus denna avgift.
+                    </p>
+                    <p style={{ margin: 0 }}>
+                      Genom att skicka begäran godkänner du dessa villkor.
+                    </p>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "1.25rem" }}>
+                    <button
+                      type="button"
+                      className="button"
+                      onClick={() => setShowPayoutTermsToaster(false)}
+                    >
+                      Stäng
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
             <form className="admin-form" onSubmit={handlePayoutRequest}>
               <label className="checkbox-field" style={{ marginBottom: "1rem" }}>
                 <input
@@ -4338,7 +4435,19 @@ const AdminPage = () => {
                   onChange={(e) => setPayoutTermsAccepted(e.target.checked)}
                 />
                 <span className="field-label">
-                  Jag godkänner villkoren för utbetalning och begär att intäkterna ovan betalas ut enligt gällande avtal.
+                  Jag godkänner{" "}
+                  <button
+                    type="button"
+                    className="link-button"
+                    style={{ padding: 0, margin: 0, verticalAlign: "baseline" }}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      setShowPayoutTermsToaster(true);
+                    }}
+                  >
+                    villkoren för utbetalning
+                  </button>{" "}
+                  och begär att intäkterna ovan betalas ut enligt gällande avtal.
                 </span>
               </label>
               <div className="admin-actions">
@@ -4380,7 +4489,7 @@ const AdminPage = () => {
                             </td>
                             <td>{r.eventNames || "–"}</td>
                             <td>
-                              {(r.amount ?? 0).toLocaleString("sv-SE", {
+                              {(r.netAmount != null ? r.netAmount : r.amount ?? 0).toLocaleString("sv-SE", {
                                 minimumFractionDigits: 2,
                                 maximumFractionDigits: 2
                               })}{" "}
@@ -4840,7 +4949,189 @@ const AdminPage = () => {
             </form>
           </div>
         ) : null}
-        {token && selectedEventId && adminSection !== "profile" ? (
+        {token && adminSection === "help" ? (
+          <div className="section">
+            <h2>Hjälp – kom igång med Kyrkevent.se</h2>
+            <p className="muted">
+              Här följer en genomgång av hur du sätter upp ett event från start till mål: profil, event, formulär, biljetter och priser,
+              betalningar, utbetalningar och anonymisering.
+            </p>
+
+            <h3>1. Börja med profilen</h3>
+            <ul>
+              <li>
+                <strong>Organisation och uppgifter</strong> – fyll i organisationsnamn, organisationsnummer, adress och kontaktuppgifter.
+                Dessa används som säljare på kvitton och i utbetalningskvitton.
+              </li>
+              <li>
+                <strong>Bank-/BG-uppgifter</strong> – ange BG/IBAN m.m. korrekt, det är hit utbetalningarna går när du begär utbetalning.
+              </li>
+              <li>
+                <strong>Profil-ID</strong> – skapas automatiskt, 5 tecken. Det används bl.a. i betalningar (t.ex. som första del i
+                referensen till betalningsleverantören).
+              </li>
+              <li>
+                <strong>Abonnemang</strong> – välj Gratis, Bas eller Premium. Gratis passar om du bara vill ha gratis-event utan priser,
+                Bas/Premium krävs om du vill ta betalt via plattformen.
+              </li>
+            </ul>
+
+            <h3>2. Skapa och ställ in ditt event</h3>
+            <ul>
+              <li>
+                <strong>Skapa event</strong> – ange namn och datum. Var noga med namnet, det går inte att ändra i efterhand.
+              </li>
+              <li>
+                <strong>Datum</strong> – ange start- och ev. slutdatum. Dessa styr bland annat när anmälan stängs och när utbetalning kan ske.
+              </li>
+              <li>
+                <strong>Plats</strong> – skriv in adressen, använd adressförslagen (gata, nummer, ort) för att få en tydlig plats.
+              </li>
+              <li>
+                <strong>Tema/färger</strong> – välj färgtema för sidan under Eventinställningar &rarr; Tema. Förhandsgranska för att se
+                hur sidan ser ut för deltagaren.
+              </li>
+              <li>
+                <strong>Senaste anmälningsdag</strong> – under Eventinställningar kan du sätta ett datum när anmälan ska stängas, även
+                om eventdatumet är senare. Efter detta datum visas anmälan som stängd (knapparna spärras).
+              </li>
+              <li>
+                <strong>Synliga sektioner</strong> – du kan slå av/på t.ex. språk-raden (Google-översättning) och rabattkods-fältet per event.
+              </li>
+            </ul>
+
+            <h3>3. Formulär och extra fält</h3>
+            <ul>
+              <li>
+                <strong>Grundfält</strong> – namn, e-post, telefon, ort, organisation m.m. finns inbyggt i formuläret.
+              </li>
+              <li>
+                <strong>Formulärfält (egna fält)</strong> – under Eventinställningar &rarr; Formulärfält kan du lägga till egna fält:
+                textfält, större textrutor och kryssrutor.
+              </li>
+              <li>
+                <strong>Obligatoriska fält</strong> – markera vilka fält som måste vara ifyllda, så hindras anmälan om något saknas.
+              </li>
+              <li>
+                <strong>Visning i admin och export</strong> – alla egna formulärfält visas som kolumner i bokningslistan och följer
+                med i Excel-exporten.
+              </li>
+            </ul>
+
+            <h3>4. Biljetter, priser och rabattkoder</h3>
+            <ul>
+              <li>
+                <strong>Biljett- och prisnivåer</strong> – lägg till olika biljetter (t.ex. vuxen, ungdom, tidig-bokning) med pris och
+                antal platser.
+              </li>
+              <li>
+                <strong>Gratis vs betalt event</strong> – med Gratis-abonnemang kan du bara ha gratis-biljetter (ingen betalning via
+                plattformen). För betalda biljetter krävs Bas eller Premium.
+              </li>
+              <li>
+                <strong>Bas-abonnemang</strong> – du köper ett antal eventkrediter och kan lägga till priser på motsvarande antal event.
+                Krediter dras när du aktiverar priser på ett event.
+              </li>
+              <li>
+                <strong>Premium-abonnemang</strong> – ger tillgång till betalda event enligt din prisplan utan att behöva köpa
+                engångskrediter.
+              </li>
+              <li>
+                <strong>Rabattkoder</strong> – rabattkoder är knutna till ett specifikt event. Samma kod (t.ex. EARLYBIRD) kan användas på
+                flera olika event utan att krocka.
+              </li>
+            </ul>
+
+            <h3>5. Publicera och dela din sida</h3>
+            <ul>
+              <li>
+                <strong>Förhandsgranska event</strong> – använd knappen för att se sidan som deltagare ser den.
+              </li>
+              <li>
+                <strong>Länk att dela</strong> – URL:en till förhandsgranskningen är samma länk som du delar på webb, sociala medier eller
+                i utskick.
+              </li>
+            </ul>
+
+            <h3>6. Bokningar, betalningar och kvitton</h3>
+            <ul>
+              <li>
+                <strong>Bokningslista</strong> – under Bokningar ser du alla anmälningar, kan filtrera kolumner och exportera till Excel.
+              </li>
+              <li>
+                <strong>Betalstatus</strong> – betalda, väntande, avbrutna m.m. visas som tydliga statuspiller i listan.
+              </li>
+              <li>
+                <strong>Kvitton</strong> – deltagaren får kvitto via e-post. På sidan efter betalning visas samma information: säljare,
+                ordernummer, belopp, eventuell serviceavgift och moms.
+              </li>
+            </ul>
+
+            <h3>7. Avgifter i biljett- och betalprocessen</h3>
+            <ul>
+              <li>
+                <strong>Biljettpris</strong> – det pris du anger på biljetten är det pris som deltagaren utgår från innan eventuella
+                avgifter läggs till.
+              </li>
+              <li>
+                <strong>Serviceavgift</strong> – vid onlinebetalning kan en serviceavgift tas ut per beställning enligt din prisplan.
+                Denna visas tydligt för deltagaren på betalningssidan och i kvittot.
+              </li>
+              <li>
+                <strong>Sammanställning</strong> – i betalningsbekräftelsen (och kvittot på e-post) ser deltagaren uppdelning mellan
+                biljettbelopp, serviceavgift, eventuell rabatt, moms och totalbelopp.
+              </li>
+            </ul>
+
+            <h3>8. Utbetalningar</h3>
+            <ul>
+              <li>
+                <strong>När kan du begära utbetalning?</strong> – i fliken Utbetalning ser du intäkter per event. Utbetalning kan bara
+                begäras efter att eventets slutdatum (plus eventuell fördröjning) har passerat.
+              </li>
+              <li>
+                <strong>Handläggningstid</strong> – när du skickar in en förfrågan om utbetalning går den till vår ekonomiavdelning som
+                behandlar utbetalningen inom cirka 10 dagar.
+              </li>
+              <li>
+                <strong>Välj event för utbetalning</strong> – markera ett eller flera event och begär utbetalning. Systemet visar hur
+                mycket som kommer att betalas ut totalt.
+              </li>
+              <li>
+                <strong>Administrationsavgifter</strong> – om det finns villkor för t.ex. lägsta belopp eller administrativ avgift vid
+                små utbetalningar visas detta i Utbetalning-vyn innan du skickar din begäran.
+              </li>
+              <li>
+                <strong>Utbetalningskvitto (PDF)</strong> – när du markerar en utbetalning som betald kan du ladda ner ett
+                utbetalningskvitto som PDF. Där framgår antal bokningar, totalbelopp, moms, utbetalande och mottagande organisation,
+                betalmetod och utbetalningsdatum.
+              </li>
+            </ul>
+
+            <h3>9. Anonymisering av bokningar</h3>
+            <ul>
+              <li>
+                <strong>När sker anonymisering?</strong> – anonymisering sker som rutinåtgärd tidigast 60 dagar efter eventets slutdatum
+                och efter att relevanta utbetalningar är genomförda.
+              </li>
+              <li>
+                <strong>Vad innebär anonymisering?</strong> – personuppgifter som namn, e-post m.m. tas bort eller ersätts så att
+                individen inte längre kan identifieras. Summerad statistik (antal, belopp) kan fortfarande användas.
+              </li>
+              <li>
+                <strong>Var görs detta?</strong> – i admin, under utbetalningar, finns en åtgärd för att anonymisera bokningar för en
+                genomförd utbetalning. Du får en tydlig bekräftelse innan något raderas.
+              </li>
+            </ul>
+
+            <p className="muted" style={{ marginTop: "1.5rem" }}>
+              Om du är osäker på något steg: börja alltid med att kontrollera att profilen är komplett, därefter att eventet har rätt
+              datum, plats och biljetter, och titta sedan i flikarna Bokningar och Utbetalning för detaljer kring betalningar och
+              utbetalningar.
+            </p>
+          </div>
+        ) : null}
+        {token && selectedEventId && adminSection !== "profile" && adminSection !== "help" ? (
           <div className="admin-actions admin-event-actions">
             <button
               className="button button-outline"
@@ -4862,7 +5153,7 @@ const AdminPage = () => {
           </div>
         ) : null}
 
-        {adminSection !== "profile" && adminSection !== "payout" && adminSection !== "admin" && (statusMessage || error || (token && !selectedEventId)) ? (
+        {adminSection !== "profile" && adminSection !== "payout" && adminSection !== "admin" && adminSection !== "help" && (statusMessage || error || (token && !selectedEventId)) ? (
           <div className="section">
             {statusMessage ? <p className="admin-error">{statusMessage}</p> : null}
             {error ? <p className="admin-error">{error}</p> : null}

@@ -29,7 +29,8 @@ const JWT_SECRET = process.env.JWT_SECRET || "";
 const MOLLIE_API_KEY = process.env.MOLLIE_API_KEY || "";
 const MOLLIE_AMOUNT = process.env.MOLLIE_AMOUNT || "";
 const MOLLIE_CURRENCY = process.env.MOLLIE_CURRENCY || "SEK";
-const BAS_PRICE_PER_EVENT = Math.max(1, Number(process.env.BAS_PRICE_PER_EVENT || "129") || 129);
+const BAS_PRICE_DEFAULT = 95;
+const BAS_PRICE_PER_EVENT = Math.max(1, Number(process.env.BAS_PRICE_PER_EVENT || String(BAS_PRICE_DEFAULT)) || BAS_PRICE_DEFAULT);
 const SERVICE_FEE_AMOUNT =
   Math.max(0, Number(process.env.SERVICE_FEE_AMOUNT || "10") || 0);
 const FRONTEND_URL = process.env.FRONTEND_URL || "";
@@ -42,6 +43,8 @@ const RECEIPT_PAYMENT_METHOD = process.env.RECEIPT_PAYMENT_METHOD || "Online";
 const BOLAGSAPI_KEY = process.env.BOLAGSAPI_KEY || "";
 const PAYOUT_EMAIL = process.env.PAYOUT_EMAIL || "";
 const PAYOUT_DAYS_AFTER_EVENT = Math.max(0, parseInt(process.env.PAYOUT_DAYS_AFTER_EVENT || "1", 10) || 0);
+const PAYOUT_FEE_THRESHOLD = Math.max(0, Number(process.env.PAYOUT_FEE_THRESHOLD || "500") || 500);
+const PAYOUT_FEE_AMOUNT = Math.max(0, Number(process.env.PAYOUT_FEE_AMOUNT || "50") || 50);
 const app = express();
 const useSsl =
   String(process.env.PGSSL || "").toLowerCase() === "true" ||
@@ -2225,11 +2228,24 @@ app.get("/admin/payout-summary", requireAdmin, async (req, res) => {
       paidCount: byEvent[e.id].paidCount
     }));
     const grandTotal = eventsWithRevenue.reduce((s, e) => s + e.totalRevenue, 0);
-    res.json({ ok: true, events: eventsWithRevenue, grandTotal, payoutDaysAfterEvent: PAYOUT_DAYS_AFTER_EVENT });
+    res.json({
+      ok: true,
+      events: eventsWithRevenue,
+      grandTotal,
+      payoutDaysAfterEvent: PAYOUT_DAYS_AFTER_EVENT,
+      payoutFeeThreshold: PAYOUT_FEE_THRESHOLD,
+      payoutFeeAmount: PAYOUT_FEE_AMOUNT
+    });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to load payout summary" });
   }
 });
+
+function computePayoutFee(grossAmount) {
+  const fee = grossAmount > PAYOUT_FEE_THRESHOLD ? PAYOUT_FEE_AMOUNT : 0;
+  const net = Math.round((grossAmount - fee) * 100) / 100;
+  return { fee, net };
+}
 
 app.post("/admin/payout-request", requireAdmin, async (req, res) => {
   const { acceptedTerms, eventIds: rawEventIds } = req.body || {};
@@ -2334,12 +2350,14 @@ app.post("/admin/payout-request", requireAdmin, async (req, res) => {
       });
       return;
     }
+    const { fee: payoutFee, net: netAmount } = computePayoutFee(grandTotal);
     const profile = profileResult.rows[0] || {};
     const eventNamesStr = eventsWithRevenue.map((e) => e.name).join(", ");
     const lines = eventsWithRevenue.map(
       (e) =>
         `  ${e.name}: ${e.totalRevenue.toFixed(2)} SEK (${e.paidCount} betalda anmälningar)`
     );
+    const feeLine = payoutFee > 0 ? `  Avgift (utbetalning över ${PAYOUT_FEE_THRESHOLD} SEK): ${payoutFee.toFixed(2)} SEK` : null;
     const body = [
       "En användare har begärt utbetalning av intäkter. Efter att vi har godkänt utbetalningen så genomförs överföringen. Det tar normalt upp till 10 dagar.",
       "",
@@ -2355,7 +2373,8 @@ app.post("/admin/payout-request", requireAdmin, async (req, res) => {
       "Intäkter per event:",
       ...lines,
       "",
-      `Summa: ${grandTotal.toFixed(2)} SEK`
+      `Summa intäkter: ${grandTotal.toFixed(2)} SEK`,
+      ...(feeLine ? [feeLine, `Utbetalning (netto): ${netAmount.toFixed(2)} SEK`] : [])
     ].join("\n");
     await resend.emails.send({
       from: RESEND_FROM,
@@ -2365,8 +2384,8 @@ app.post("/admin/payout-request", requireAdmin, async (req, res) => {
       html: body.replace(/\n/g, "<br>")
     });
     await pool.query(
-      "INSERT INTO payout_requests (user_id, profile_id, organization, status, event_ids, event_names, amount) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-      [req.userId, profile.profile_id || "", profile.organization || "", "pågår", eventIds, eventNamesStr, grandTotal]
+      "INSERT INTO payout_requests (user_id, profile_id, organization, status, event_ids, event_names, amount, payout_fee, net_amount) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+      [req.userId, profile.profile_id || "", profile.organization || "", "pågår", eventIds, eventNamesStr, grandTotal, payoutFee, netAmount]
     );
     res.json({ ok: true, message: "Begäran skickad. Ekonomiavdelningen kommer att återkomma." });
   } catch (error) {
@@ -2444,7 +2463,7 @@ app.get("/admin/admin-payments", requireAdmin, requireSuperAdmin, async (req, re
 app.get("/admin/payout-requests", requireAdmin, requireSuperAdmin, async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT pr.id, pr.profile_id, pr.user_id, pr.organization, pr.status, pr.event_ids, pr.event_names, pr.amount, pr.requested_at, pr.bookings_anonymized_at, p.bg_number
+      `SELECT pr.id, pr.profile_id, pr.user_id, pr.organization, pr.status, pr.event_ids, pr.event_names, pr.amount, pr.payout_fee, pr.net_amount, pr.requested_at, pr.bookings_anonymized_at, p.bg_number
        FROM payout_requests pr
        LEFT JOIN admin_user_profiles p ON p.user_id = pr.user_id
        ORDER BY pr.requested_at DESC`
@@ -2487,6 +2506,9 @@ app.get("/admin/payout-requests", requireAdmin, requireSuperAdmin, async (req, r
       }
       const isAnonymized = !!row.bookings_anonymized_at;
       const canAnonymize = !isAnonymized && anonymizeAvailableFrom && anonymizeAvailableFrom <= today;
+      const amount = Number(row.amount) || 0;
+      const payoutFee = Number(row.payout_fee) || 0;
+      const netAmount = row.net_amount != null ? Number(row.net_amount) : amount - payoutFee;
       return {
         id: row.id,
         profileId: row.profile_id || "",
@@ -2499,7 +2521,9 @@ app.get("/admin/payout-requests", requireAdmin, requireSuperAdmin, async (req, r
         anonymizeAvailableFrom,
         canAnonymize: !!canAnonymize,
         isAnonymized,
-        amount: Number(row.amount) || 0,
+        amount,
+        payoutFee,
+        netAmount,
         requestedAt: row.requested_at
       };
     });
@@ -2771,17 +2795,24 @@ app.delete("/admin/profiles/:profileId", requireAdmin, requireSuperAdmin, async 
 app.get("/admin/my-payout-requests", requireAdmin, async (req, res) => {
   try {
     const result = await pool.query(
-      "SELECT id, status, event_ids, event_names, amount, requested_at FROM payout_requests WHERE user_id = $1 ORDER BY requested_at DESC",
+      "SELECT id, status, event_ids, event_names, amount, payout_fee, net_amount, requested_at FROM payout_requests WHERE user_id = $1 ORDER BY requested_at DESC",
       [req.userId]
     );
-    const rows = (result.rows || []).map((row) => ({
-      id: row.id,
-      status: row.status || "pågår",
-      eventIds: Array.isArray(row.event_ids) ? row.event_ids : [],
-      eventNames: row.event_names || "",
-      amount: Number(row.amount) || 0,
-      requestedAt: row.requested_at
-    }));
+    const rows = (result.rows || []).map((row) => {
+      const amount = Number(row.amount) || 0;
+      const payoutFee = Number(row.payout_fee) || 0;
+      const netAmount = row.net_amount != null ? Number(row.net_amount) : amount - payoutFee;
+      return {
+        id: row.id,
+        status: row.status || "pågår",
+        eventIds: Array.isArray(row.event_ids) ? row.event_ids : [],
+        eventNames: row.event_names || "",
+        amount,
+        payoutFee,
+        netAmount,
+        requestedAt: row.requested_at
+      };
+    });
     res.json({ ok: true, rows });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to load payout requests" });
@@ -2875,7 +2906,7 @@ app.get("/admin/payout-requests/:id/receipt.pdf", requireAdmin, async (req, res)
       return res.status(400).json({ ok: false, error: "Ogiltigt id" });
     }
     const result = await pool.query(
-      "SELECT id, user_id, organization, event_ids, event_names, amount, requested_at FROM payout_requests WHERE id = $1 AND status = $2",
+      "SELECT id, user_id, organization, event_ids, event_names, amount, payout_fee, net_amount, requested_at FROM payout_requests WHERE id = $1 AND status = $2",
       [id, "betald"]
     );
     const row = result.rows[0];
@@ -2916,7 +2947,7 @@ app.get("/admin/payout-requests/:id/receipt.pdf", requireAdmin, async (req, res)
       const end = e.event_end_date ? new Date(e.event_end_date).toLocaleDateString("sv-SE") : null;
       return end && end !== start ? `${e.name || "Event"}: ${start} – ${end}` : `${e.name || "Event"}: ${start}`;
     });
-    const totalAmount = Number(row.amount || 0);
+    const totalAmount = row.net_amount != null ? Number(row.net_amount) : Number(row.amount || 0);
     const vatRate = 0.25;
     const vatAmount = totalAmount / (1 + vatRate) * vatRate; // moms 25% inkl. i totalbeloppet
     const filename = `utbetalningskvitto-${id}.pdf`;
@@ -3196,6 +3227,8 @@ const parseDate = (v) => {
   return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 };
 
+const GRATIS_MAX_ACTIVE_EVENTS = 2;
+
 app.post("/admin/events", requireAdmin, async (req, res) => {
   const { name, slug, sourceEventId, startDate, endDate } = req.body || {};
   if (!name || !String(name).trim()) {
@@ -3218,6 +3251,29 @@ app.post("/admin/events", requireAdmin, async (req, res) => {
   if (eventEndDate < eventStartDate) {
     res.status(400).json({ ok: false, error: "Slutdatum får inte vara före startdatum." });
     return;
+  }
+
+  const planRow = await pool.query(
+    "SELECT subscription_plan FROM admin_user_profiles WHERE user_id = $1",
+    [req.userId]
+  );
+  const plan = (planRow.rows[0]?.subscription_plan || "gratis").toLowerCase();
+  if (plan === "gratis") {
+    const countResult = await pool.query(
+      `SELECT COUNT(*)::int AS count FROM events
+       WHERE user_id = $1 AND (event_end_date IS NULL OR event_end_date >= CURRENT_DATE)`,
+      [req.userId]
+    );
+    const activeCount = countResult.rows[0]?.count ?? 0;
+    if (activeCount >= GRATIS_MAX_ACTIVE_EVENTS) {
+      res.status(403).json({
+        ok: false,
+        error: `På gratis abonnemang får du ha max ${GRATIS_MAX_ACTIVE_EVENTS} aktiva event samtidigt (event som inte nått slutdatum). Avsluta eller vänta tills ett event har passerat för att skapa ett nytt.`,
+        limit: GRATIS_MAX_ACTIVE_EVENTS,
+        activeCount
+      });
+      return;
+    }
   }
 
   const client = await pool.connect();
@@ -4672,6 +4728,8 @@ const ensureBookingsTable = async () => {
   await pool.query("ALTER TABLE payout_requests ADD COLUMN IF NOT EXISTS event_names TEXT NOT NULL DEFAULT ''");
   await pool.query("ALTER TABLE payout_requests ADD COLUMN IF NOT EXISTS amount NUMERIC(12, 2) NOT NULL DEFAULT 0");
   await pool.query("ALTER TABLE payout_requests ADD COLUMN IF NOT EXISTS bookings_anonymized_at TIMESTAMPTZ");
+  await pool.query("ALTER TABLE payout_requests ADD COLUMN IF NOT EXISTS payout_fee NUMERIC(12, 2) NOT NULL DEFAULT 0");
+  await pool.query("ALTER TABLE payout_requests ADD COLUMN IF NOT EXISTS net_amount NUMERIC(12, 2)");
 
   if (defaultEventId) {
     await pool.query("UPDATE bookings SET event_id = $1 WHERE event_id IS NULL", [
