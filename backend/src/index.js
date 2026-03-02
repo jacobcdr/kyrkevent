@@ -45,6 +45,10 @@ const PAYOUT_EMAIL = process.env.PAYOUT_EMAIL || "";
 const PAYOUT_DAYS_AFTER_EVENT = Math.max(0, parseInt(process.env.PAYOUT_DAYS_AFTER_EVENT || "1", 10) || 0);
 const PAYOUT_FEE_THRESHOLD = Math.max(0, Number(process.env.PAYOUT_FEE_THRESHOLD || "500") || 500);
 const PAYOUT_FEE_AMOUNT = Math.max(0, Number(process.env.PAYOUT_FEE_AMOUNT || "50") || 50);
+const GRATIS_MAX_ACTIVE_EVENTS = Math.max(
+  1,
+  parseInt(process.env.GRATIS_MAX_ACTIVE_EVENTS || "2", 10) || 2
+);
 const app = express();
 const useSsl =
   String(process.env.PGSSL || "").toLowerCase() === "true" ||
@@ -3227,8 +3231,6 @@ const parseDate = (v) => {
   return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 };
 
-const GRATIS_MAX_ACTIVE_EVENTS = 2;
-
 app.post("/admin/events", requireAdmin, async (req, res) => {
   const { name, slug, sourceEventId, startDate, endDate } = req.body || {};
   if (!name || !String(name).trim()) {
@@ -3268,7 +3270,7 @@ app.post("/admin/events", requireAdmin, async (req, res) => {
     if (activeCount >= GRATIS_MAX_ACTIVE_EVENTS) {
       res.status(403).json({
         ok: false,
-        error: `På gratis abonnemang får du ha max ${GRATIS_MAX_ACTIVE_EVENTS} aktiva event samtidigt (event som inte nått slutdatum). Avsluta eller vänta tills ett event har passerat för att skapa ett nytt.`,
+        error: `På gratis abonnemang får du ha max ${GRATIS_MAX_ACTIVE_EVENTS} aktiva event samtidigt. Använd Bas eller Premium för att kunna ha obegränsade event.`,
         limit: GRATIS_MAX_ACTIVE_EVENTS,
         activeCount
       });

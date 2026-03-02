@@ -438,7 +438,7 @@ const LandingPage = () => {
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Tillgång till obegränsat antal betalevent</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Anpassade listor om vilka som har betalat</li>
             </ul>
-            <p className="landing-pricing-price">199 kr/mån</p>
+            <p className="landing-pricing-price">1995 kr/år</p>
             <a href="/admin?view=signup" className="landing-pricing-btn">Kom igång</a>
           </div>
         </div>
@@ -5108,19 +5108,38 @@ const AdminPage = () => {
               </li>
             </ul>
 
-            <h3>9. Anonymisering av bokningar</h3>
+            <h3>9. Anonymisering av bokningar och GDPR</h3>
+            <p className="muted" style={{ marginTop: 0 }}>
+              GDPR (EU:s dataskyddsförordning) styr hur personuppgifter får behandlas. Plattformen följer principer om
+              minimering, lagringsbegränsning och rätt till radering. Här beskrivs vad deltagare och arrangör godkänner samt
+              vilka åtgärder som finns.
+            </p>
             <ul>
               <li>
-                <strong>När sker anonymisering?</strong> – anonymisering sker som rutinåtgärd tidigast 60 dagar efter eventets slutdatum
-                och efter att relevanta utbetalningar är genomförda.
+                <strong>Vad deltagaren (köparen) godkänner</strong> – vid bokning accepterar deltagaren att sina uppgifter
+                (namn, e-post, telefon m.m.) används för att hantera anmälan, betalning, kvitto och eventuell kommunikation
+                kring eventet. Uppgifterna lagras så länge det behövs för dessa ändamål och enligt plattformens rutiner
+                (inklusive anonymisering efter utbetalning).
               </li>
               <li>
-                <strong>Vad innebär anonymisering?</strong> – personuppgifter som namn, e-post m.m. tas bort eller ersätts så att
-                individen inte längre kan identifieras. Summerad statistik (antal, belopp) kan fortfarande användas.
+                <strong>Vad arrangören (admin) godkänner</strong> – som arrangör ansvarar du för att behandla deltagarnas
+                personuppgifter lagligt och transparent. Du ska endast använda uppgifterna för att genomföra eventet och
+                utbetalning, och följa riktlinjerna för anonymisering så att uppgifter inte behålls längre än nödvändigt.
               </li>
               <li>
-                <strong>Var görs detta?</strong> – i admin, under utbetalningar, finns en åtgärd för att anonymisera bokningar för en
-                genomförd utbetalning. Du får en tydlig bekräftelse innan något raderas.
+                <strong>GDPR-principer och åtgärder</strong> – minimering (endast nödvändiga uppgifter), lagringsbegränsning
+                (uppgifter tas bort eller anonymiseras när de inte längre behövs), och rätt till radering respekteras.
+                Anonymisering är en åtgärd som gör att personuppgifter ersätts eller tas bort så att personen inte kan
+                identifieras, medan aggregerad statistik (antal bokningar, belopp) fortfarande kan användas för redovisning.
+              </li>
+              <li>
+                <strong>När sker anonymisering?</strong> – anonymisering sker som rutinåtgärd tidigast 60 dagar efter eventets
+                slutdatum och efter att relevanta utbetalningar är genomförda.
+              </li>
+              <li>
+                <strong>Vad innebär anonymisering i systemet?</strong> – personuppgifter som namn, e-post m.m. tas bort eller
+                ersätts så att individen inte längre kan identifieras. Summerad statistik (antal, belopp) kan fortfarande
+                användas.
               </li>
             </ul>
 
