@@ -7905,13 +7905,13 @@ function App() {
               ) : null}
             </div>
           ) : null}
-          <button
-            className={`button full-width ${isEventInPast ? "button-disabled" : ""}`}
-            type="submit"
-            disabled={isEventInPast}
-          >
-            Lägg till
-          </button>
+              <button
+                className={`button full-width ${isEventInPast ? "button-disabled" : ""}`}
+                type="submit"
+                disabled={isEventInPast}
+              >
+                Lägg till
+              </button>
           {bookingCart.length > 0 ? (
             <>
               <div className="booking-cart-list">
@@ -8004,8 +8004,20 @@ function App() {
                 onClick={handleCheckout}
                 disabled={paymentLoading || isEventInPast}
               >
-                {paymentLoading ? "Startar betalning..." : "Checka ut och skicka in bokningen"}
+                {paymentLoading ? (
+                  <span className="button-loading">
+                    <span className="button-spinner" aria-hidden="true" />
+                    <span>Startar bokning/betalning...</span>
+                  </span>
+                ) : (
+                  "Checka ut och skicka in bokningen"
+                )}
               </button>
+              {paymentLoading ? (
+                <p className="payment-loading-hint">
+                  Du skickas nu vidare till betalning. Stäng inte fönstret medan sidan laddar.
+                </p>
+              ) : null}
             </>
           ) : null}
           {paymentError ? <p className="admin-error">{paymentError}</p> : null}
