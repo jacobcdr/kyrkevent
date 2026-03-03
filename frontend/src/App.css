@@ -517,7 +517,13 @@ h2 {
 }
 
 .pricing h3 {
+  margin: 0 0 0.25rem;
+}
+
+.pricing-hint {
   margin: 0 0 0.8rem;
+  font-size: 0.9rem;
+  color: var(--muted);
 }
 
 .pricing-grid {
@@ -533,11 +539,24 @@ h2 {
   padding: 1rem;
   text-align: center;
   cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.1s ease,
+    background-color 0.15s ease;
 }
 
 .pricing-card.is-selected {
   border-color: var(--accent-dark);
-  box-shadow: 0 0 0 3px rgba(201, 90, 26, 0.2);
+  box-shadow: 0 0 0 2px var(--accent),
+    0 8px 18px rgba(0, 0, 0, 0.08);
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.pricing-card:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.04);
 }
 
 .pricing-name {
@@ -1722,11 +1741,11 @@ h2 {
   padding: 0.75rem 1rem;
   padding-right: 2.5rem;
   position: relative;
-  color: #9b3b0f;
+  color: var(--accent-dark);
   font-weight: 600;
-  background: var(--danger-bg);
+  background: var(--card);
   border-radius: 10px;
-  border: 1px solid rgba(155, 59, 15, 0.2);
+  border: 1px solid var(--accent);
 }
 
 .admin-error-dismiss {

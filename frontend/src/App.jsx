@@ -7847,6 +7847,7 @@ function App() {
           {prices.length > 0 ? (
             <div className="pricing">
               <h3>Priser</h3>
+              <p className="pricing-hint">Välj ett biljettalternativ nedan innan du går vidare.</p>
               <div className="pricing-grid">
                 {prices.map((price) => (
                   <button
