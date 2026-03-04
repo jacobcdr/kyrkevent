@@ -281,6 +281,7 @@ const getSellerNameForEvent = async (eventId) => {
 const buildReceiptEmail = ({
   name,
   email,
+  eventName,
   priceName,
   priceAmount,
   discountedAmount,
@@ -308,7 +309,7 @@ const buildReceiptEmail = ({
     const lines = [
       `Hej ${name || ""}!`,
       "",
-      "Tack för din anmälan.",
+      eventName ? `Tack för din anmälan till ${eventName}.` : "Tack för din anmälan.",
       "",
       `Ordernummer: ${orderNumber}`,
       `Datum & tid: ${createdDate.toLocaleString("sv-SE")}`,
@@ -320,7 +321,7 @@ const buildReceiptEmail = ({
     const html = `
     <div style="font-family: Arial, sans-serif; color:#111827;">
       <p>Hej ${name || ""}!</p>
-      <p>Tack för din anmälan.</p>
+      <p>${eventName ? `Tack för din anmälan till <strong>${eventName}</strong>.` : "Tack för din anmälan."}</p>
       <table style="border-collapse: collapse; width: 100%; max-width: 520px;">
         <tbody>
           <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Ordernummer</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">${orderNumber}</td></tr>
@@ -360,7 +361,7 @@ const buildReceiptEmail = ({
   const lines = [
     `Hej ${name || ""}!`,
     "",
-    "Tack för din bokning. Här är ditt kvitto:",
+    eventName ? `Tack för din bokning till ${eventName}. Här är ditt kvitto:` : "Tack för din bokning. Här är ditt kvitto:",
     "",
     `Ordernummer: ${orderNumber}`,
     `Datum & tid: ${createdDate.toLocaleString("sv-SE")}`,
@@ -1039,6 +1040,7 @@ app.post("/payments/start", paymentLimiter, async (req, res) => {
       await sendReceiptEmail({
         name: booking.name,
         email: booking.email,
+        eventName,
         priceName: parsed.payload.priceName,
         priceAmount: parsed.payload.priceAmount,
         discountedAmount: parsed.payload.priceAmount,
