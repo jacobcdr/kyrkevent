@@ -846,6 +846,11 @@ const AdminPage = () => {
     const raw = selectedEvent?.registration_deadline;
     setRegistrationDeadlineInput(raw ? String(raw).slice(0, 10) : "");
   }, [selectedEvent?.registration_deadline, selectedEventId]);
+  useEffect(() => {
+    if (adminSection === "frontpage" && heroEditorRef.current) {
+      heroEditorRef.current.innerHTML = heroForm.bodyHtml || "";
+    }
+  }, [adminSection, heroForm.bodyHtml]);
   const [customFieldForm, setCustomFieldForm] = useState({
     label: "",
     fieldType: "text",
