@@ -741,6 +741,7 @@ const AdminPage = () => {
   const [heroImageError, setHeroImageError] = useState(false);
   const [mapError, setMapError] = useState("");
   const [placeForm, setPlaceForm] = useState({ address: "", description: "" });
+  const [placeInputDirty, setPlaceInputDirty] = useState(false);
   const [placeAddressSuggestions, setPlaceAddressSuggestions] = useState([]);
   const [placeAddressSuggestionsLoading, setPlaceAddressSuggestionsLoading] = useState(false);
   const [placeAddressSuggestionsOpen, setPlaceAddressSuggestionsOpen] = useState(false);
@@ -816,14 +817,17 @@ const AdminPage = () => {
     showCity: true,
     showOrganization: true,
     showTranslate: true,
-    showDiscountCode: true
+    showDiscountCode: true,
+    showFaq: false
   });
   const [adminSectionLabels, setAdminSectionLabels] = useState({
     program: "",
     speakers: "",
-    partners: ""
+    partners: "",
+    faq: ""
   });
-  const DEFAULT_SECTION_ORDER = ["text", "program", "form", "speakers", "partners", "place"];
+  const [adminFaqText, setAdminFaqText] = useState("");
+  const DEFAULT_SECTION_ORDER = ["text", "program", "faq", "form", "speakers", "partners", "place"];
   const [adminSectionOrder, setAdminSectionOrder] = useState([...DEFAULT_SECTION_ORDER]);
   const [pendingTheme, setPendingTheme] = useState("default");
   const [themeSaving, setThemeSaving] = useState(false);
@@ -1034,8 +1038,13 @@ const AdminPage = () => {
       throw new Error("Place fetch failed");
     }
     const data = await response.json();
-    setPlace({ address: data.address || "", description: data.description || "" });
-    setPlaceForm({ address: data.address || "", description: data.description || "" });
+    const address = data.address || "";
+    const description = data.description || "";
+    setPlace({ address, description });
+    setPlaceForm({ address, description });
+    setPlaceInputDirty(false);
+    setPlaceAddressSuggestions([]);
+    setPlaceAddressSuggestionsOpen(false);
   };
 
   const loadHero = async (eventId) => {
@@ -1144,19 +1153,22 @@ const AdminPage = () => {
       showCity: data.sections?.showCity !== false,
       showOrganization: data.sections?.showOrganization !== false,
       showTranslate: data.sections?.showTranslate !== false,
-      showDiscountCode: data.sections?.showDiscountCode !== false
+      showDiscountCode: data.sections?.showDiscountCode !== false,
+      showFaq: data.sections?.showFaq || false
     });
     const order = data.sections?.sectionOrder;
     setAdminSectionOrder(
-      Array.isArray(order) && order.length === 6
+      Array.isArray(order) && order.length === DEFAULT_SECTION_ORDER.length
         ? order
         : [...DEFAULT_SECTION_ORDER]
     );
     setAdminSectionLabels({
       program: data.sections?.sectionLabelProgram ?? "",
       speakers: data.sections?.sectionLabelSpeakers ?? "",
-      partners: data.sections?.sectionLabelPartners ?? ""
+      partners: data.sections?.sectionLabelPartners ?? "",
+      faq: data.sections?.sectionLabelFaq ?? ""
     });
+    setAdminFaqText(data.sections?.faqText || "");
   };
 
   const loadAdminCustomFields = async (authToken, eventId) => {
@@ -2366,6 +2378,7 @@ const AdminPage = () => {
 
   const handlePlaceChange = (event) => {
     const { name, value } = event.target;
+    setPlaceInputDirty(true);
     setPlaceForm((prev) => ({ ...prev, [name]: value }));
   };
 
@@ -2404,7 +2417,7 @@ const AdminPage = () => {
 
   useEffect(() => {
     const query = (placeForm.address || "").trim();
-    if (query.length < 2) {
+    if (!placeInputDirty || query.length < 2) {
       setPlaceAddressSuggestions([]);
       setPlaceAddressSuggestionsOpen(false);
       return;
@@ -2472,7 +2485,7 @@ const AdminPage = () => {
       if (placeAddressDebounceRef.current) clearTimeout(placeAddressDebounceRef.current);
       if (placeAddressAbortRef.current) placeAddressAbortRef.current.abort();
     };
-  }, [placeForm.address]);
+  }, [placeForm.address, placeInputDirty]);
 
   useEffect(() => {
     if (!placeAddressSuggestionsOpen) return;
@@ -2607,7 +2620,9 @@ const AdminPage = () => {
           sectionOrder: adminSectionOrder,
           sectionLabelProgram: adminSectionLabels.program,
           sectionLabelSpeakers: adminSectionLabels.speakers,
-          sectionLabelPartners: adminSectionLabels.partners
+          sectionLabelPartners: adminSectionLabels.partners,
+          sectionLabelFaq: adminSectionLabels.faq,
+          faqText: adminFaqText
         })
       });
       if (!response.ok) {
@@ -2632,7 +2647,9 @@ const AdminPage = () => {
           sectionOrder: adminSectionOrder,
           sectionLabelProgram: adminSectionLabels.program,
           sectionLabelSpeakers: adminSectionLabels.speakers,
-          sectionLabelPartners: adminSectionLabels.partners
+          sectionLabelPartners: adminSectionLabels.partners,
+          sectionLabelFaq: adminSectionLabels.faq,
+          faqText: adminFaqText
         })
       });
       if (!response.ok) throw new Error("Sections save failed");
@@ -2647,6 +2664,7 @@ const AdminPage = () => {
   const sectionOrderLabels = {
     text: "Text",
     program: "Program",
+    faq: "FAQ",
     form: "Anmäl dig här",
     speakers: "Talare",
     partners: "Partner",
@@ -5923,6 +5941,53 @@ const AdminPage = () => {
 
               <div className="section">
                 <div className="section-header">
+                  <div style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
+                    <h2>FAQ</h2>
+                    <label className="field" style={{ marginBottom: 0, maxWidth: "260px" }}>
+                      <input
+                        type="text"
+                        value={adminSectionLabels.faq}
+                        onChange={(e) => handleSectionLabelChange("faq", e.target.value)}
+                        onBlur={saveAdminSectionLabels}
+                        placeholder="Byt ut rubriknamn"
+                        aria-label="Byt ut rubriknamn för FAQ"
+                      />
+                    </label>
+                  </div>
+                  <label className="field checkbox-field section-toggle">
+                    <span className="field-label">Visa</span>
+                    <input
+                      name="showFaq"
+                      type="checkbox"
+                      checked={adminSectionVisibility.showFaq}
+                      onChange={handleSectionVisibilityChange}
+                    />
+                  </label>
+                </div>
+                <div className="admin-form">
+                  <label className="field">
+                    <span className="field-label">FAQ‑text</span>
+                    <textarea
+                      rows="6"
+                      value={adminFaqText}
+                      onChange={(e) => setAdminFaqText(e.target.value)}
+                      placeholder="Skriv frågor och svar eller annan viktig information om eventet."
+                    ></textarea>
+                  </label>
+                  <div className="admin-actions">
+                    <button
+                      type="button"
+                      className="button"
+                      onClick={saveAdminSectionLabels}
+                    >
+                      Spara FAQ
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="section">
+                <div className="section-header">
                   <h2>Plats</h2>
                   <label className="field checkbox-field section-toggle">
                     <span className="field-label">Visa</span>
@@ -7012,7 +7077,6 @@ function App() {
   const isLandingRoute =
     window.location.pathname === "/" || window.location.pathname === "";
   const eventSlug = getEventSlugFromPath();
-  const [programItems, setProgramItems] = useState([]);
   const [event, setEvent] = useState(null);
   const [eventError, setEventError] = useState("");
   const [eventLoading, setEventLoading] = useState(false);
@@ -7036,13 +7100,16 @@ function App() {
     showTranslate: true,
     showDiscountCode: true
   });
-  const publicDefaultSectionOrder = ["text", "program", "form", "speakers", "partners", "place"];
+  const publicDefaultSectionOrder = ["text", "program", "faq", "form", "speakers", "partners", "place"];
   const [sectionOrder, setSectionOrder] = useState([...publicDefaultSectionOrder]);
+  const [programItems, setProgramItems] = useState([]);
   const [sectionLabels, setSectionLabels] = useState({
     program: "",
     speakers: "",
-    partners: ""
+    partners: "",
+    faq: ""
   });
+  const [faqText, setFaqText] = useState("");
   const [mapCoords, setMapCoords] = useState(null);
   const [mapError, setMapError] = useState("");
   const mapContainerRef = useRef(null);
@@ -7226,17 +7293,22 @@ function App() {
       showCity: data.sections?.showCity !== false,
       showOrganization: data.sections?.showOrganization !== false,
       showTranslate: data.sections?.showTranslate !== false,
-      showDiscountCode: data.sections?.showDiscountCode !== false
+      showDiscountCode: data.sections?.showDiscountCode !== false,
+      showFaq: data.sections?.showFaq || false
     });
     const order = data.sections?.sectionOrder;
     setSectionOrder(
-      Array.isArray(order) && order.length === 6 ? order : [...publicDefaultSectionOrder]
+      Array.isArray(order) && order.length === publicDefaultSectionOrder.length
+        ? order
+        : [...publicDefaultSectionOrder]
     );
     setSectionLabels({
       program: data.sections?.sectionLabelProgram ?? "",
       speakers: data.sections?.sectionLabelSpeakers ?? "",
-      partners: data.sections?.sectionLabelPartners ?? ""
+      partners: data.sections?.sectionLabelPartners ?? "",
+      faq: data.sections?.sectionLabelFaq ?? ""
     });
+    setFaqText(data.sections?.faqText || "");
   };
 
   const loadSpeakers = async (eventId) => {
@@ -7636,6 +7708,20 @@ function App() {
                 </div>
               ) : (
                 <p className="muted">Programmet uppdateras snart.</p>
+              )}
+            </div>
+          );
+        }
+        if (key === "faq" && sectionVisibility.showFaq) {
+          return (
+            <div className="section" key="faq">
+              <h2>{sectionLabels.faq.trim() || "FAQ"}</h2>
+              {faqText && faqText.trim() ? (
+                <p className="faq-text">
+                  {faqText}
+                </p>
+              ) : (
+                <p className="muted">FAQ uppdateras snart.</p>
               )}
             </div>
           );

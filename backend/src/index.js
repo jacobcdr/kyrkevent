@@ -223,10 +223,13 @@ const defaultSectionVisibility = {
   showDiscountCode: true,
   sectionLabelProgram: "",
   sectionLabelSpeakers: "",
-  sectionLabelPartners: ""
+  sectionLabelPartners: "",
+  showFaq: false,
+  sectionLabelFaq: "",
+  faqText: ""
 };
 
-const DEFAULT_SECTION_ORDER = ["text", "program", "form", "speakers", "partners", "place"];
+const DEFAULT_SECTION_ORDER = ["text", "program", "faq", "form", "speakers", "partners", "place"];
 const VALID_SECTION_ORDER_KEYS = new Set(DEFAULT_SECTION_ORDER);
 
 function parseSectionOrder(raw) {
@@ -584,7 +587,9 @@ app.get("/sections", async (req, res) => {
       `
         SELECT show_program, show_place, show_text, show_speakers, show_partners,
                show_name, show_email, show_phone, show_city, show_organization, show_translate, show_discount_code,
-               section_order, section_label_program, section_label_speakers, section_label_partners
+               show_faq, section_order,
+               section_label_program, section_label_speakers, section_label_partners, section_label_faq,
+               faq_text
         FROM event_sections
         WHERE event_id = $1
       `,
@@ -610,10 +615,13 @@ app.get("/sections", async (req, res) => {
         showOrganization: row.show_organization,
         showTranslate: row.show_translate,
         showDiscountCode: row.show_discount_code,
+        showFaq: row.show_faq,
         sectionOrder: parseSectionOrder(row.section_order),
         sectionLabelProgram: row.section_label_program ?? "",
         sectionLabelSpeakers: row.section_label_speakers ?? "",
-        sectionLabelPartners: row.section_label_partners ?? ""
+        sectionLabelPartners: row.section_label_partners ?? "",
+        sectionLabelFaq: row.section_label_faq ?? "",
+        faqText: row.faq_text ?? ""
       }
     });
   } catch (error) {
@@ -3006,7 +3014,9 @@ app.get("/admin/sections", requireAdmin, async (req, res) => {
       `
         SELECT show_program, show_place, show_text, show_speakers, show_partners,
                show_name, show_email, show_phone, show_city, show_organization, show_translate, show_discount_code,
-               section_order, section_label_program, section_label_speakers, section_label_partners
+               show_faq, section_order,
+               section_label_program, section_label_speakers, section_label_partners, section_label_faq,
+               faq_text
         FROM event_sections
         WHERE event_id = $1
       `,
@@ -3032,10 +3042,13 @@ app.get("/admin/sections", requireAdmin, async (req, res) => {
         showOrganization: row.show_organization,
         showTranslate: row.show_translate,
         showDiscountCode: row.show_discount_code,
+        showFaq: row.show_faq,
         sectionOrder: parseSectionOrder(row.section_order),
         sectionLabelProgram: row.section_label_program ?? "",
         sectionLabelSpeakers: row.section_label_speakers ?? "",
-        sectionLabelPartners: row.section_label_partners ?? ""
+        sectionLabelPartners: row.section_label_partners ?? "",
+        sectionLabelFaq: row.section_label_faq ?? "",
+        faqText: row.faq_text ?? ""
       }
     });
   } catch (error) {
@@ -3058,10 +3071,13 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
     showOrganization,
     showTranslate,
     showDiscountCode,
+    showFaq,
     sectionOrder,
     sectionLabelProgram,
     sectionLabelSpeakers,
-    sectionLabelPartners
+    sectionLabelPartners,
+    sectionLabelFaq,
+    faqText
   } = req.body || {};
   const parsedEventId = await ensureEventOwnership(eventId, req.userId, res);
   if (!parsedEventId) {
@@ -3071,15 +3087,17 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
   const labelProgram = typeof sectionLabelProgram === "string" ? sectionLabelProgram.trim() : "";
   const labelSpeakers = typeof sectionLabelSpeakers === "string" ? sectionLabelSpeakers.trim() : "";
   const labelPartners = typeof sectionLabelPartners === "string" ? sectionLabelPartners.trim() : "";
+  const labelFaq = typeof sectionLabelFaq === "string" ? sectionLabelFaq.trim() : "";
+  const faqTextNormalized = typeof faqText === "string" ? faqText : "";
   try {
     const result = await pool.query(
       `
         INSERT INTO event_sections
           (event_id, show_program, show_place, show_text, show_speakers, show_partners,
-           show_name, show_email, show_phone, show_city, show_organization, show_translate, show_discount_code, section_order,
-           section_label_program, section_label_speakers, section_label_partners)
+           show_name, show_email, show_phone, show_city, show_organization, show_translate, show_discount_code, show_faq,
+           section_order, section_label_program, section_label_speakers, section_label_partners, section_label_faq, faq_text)
         VALUES
-          ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+          ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
         ON CONFLICT (event_id) DO UPDATE SET
           show_program = EXCLUDED.show_program,
           show_place = EXCLUDED.show_place,
@@ -3093,13 +3111,16 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
           show_organization = EXCLUDED.show_organization,
           show_translate = EXCLUDED.show_translate,
           show_discount_code = EXCLUDED.show_discount_code,
+          show_faq = EXCLUDED.show_faq,
           section_order = EXCLUDED.section_order,
           section_label_program = EXCLUDED.section_label_program,
           section_label_speakers = EXCLUDED.section_label_speakers,
-          section_label_partners = EXCLUDED.section_label_partners
+          section_label_partners = EXCLUDED.section_label_partners,
+          section_label_faq = EXCLUDED.section_label_faq,
+          faq_text = EXCLUDED.faq_text
         RETURNING show_program, show_place, show_text, show_speakers, show_partners,
-                  show_name, show_email, show_phone, show_city, show_organization, show_translate, show_discount_code, section_order,
-                  section_label_program, section_label_speakers, section_label_partners
+                  show_name, show_email, show_phone, show_city, show_organization, show_translate, show_discount_code, show_faq,
+                  section_order, section_label_program, section_label_speakers, section_label_partners, section_label_faq, faq_text
       `,
       [
         parsedEventId,
@@ -3115,10 +3136,13 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
         showOrganization !== false,
         showTranslate !== false,
         showDiscountCode !== false,
+        showFaq !== false,
         orderJson,
         labelProgram,
         labelSpeakers,
-        labelPartners
+        labelPartners,
+        labelFaq,
+        faqTextNormalized
       ]
     );
     const row = result.rows[0];
@@ -3137,10 +3161,13 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
         showOrganization: row.show_organization,
         showTranslate: row.show_translate,
         showDiscountCode: row.show_discount_code,
+        showFaq: row.show_faq,
         sectionOrder: parseSectionOrder(row.section_order),
         sectionLabelProgram: row.section_label_program ?? "",
         sectionLabelSpeakers: row.section_label_speakers ?? "",
-        sectionLabelPartners: row.section_label_partners ?? ""
+        sectionLabelPartners: row.section_label_partners ?? "",
+        sectionLabelFaq: row.section_label_faq ?? "",
+        faqText: row.faq_text ?? ""
       }
     });
   } catch (error) {
@@ -3307,9 +3334,9 @@ app.post("/admin/events", requireAdmin, async (req, res) => {
       `
         INSERT INTO event_sections
           (event_id, show_program, show_place, show_text, show_speakers, show_partners,
-           show_name, show_email, show_phone, show_organization, show_translate, show_discount_code)
+           show_name, show_email, show_phone, show_organization, show_translate, show_discount_code, show_faq)
         VALUES
-          ($1, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE)
+          ($1, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, FALSE)
         ON CONFLICT (event_id) DO NOTHING
       `,
       [newEvent.id]
@@ -4495,7 +4522,14 @@ const ensureBookingsTable = async () => {
       show_city BOOLEAN NOT NULL DEFAULT TRUE,
       show_organization BOOLEAN NOT NULL DEFAULT TRUE,
       show_translate BOOLEAN NOT NULL DEFAULT TRUE,
-      show_discount_code BOOLEAN NOT NULL DEFAULT TRUE
+      show_discount_code BOOLEAN NOT NULL DEFAULT TRUE,
+      show_faq BOOLEAN NOT NULL DEFAULT FALSE,
+      section_order TEXT,
+      section_label_program TEXT DEFAULT '',
+      section_label_speakers TEXT DEFAULT '',
+      section_label_partners TEXT DEFAULT '',
+      section_label_faq TEXT DEFAULT '',
+      faq_text TEXT DEFAULT ''
     )
   `);
   await pool.query(`
@@ -4507,10 +4541,13 @@ const ensureBookingsTable = async () => {
       ADD COLUMN IF NOT EXISTS show_organization BOOLEAN NOT NULL DEFAULT TRUE,
       ADD COLUMN IF NOT EXISTS show_translate BOOLEAN NOT NULL DEFAULT TRUE,
       ADD COLUMN IF NOT EXISTS show_discount_code BOOLEAN NOT NULL DEFAULT TRUE,
+      ADD COLUMN IF NOT EXISTS show_faq BOOLEAN NOT NULL DEFAULT FALSE,
       ADD COLUMN IF NOT EXISTS section_order TEXT,
       ADD COLUMN IF NOT EXISTS section_label_program TEXT DEFAULT '',
       ADD COLUMN IF NOT EXISTS section_label_speakers TEXT DEFAULT '',
-      ADD COLUMN IF NOT EXISTS section_label_partners TEXT DEFAULT ''
+      ADD COLUMN IF NOT EXISTS section_label_partners TEXT DEFAULT '',
+      ADD COLUMN IF NOT EXISTS section_label_faq TEXT DEFAULT '',
+      ADD COLUMN IF NOT EXISTS faq_text TEXT DEFAULT ''
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS event_custom_fields (

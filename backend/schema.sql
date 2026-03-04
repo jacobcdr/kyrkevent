@@ -108,7 +108,14 @@ CREATE TABLE IF NOT EXISTS event_sections (
   show_city BOOLEAN NOT NULL DEFAULT TRUE,
   show_organization BOOLEAN NOT NULL DEFAULT TRUE,
   show_translate BOOLEAN NOT NULL DEFAULT TRUE,
-  show_discount_code BOOLEAN NOT NULL DEFAULT TRUE
+  show_discount_code BOOLEAN NOT NULL DEFAULT TRUE,
+  show_faq BOOLEAN NOT NULL DEFAULT FALSE,
+  section_order TEXT,
+  section_label_program TEXT DEFAULT '',
+  section_label_speakers TEXT DEFAULT '',
+  section_label_partners TEXT DEFAULT '',
+  section_label_faq TEXT DEFAULT '',
+  faq_text TEXT DEFAULT ''
 );
 
 ALTER TABLE event_sections
@@ -119,10 +126,13 @@ ALTER TABLE event_sections
   ADD COLUMN IF NOT EXISTS show_organization BOOLEAN NOT NULL DEFAULT TRUE,
   ADD COLUMN IF NOT EXISTS show_translate BOOLEAN NOT NULL DEFAULT TRUE,
   ADD COLUMN IF NOT EXISTS show_discount_code BOOLEAN NOT NULL DEFAULT TRUE,
+  ADD COLUMN IF NOT EXISTS show_faq BOOLEAN NOT NULL DEFAULT FALSE,
   ADD COLUMN IF NOT EXISTS section_order TEXT,
   ADD COLUMN IF NOT EXISTS section_label_program TEXT DEFAULT '',
   ADD COLUMN IF NOT EXISTS section_label_speakers TEXT DEFAULT '',
-  ADD COLUMN IF NOT EXISTS section_label_partners TEXT DEFAULT '';
+  ADD COLUMN IF NOT EXISTS section_label_partners TEXT DEFAULT '',
+  ADD COLUMN IF NOT EXISTS section_label_faq TEXT DEFAULT '',
+  ADD COLUMN IF NOT EXISTS faq_text TEXT DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS event_custom_fields (
   id SERIAL PRIMARY KEY,
