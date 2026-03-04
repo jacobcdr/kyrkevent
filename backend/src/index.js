@@ -77,13 +77,24 @@ app.use(
     crossOriginResourcePolicy: { policy: "cross-origin" }
   })
 );
+const allowedOrigins = String(FRONTEND_URL || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
 const corsOptions = {
   origin: (origin, callback) => {
-    if (!FRONTEND_URL) {
+    // Om ingen FRONTEND_URL är satt, tillåt allt (t.ex. lokalt)
+    if (!allowedOrigins.length) {
       callback(null, true);
       return;
     }
-    if (!origin || origin === FRONTEND_URL) {
+    // Om ingen origin (t.ex. curl, Postman) – tillåt
+    if (!origin) {
+      callback(null, true);
+      return;
+    }
+    if (allowedOrigins.includes(origin)) {
       callback(null, true);
       return;
     }
