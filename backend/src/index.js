@@ -1471,11 +1471,12 @@ app.get("/payments/verify", async (req, res) => {
     const isCart = Array.isArray(payload.items) && payload.items.length > 0;
     const firstItem = isCart ? payload.items[0] : payload;
     const sellerName = await getSellerNameForEvent(firstItem?.eventId);
-    const ticketTotal = isCart
+
+    let ticketTotal = isCart
       ? payload.items.reduce((s, p) => s + (p.discountedAmount ?? p.priceAmount ?? 0), 0)
       : (firstItem?.discountedAmount ?? firstItem?.priceAmount ?? null);
-    const serviceFee = typeof payload.serviceFee === "number" ? payload.serviceFee : 0;
-    const totalPaid =
+    let serviceFee = typeof payload.serviceFee === "number" ? payload.serviceFee : 0;
+    let totalPaid =
       typeof ticketTotal === "number"
         ? ticketTotal + serviceFee
         : null;
@@ -1484,11 +1485,25 @@ app.get("/payments/verify", async (req, res) => {
       ? (payload.items || []).map((p) => p.name).filter((n) => !!n)
       : [firstItem?.name].filter((n) => !!n);
 
+    // Särskild hantering för köp av Bas-eventkrediter där payload.type === "bas"
+    if (payload.type === "bas" && payload.quantity) {
+      const qty = Math.floor(Number(payload.quantity)) || 1;
+      const basTotal = qty * BAS_PRICE_PER_EVENT;
+      ticketTotal = basTotal;
+      serviceFee = 0;
+      totalPaid = basTotal;
+    }
+
     const summary = {
       name: firstItem?.name || "",
       names,
       email: firstItem?.email || "",
-      ticket: isCart ? `${payload.items.length} st` : (firstItem?.priceName || ""),
+      ticket:
+        payload.type === "bas"
+          ? `Bas-eventkrediter (${payload.quantity || 1} st)`
+          : isCart
+            ? `${payload.items.length} st`
+            : (firstItem?.priceName || ""),
       amount: ticketTotal,
       discountPercent: firstItem?.discountPercent ?? 0,
       total: totalPaid,
@@ -1499,6 +1514,7 @@ app.get("/payments/verify", async (req, res) => {
     if (payload.type === "bas") {
       summary.orderType = "bas";
       summary.quantity = payload.quantity;
+      summary.unitPrice = BAS_PRICE_PER_EVENT;
     }
 
     const alreadyFulfilled = order.booking_id || (order.booking_ids && order.booking_ids.length > 0);
@@ -1524,6 +1540,104 @@ app.get("/payments/verify", async (req, res) => {
               "UPDATE payment_orders SET status = $1, booking_id = -1 WHERE payment_id = $2",
               [status, paymentId]
             );
+
+            // Skicka kvitto för köp av Bas-eventkrediter
+            try {
+              const profileRow = await client.query(
+                `
+                  SELECT first_name, last_name, email, organization
+                  FROM admin_user_profiles
+                  WHERE profile_id = $1
+                `,
+                [pay.profile_id]
+              );
+              const profile = profileRow.rows[0];
+              if (profile && profile.email && resend && RESEND_FROM) {
+                const createdDate = new Date();
+                const orderNumber = formatOrderNumber(createdDate);
+                const amountSek = qty * BAS_PRICE_PER_EVENT;
+                const vatAmount = Math.round((amountSek * 0.25 / 1.25) * 100) / 100;
+                const netAmount = Math.round((amountSek - vatAmount) * 100) / 100;
+                const fullName = `${profile.first_name || ""} ${profile.last_name || ""}`.trim();
+                const customerLabel = profile.organization || fullName || profile.email;
+
+                const subject = "Kvitto – köp av Bas-eventkrediter";
+                const textLines = [
+                  "Kvitto",
+                  "======",
+                  `Hej ${fullName || ""}!`,
+                  "",
+                  "Tack för ditt köp av Bas-eventkrediter.",
+                  "",
+                  `Ordernummer: ${orderNumber}`,
+                  `Datum & tid: ${createdDate.toLocaleString("sv-SE")}`,
+                  `Kund: ${customerLabel}`,
+                  "",
+                  `Produkt: Bas-eventkrediter`,
+                  `Antal: ${qty} st`,
+                  `Pris (exkl. moms): ${netAmount.toLocaleString("sv-SE", {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2
+                  })} SEK`,
+                  `Moms (25%): ${vatAmount.toLocaleString("sv-SE", {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2
+                  })} SEK`,
+                  `Totalbelopp: ${amountSek.toLocaleString("sv-SE", {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2
+                  })} SEK`,
+                  "",
+                  "Betalningssätt: Online",
+                  `Säljare: ${RECEIPT_SELLER}`,
+                  "",
+                  "Vänliga hälsningar,",
+                  RECEIPT_SELLER
+                ];
+
+                const html = `
+                  <div style="font-family: Arial, sans-serif; color:#111827;">
+                    <h2 style="margin:0 0 8px 0;">Kvitto</h2>
+                    <p>Hej ${fullName || ""}!</p>
+                    <p>Tack för ditt köp av <strong>Bas-eventkrediter</strong>.</p>
+                    <table style="border-collapse: collapse; width: 100%; max-width: 520px;">
+                      <tbody>
+                        <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Ordernummer</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">${orderNumber}</td></tr>
+                        <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Datum &amp; tid</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">${createdDate.toLocaleString("sv-SE")}</td></tr>
+                        <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Kund</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">${customerLabel}</td></tr>
+                        <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Produkt</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right;">Bas-eventkrediter</td></tr>
+                        <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Antal</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right;">${qty} st</td></tr>
+                        <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Pris (exkl. moms)</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right;">${netAmount.toLocaleString("sv-SE", {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2
+                        })} SEK</td></tr>
+                        <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Moms (25%)</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right;">${vatAmount.toLocaleString("sv-SE", {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2
+                        })} SEK</td></tr>
+                        <tr><td style="padding:6px 8px; font-weight:600;">Totalbelopp</td><td style="padding:6px 8px; text-align:right; font-weight:700;">${amountSek.toLocaleString("sv-SE", {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2
+                        })} SEK</td></tr>
+                      </tbody>
+                    </table>
+                    <p style="margin-top:16px;">Betalningssätt: Online<br/>Säljare: ${RECEIPT_SELLER}</p>
+                    <p style="margin-top:16px;">Vänliga hälsningar,<br/>${RECEIPT_SELLER}</p>
+                  </div>
+                `;
+
+                await resend.emails.send({
+                  from: RESEND_FROM,
+                  to: profile.email,
+                  subject,
+                  text: textLines.join("\n"),
+                  html
+                });
+              }
+            } catch (err) {
+              // eslint-disable-next-line no-console
+              console.error("Failed to send Bas credits receipt email", err);
+            }
           } else if (Array.isArray(pay.items) && pay.items.length > 0) {
             const bookingIds = [];
             for (const item of pay.items) {

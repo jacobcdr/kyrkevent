@@ -666,7 +666,7 @@ const PaymentStatusPage = () => {
                       <strong>Lonetec AB</strong>
                     </div>
                     <div className="receipt-row">
-                      <span>Styckpris (exkl. moms)</span>
+                      <span>Pris (exkl. moms)</span>
                       <strong>{formatSek(netAmount)}</strong>
                     </div>
                     <div className="receipt-row">
@@ -1889,6 +1889,15 @@ const AdminPage = () => {
     event.preventDefault();
     if (!token) {
       setError("Logga in för att spara profilen.");
+      return;
+    }
+    const submitterValue = event.nativeEvent?.submitter?.value;
+    if (submitterValue === "save_profile") {
+      setError("");
+      setProfileLoading(true);
+      performProfileSave()
+        .catch(() => setError("Kunde inte spara profilen."))
+        .finally(() => setProfileLoading(false));
       return;
     }
     const plan = (profileForm.subscriptionPlan || "gratis").toLowerCase();
@@ -4639,7 +4648,7 @@ const AdminPage = () => {
                     );
                   })()}
                 </fieldset>
-                <button type="submit" className="button subscription-plan-activate" disabled={profileLoading}>
+                <button type="submit" name="action" value="subscription" className="button subscription-plan-activate" disabled={profileLoading}>
                   Fortsätt
                 </button>
                 <div className="subscription-plan-status">
@@ -4800,7 +4809,7 @@ const AdminPage = () => {
                 />
               </label>
               <div className="admin-actions">
-                <button className="button" type="submit" disabled={profileLoading}>
+                <button className="button" type="submit" name="action" value="save_profile" disabled={profileLoading}>
                   Spara profil
                 </button>
               </div>
@@ -6315,6 +6324,9 @@ const AdminPage = () => {
                       placeholder="https://"
                     />
                   </label>
+                  <p className="muted" style={{ marginTop: "-0.25rem" }}>
+                    Partnerloggor kan vara upp till 5&nbsp;MB (bildfil).
+                  </p>
                   <label className="field">
                     <span className="field-label">Logga</span>
                     <input
