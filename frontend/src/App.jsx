@@ -443,6 +443,9 @@ const LandingPage = () => {
           </div>
         </div>
       </section>
+      <footer className="landing-footer">
+        Tjänsten drivs av Lonetec AB org. 556907-4189 – webb: <a href="https://lonetec.se" target="_blank" rel="noreferrer">lonetec.se</a> – mail: <a href="mailto:kontakt@lonetec.se">kontakt@lonetec.se</a> – tel: 010-199 86 40
+      </footer>
     </div>
   );
 };

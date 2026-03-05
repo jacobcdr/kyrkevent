@@ -256,6 +256,24 @@ body {
   background: #475569;
 }
 
+.landing-footer {
+  margin-top: 3rem;
+  padding: 1.5rem 1rem 2rem;
+  text-align: center;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: #64748b;
+}
+
+.landing-footer a {
+  color: #64748b;
+  text-decoration: underline;
+}
+
+.landing-footer a:hover {
+  color: #475569;
+}
+
 .admin-page {
   max-width: 100%;
   padding: 2rem 2rem 3rem;
