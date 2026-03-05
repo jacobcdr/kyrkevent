@@ -81,6 +81,12 @@ const allowedOrigins = String(FRONTEND_URL || "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
+// Primär frontend-URL för länkar i e-post m.m.
+const primaryFrontendUrl =
+  allowedOrigins[0] ||
+  String(FRONTEND_URL || "")
+    .split(",")[0]
+    .trim();
 
 const corsOptions = {
   origin: (origin, callback) => {
@@ -1739,8 +1745,8 @@ app.post("/admin/users", async (req, res) => {
       }
     }
 
-    if (!isFirstUser && resend && FRONTEND_URL && verificationToken && normalizedEmail) {
-      const verifyUrl = `${FRONTEND_URL.replace(/\/+$/, "")}/verify-email?token=${encodeURIComponent(verificationToken)}`;
+    if (!isFirstUser && resend && primaryFrontendUrl && verificationToken && normalizedEmail) {
+      const verifyUrl = `${primaryFrontendUrl.replace(/\/+$/, "")}/verify-email?token=${encodeURIComponent(verificationToken)}`;
       const subject = "Aktivera ditt konto – Kyrkevent";
       const html = `
         <p>Hej!</p>
