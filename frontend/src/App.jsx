@@ -850,10 +850,12 @@ const AdminPage = () => {
     setRegistrationDeadlineInput(raw ? String(raw).slice(0, 10) : "");
   }, [selectedEvent?.registration_deadline, selectedEventId]);
   useEffect(() => {
+    // Synka bara texteditorn när man går in på framsida-vyn,
+    // inte vid varje tecken, annars hoppar markören.
     if (adminSection === "frontpage" && heroEditorRef.current) {
       heroEditorRef.current.innerHTML = heroForm.bodyHtml || "";
     }
-  }, [adminSection, heroForm.bodyHtml]);
+  }, [adminSection]);
   const [customFieldForm, setCustomFieldForm] = useState({
     label: "",
     fieldType: "text",
