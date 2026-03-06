@@ -7,6 +7,11 @@ CREATE TABLE IF NOT EXISTS events (
   slug TEXT NOT NULL UNIQUE,
   name TEXT NOT NULL,
   theme TEXT NOT NULL DEFAULT 'default',
+  event_start_date DATE,
+  event_end_date DATE,
+  registration_deadline DATE,
+  bas_credit_used BOOLEAN NOT NULL DEFAULT FALSE,
+  max_participants INTEGER,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -20,7 +25,8 @@ ALTER TABLE events
   ADD COLUMN IF NOT EXISTS event_start_date DATE,
   ADD COLUMN IF NOT EXISTS event_end_date DATE,
   ADD COLUMN IF NOT EXISTS registration_deadline DATE,
-  ADD COLUMN IF NOT EXISTS bas_credit_used BOOLEAN NOT NULL DEFAULT FALSE;
+  ADD COLUMN IF NOT EXISTS bas_credit_used BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS max_participants INTEGER;
 
 CREATE TABLE IF NOT EXISTS admin_users (
   id SERIAL PRIMARY KEY,
@@ -32,7 +38,9 @@ CREATE TABLE IF NOT EXISTS admin_users (
 ALTER TABLE admin_users
   ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT FALSE,
   ADD COLUMN IF NOT EXISTS verification_token TEXT,
-  ADD COLUMN IF NOT EXISTS verification_token_expires_at TIMESTAMPTZ;
+  ADD COLUMN IF NOT EXISTS verification_token_expires_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS reset_password_token TEXT,
+  ADD COLUMN IF NOT EXISTS reset_password_expires_at TIMESTAMPTZ;
 
 -- Befintliga användare (utan verifieringstoken) räknas som verifierade
 UPDATE admin_users SET email_verified = TRUE WHERE verification_token IS NULL;

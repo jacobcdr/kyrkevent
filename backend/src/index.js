@@ -510,6 +510,41 @@ function formatEventDates(row) {
   return out;
 }
 
+const getParticipantCountForEvent = async (eventId) => {
+  const resolvedEventId = normalizeEventId(eventId);
+  if (!resolvedEventId) return 0;
+  const result = await pool.query(
+    `
+      SELECT COUNT(*)::int AS count
+      FROM bookings
+      WHERE event_id = $1
+        AND (payment_status = 'manual' OR payment_status = 'paid')
+    `,
+    [resolvedEventId]
+  );
+  return result.rows[0]?.count ?? 0;
+};
+
+const checkEventCapacity = async (eventId, additionalSeats = 1) => {
+  const resolvedEventId = normalizeEventId(eventId);
+  if (!resolvedEventId) {
+    return { ok: false, max: null, current: null };
+  }
+  const eventRow = await pool.query(
+    "SELECT max_participants FROM events WHERE id = $1",
+    [resolvedEventId]
+  );
+  const max = eventRow.rows[0]?.max_participants;
+  if (max == null || max <= 0) {
+    return { ok: true, max: null, current: null };
+  }
+  const current = await getParticipantCountForEvent(resolvedEventId);
+  if (current + additionalSeats > max) {
+    return { ok: false, max, current };
+  }
+  return { ok: true, max, current };
+};
+
 app.get("/events/:slug", async (req, res) => {
   const { slug } = req.params;
   if (!slug) {
@@ -518,7 +553,7 @@ app.get("/events/:slug", async (req, res) => {
   }
   try {
     const result = await pool.query(
-      "SELECT id, slug, name, theme, event_start_date, event_end_date, registration_deadline, created_at FROM events WHERE slug = $1",
+      "SELECT id, slug, name, theme, event_start_date, event_end_date, registration_deadline, max_participants, created_at FROM events WHERE slug = $1",
       [String(slug).trim()]
     );
     if (result.rowCount === 0) {
@@ -894,6 +929,16 @@ app.post("/bookings", async (req, res) => {
       res.status(400).json({ ok: false, error: "Det går inte att registrera anmälningar efter eventdatum eller efter senaste anmälningsdag." });
       return;
     }
+    const capacity = await checkEventCapacity(parsed.payload.eventId, 1);
+    if (!capacity.ok) {
+      res.status(400).json({
+        ok: false,
+        error: "Detta event är tyvärr fullt. Det går inte att göra fler anmälningar.",
+        maxParticipants: capacity.max,
+        currentParticipants: capacity.current
+      });
+      return;
+    }
     const sectionsResult = await pool.query(
       `
         SELECT show_name, show_email, show_phone, show_organization
@@ -977,6 +1022,17 @@ app.post("/payments/start", paymentLimiter, async (req, res) => {
   const eventRow = eventDateResult.rows[0];
   if (isRegistrationClosed(eventRow)) {
     res.status(400).json({ ok: false, error: "Det går inte att registrera anmälningar efter eventdatum eller efter senaste anmälningsdag." });
+    return;
+  }
+
+  const capacity = await checkEventCapacity(parsed.payload.eventId, 1);
+  if (!capacity.ok) {
+    res.status(400).json({
+      ok: false,
+      error: "Detta event är tyvärr fullt. Det går inte att göra fler anmälningar.",
+      maxParticipants: capacity.max,
+      currentParticipants: capacity.current
+    });
     return;
   }
 
@@ -1249,6 +1305,16 @@ app.post("/payments/start-cart", paymentLimiter, async (req, res) => {
   const eventRow = eventDateResult.rows[0];
   if (isRegistrationClosed(eventRow)) {
     res.status(400).json({ ok: false, error: "Det går inte att registrera anmälningar efter eventdatum eller efter senaste anmälningsdag." });
+    return;
+  }
+  const capacity = await checkEventCapacity(eventId, parsedItems.length);
+  if (!capacity.ok) {
+    res.status(400).json({
+      ok: false,
+      error: "Detta event är tyvärr fullt. Det går inte att göra fler anmälningar.",
+      maxParticipants: capacity.max,
+      currentParticipants: capacity.current
+    });
     return;
   }
   const pricesCountResult = await pool.query(
@@ -1927,6 +1993,129 @@ app.get("/admin/verify-email", async (req, res) => {
   }
 });
 
+app.post("/admin/password-reset-request", async (req, res) => {
+  const rawEmail = (req.body?.email || "").toString().trim();
+  if (!rawEmail) {
+    return res.status(400).json({ ok: false, error: "E-postadress saknas." });
+  }
+  try {
+    const email = rawEmail.toLowerCase();
+    const result = await pool.query(
+      `SELECT u.id, u.username, p.email
+       FROM admin_user_profiles p
+       JOIN admin_users u ON u.id = p.user_id
+       WHERE LOWER(p.email) = $1
+       LIMIT 1`,
+      [email]
+    );
+
+    if (result.rowCount === 0) {
+      return res.json({
+        ok: true,
+        message:
+          "Om adressen finns registrerad har vi skickat ett mail med en länk för att återställa lösenordet."
+      });
+    }
+
+    const user = result.rows[0];
+    const resetToken = crypto.randomBytes(32).toString("hex");
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+
+    await pool.query(
+      `UPDATE admin_users
+       SET reset_password_token = $1,
+           reset_password_expires_at = $2
+       WHERE id = $3`,
+      [resetToken, expiresAt, user.id]
+    );
+
+    if (resend && RESEND_FROM && primaryFrontendUrl) {
+      const resetUrl = `${primaryFrontendUrl.replace(/\/+$/, "")}/reset-password?token=${encodeURIComponent(
+        resetToken
+      )}`;
+      const subject = "Återställ lösenord – Kyrkevent";
+      const html = `
+        <p>Hej!</p>
+        <p>Du (eller någon annan) har begärt att återställa lösenordet för användaren <strong>${user.username}</strong>.</p>
+        <p>Klicka på knappen nedan för att välja ett nytt lösenord.</p>
+        <p><a href="${resetUrl}" style="display:inline-block;padding:12px 24px;background:#c95a1a;color:#fff;text-decoration:none;border-radius:8px;font-weight:600;">Återställ lösenord</a></p>
+        <p>Om knappen inte fungerar, kopiera denna länk till webbläsaren:</p>
+        <p><a href="${resetUrl}">${resetUrl}</a></p>
+        <p>Länken är giltig i 1 timme.</p>
+      `;
+      try {
+        await resend.emails.send({
+          from: RESEND_FROM,
+          to: user.email,
+          subject,
+          html
+        });
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error("Failed to send password reset email", err);
+      }
+    }
+
+    res.json({
+      ok: true,
+      message:
+        "Om adressen finns registrerad har vi skickat ett mail med en länk för att återställa lösenordet."
+    });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("POST /admin/password-reset-request error:", error);
+    res.status(500).json({ ok: false, error: "Kunde inte skicka återställningslänk." });
+  }
+});
+
+app.post("/admin/password-reset", async (req, res) => {
+  const token = (req.body?.token || "").toString().trim();
+  const newPassword = (req.body?.password || "").toString();
+
+  if (!token || !newPassword) {
+    return res.status(400).json({ ok: false, error: "Token och nytt lösenord krävs." });
+  }
+
+  if (newPassword.length < 8) {
+    return res
+      .status(400)
+      .json({ ok: false, error: "Lösenordet behöver vara minst 8 tecken långt." });
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT id FROM admin_users
+       WHERE reset_password_token = $1
+         AND reset_password_expires_at > NOW()`,
+      [token]
+    );
+
+    if (result.rowCount === 0) {
+      return res
+        .status(400)
+        .json({ ok: false, error: "Ogiltig eller utgången länk. Begär en ny återställning." });
+    }
+
+    const userId = result.rows[0].id;
+    const passwordHash = await bcrypt.hash(String(newPassword), 10);
+
+    await pool.query(
+      `UPDATE admin_users
+       SET password_hash = $1,
+           reset_password_token = NULL,
+           reset_password_expires_at = NULL
+       WHERE id = $2`,
+      [passwordHash, userId]
+    );
+
+    res.json({ ok: true, message: "Lösenordet är uppdaterat. Du kan nu logga in." });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("POST /admin/password-reset error:", error);
+    res.status(500).json({ ok: false, error: "Kunde inte uppdatera lösenordet." });
+  }
+});
+
 app.post("/admin/users/reset", async (req, res) => {
   const secret = process.env.RESET_ADMIN_SECRET;
   if (!secret) {
@@ -2283,7 +2472,7 @@ app.put("/admin/profile/password", requireAdmin, async (req, res) => {
 app.get("/admin/events", requireAdmin, async (_req, res) => {
   try {
     const result = await pool.query(
-      "SELECT id, slug, name, theme, event_start_date, event_end_date, registration_deadline, created_at FROM events WHERE user_id = $1 ORDER BY created_at DESC, id DESC",
+      "SELECT id, slug, name, theme, event_start_date, event_end_date, registration_deadline, max_participants, created_at FROM events WHERE user_id = $1 ORDER BY created_at DESC, id DESC",
       [_req.userId]
     );
     res.json({ ok: true, events: (result.rows || []).map(formatEventDates) });
@@ -3129,8 +3318,8 @@ app.get("/admin/payout-requests/:id/receipt.pdf", requireAdmin, async (req, res)
     doc.text(`Moms 25%: ${vatAmount.toFixed(2)} SEK`);
     doc.moveDown();
     doc.fontSize(9).fillColor("#666");
-    doc.text("Kontakt: ekonomi@lonetec.se", { continued: false });
-    doc.text("Lonetec AB bokning - utbetalningskvitto", { continued: false });
+    doc.text("Kontakt: kontakt@lonetec.se", { continued: false });
+    doc.text("Lonetec AB - bokning - utbetalningskvitto", { continued: false });
     doc.end();
   } catch (error) {
     res.status(500).json({ ok: false, error: "Kunde inte skapa kvitto." });
@@ -3541,12 +3730,13 @@ app.delete("/admin/events/:id", requireAdmin, async (req, res) => {
 
 app.put("/admin/events/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { theme, startDate, endDate, registrationDeadline } = req.body || {};
+  const { theme, startDate, endDate, registrationDeadline, maxParticipants } = req.body || {};
   const eventId = await ensureEventOwnership(id, req.userId, res);
   if (!eventId) {
     return;
   }
-  const normalizedTheme = String(theme || "default").trim() || "default";
+  const normalizedTheme =
+    theme === undefined ? null : (String(theme || "default").trim() || "default");
   const start = parseDate(startDate);
   const end = parseDate(endDate);
   let eventStartDate = null;
@@ -3580,21 +3770,54 @@ app.put("/admin/events/:id", requireAdmin, async (req, res) => {
       return;
     }
   }
+  let maxParticipantsValue = null;
+  if (maxParticipants !== undefined) {
+    if (maxParticipants === "" || maxParticipants === null) {
+      maxParticipantsValue = null;
+    } else {
+      const parsedMax = Number(maxParticipants);
+      if (!Number.isFinite(parsedMax) || parsedMax < 0) {
+        res.status(400).json({ ok: false, error: "Ogiltigt maxantal deltagare." });
+        return;
+      }
+      maxParticipantsValue = Math.floor(parsedMax);
+    }
+  }
   try {
     let result;
     if (eventStartDate != null) {
       result = await pool.query(
-        "UPDATE events SET theme = $1, event_start_date = $2, event_end_date = $3 WHERE id = $4 RETURNING id, slug, name, theme, event_start_date, event_end_date, registration_deadline, created_at",
-        [normalizedTheme, eventStartDate, eventEndDate, eventId]
+        `
+          UPDATE events
+          SET theme = COALESCE($1, theme),
+              event_start_date = $2,
+              event_end_date = $3,
+              max_participants = COALESCE($4, max_participants)
+          WHERE id = $5
+          RETURNING id, slug, name, theme, event_start_date, event_end_date, registration_deadline, max_participants, created_at
+        `,
+        [normalizedTheme, eventStartDate, eventEndDate, maxParticipantsValue, eventId]
       );
-    } else if (registrationDeadline !== undefined) {
+    } else if (registrationDeadline !== undefined || maxParticipants !== undefined) {
       result = await pool.query(
-        "UPDATE events SET theme = $1, registration_deadline = $2 WHERE id = $3 RETURNING id, slug, name, theme, event_start_date, event_end_date, registration_deadline, created_at",
-        [normalizedTheme, deadlineValue, eventId]
+        `
+          UPDATE events
+          SET theme = COALESCE($1, theme),
+              registration_deadline = COALESCE($2, registration_deadline),
+              max_participants = COALESCE($3, max_participants)
+          WHERE id = $4
+          RETURNING id, slug, name, theme, event_start_date, event_end_date, registration_deadline, max_participants, created_at
+        `,
+        [normalizedTheme, deadlineValue, maxParticipantsValue, eventId]
       );
     } else {
       result = await pool.query(
-        "UPDATE events SET theme = $1 WHERE id = $2 RETURNING id, slug, name, theme, event_start_date, event_end_date, registration_deadline, created_at",
+        `
+          UPDATE events
+          SET theme = COALESCE($1, theme)
+          WHERE id = $2
+          RETURNING id, slug, name, theme, event_start_date, event_end_date, registration_deadline, max_participants, created_at
+        `,
         [normalizedTheme, eventId]
       );
     }
@@ -4452,6 +4675,20 @@ app.get("/admin/bookings/export", requireAdmin, async (req, res) => {
   }
 });
 
+app.get("/admin/events/:id/participant-count", requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  const eventId = await ensureEventOwnership(id, req.userId, res);
+  if (!eventId) {
+    return;
+  }
+  try {
+    const count = await getParticipantCountForEvent(eventId);
+    res.json({ ok: true, count });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Kunde inte läsa antal anmälda." });
+  }
+});
+
 app.get("/admin/bookings/export.xlsx", requireAdmin, async (_req, res) => {
   try {
     const eventId = await ensureEventOwnership(_req.query.eventId, _req.userId, res);
@@ -4545,7 +4782,9 @@ const ensureBookingsTable = async () => {
     ALTER TABLE admin_users
       ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT FALSE,
       ADD COLUMN IF NOT EXISTS verification_token TEXT,
-      ADD COLUMN IF NOT EXISTS verification_token_expires_at TIMESTAMPTZ
+      ADD COLUMN IF NOT EXISTS verification_token_expires_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS reset_password_token TEXT,
+      ADD COLUMN IF NOT EXISTS reset_password_expires_at TIMESTAMPTZ
   `);
   await pool.query(
     "UPDATE admin_users SET email_verified = TRUE WHERE verification_token IS NULL"
@@ -4602,6 +4841,11 @@ const ensureBookingsTable = async () => {
       slug TEXT NOT NULL UNIQUE,
       name TEXT NOT NULL,
       theme TEXT NOT NULL DEFAULT 'default',
+      event_start_date DATE,
+      event_end_date DATE,
+      registration_deadline DATE,
+      bas_credit_used BOOLEAN NOT NULL DEFAULT FALSE,
+      max_participants INTEGER,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
@@ -4612,7 +4856,8 @@ const ensureBookingsTable = async () => {
       ADD COLUMN IF NOT EXISTS event_start_date DATE,
       ADD COLUMN IF NOT EXISTS event_end_date DATE,
       ADD COLUMN IF NOT EXISTS registration_deadline DATE,
-      ADD COLUMN IF NOT EXISTS bas_credit_used BOOLEAN NOT NULL DEFAULT FALSE
+      ADD COLUMN IF NOT EXISTS bas_credit_used BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS max_participants INTEGER
   `);
   const defaultEventResult = await pool.query(
     `

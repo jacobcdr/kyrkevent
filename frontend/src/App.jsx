@@ -724,6 +724,9 @@ const AdminPage = () => {
   const [verificationEmailSent, setVerificationEmailSent] = useState("");
   const [userLoading, setUserLoading] = useState(false);
   const [authView, setAuthView] = useState("login");
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotMessage, setForgotMessage] = useState("");
+  const [forgotLoading, setForgotLoading] = useState(false);
   const [events, setEvents] = useState([]);
   const [selectedEventId, setSelectedEventId] = useState("");
   const [eventForm, setEventForm] = useState({
@@ -760,6 +763,7 @@ const AdminPage = () => {
   const [heroForm, setHeroForm] = useState({ title: "", bodyHtml: "" });
   const [heroImageUrl, setHeroImageUrl] = useState("");
   const heroEditorRef = useRef(null);
+  const faqEditorRef = useRef(null);
   const [pricesAdmin, setPricesAdmin] = useState([]);
   const [priceForm, setPriceForm] = useState({ name: "", amount: "", description: "" });
   const [priceEditingId, setPriceEditingId] = useState(null);
@@ -836,6 +840,11 @@ const AdminPage = () => {
   const [themeSaving, setThemeSaving] = useState(false);
   const [registrationDeadlineInput, setRegistrationDeadlineInput] = useState("");
   const [registrationDeadlineSaving, setRegistrationDeadlineSaving] = useState(false);
+  const [maxParticipantsInput, setMaxParticipantsInput] = useState("");
+  const [participantCount, setParticipantCount] = useState(null);
+  const [participantCountLoading, setParticipantCountLoading] = useState(false);
+  const [eventDeleteConfirm, setEventDeleteConfirm] = useState(null);
+  const [eventDeleteLoading, setEventDeleteLoading] = useState(false);
   useEffect(() => {
     document.title = "Kyrkevent";
     return () => {
@@ -850,12 +859,75 @@ const AdminPage = () => {
     setRegistrationDeadlineInput(raw ? String(raw).slice(0, 10) : "");
   }, [selectedEvent?.registration_deadline, selectedEventId]);
   useEffect(() => {
+    if (!token || !selectedEventId || adminSection !== "settings") {
+      setParticipantCount(null);
+      return;
+    }
+    let cancelled = false;
+    const loadCount = async () => {
+      setParticipantCountLoading(true);
+      try {
+        const response = await fetch(`${API_BASE}/admin/events/${selectedEventId}/participant-count`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || "Kunde inte hämta antal anmälda.");
+        }
+        if (!cancelled) {
+          setParticipantCount(typeof data.count === "number" ? data.count : null);
+        }
+      } catch {
+        if (!cancelled) {
+          setParticipantCount(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setParticipantCountLoading(false);
+        }
+      }
+    };
+    loadCount();
+    return () => {
+      cancelled = true;
+    };
+  }, [token, selectedEventId, adminSection]);
+  useEffect(() => {
+    if (!selectedEvent) {
+      setMaxParticipantsInput("");
+      return;
+    }
+    const value =
+      selectedEvent.max_participants != null && selectedEvent.max_participants !== ""
+        ? String(selectedEvent.max_participants)
+        : "";
+    setMaxParticipantsInput(value);
+  }, [selectedEventId, selectedEvent?.max_participants]);
+  useEffect(() => {
+    if (!selectedEvent) {
+      setMaxParticipantsInput("");
+      return;
+    }
+    const value =
+      selectedEvent.max_participants != null && selectedEvent.max_participants !== ""
+        ? String(selectedEvent.max_participants)
+        : "";
+    setMaxParticipantsInput(value);
+  }, [selectedEventId, selectedEvent?.max_participants]);
+  useEffect(() => {
     // Synka bara texteditorn när man går in på framsida-vyn,
     // inte vid varje tecken, annars hoppar markören.
     if (adminSection === "frontpage" && heroEditorRef.current) {
       heroEditorRef.current.innerHTML = heroForm.bodyHtml || "";
     }
   }, [adminSection]);
+  useEffect(() => {
+    // Synka FAQ-editorn när man går in på framsida-vyn eller byter event.
+    // Uppdatera inte löpande vid varje tangenttryckning för att undvika att markören hoppar.
+    if (adminSection === "frontpage" && faqEditorRef.current) {
+      faqEditorRef.current.innerHTML = adminFaqText || "";
+    }
+  }, [adminSection, selectedEventId]);
   const [customFieldForm, setCustomFieldForm] = useState({
     label: "",
     fieldType: "text",
@@ -1536,6 +1608,8 @@ const AdminPage = () => {
         setAuthView("signup");
       } else if (viewParam === "login") {
         setAuthView("login");
+      } else if (viewParam === "forgot") {
+        setAuthView("forgot");
       } else if (usersExistLoaded) {
         setAuthView(usersExist ? "login" : "signup");
       } else {
@@ -1643,6 +1717,43 @@ const AdminPage = () => {
     performLogin(username.trim(), password)
       .catch((err) => setError(err?.message || "Fel användarnamn eller lösenord."))
       .finally(() => setLoading(false));
+  };
+
+  const handleForgotPasswordRequest = (event) => {
+    event.preventDefault();
+    setError("");
+    setForgotMessage("");
+    const email = forgotEmail.trim();
+    if (!email) {
+      setError("Ange e-postadressen för kontot.");
+      return;
+    }
+    setForgotLoading(true);
+    const sendRequest = async () => {
+      const response = await fetch(`${API_BASE}/admin/password-reset-request`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || "Kunde inte skicka återställningslänk.");
+      }
+      return data;
+    };
+    sendRequest()
+      .then((data) => {
+        setForgotMessage(
+          data.message ||
+            "Om adressen finns registrerad har vi skickat ett mail med en länk för att återställa lösenordet."
+        );
+      })
+      .catch((err) => {
+        setError(err?.message || "Kunde inte skicka återställningslänk.");
+      })
+      .finally(() => {
+        setForgotLoading(false);
+      });
   };
 
   const handleLogout = () => {
@@ -1832,11 +1943,14 @@ const AdminPage = () => {
       setError("Logga in för att ta bort event.");
       return;
     }
-    if (!window.confirm(`Ta bort event "${eventItem.name}"? All data raderas.`)) {
-      return;
-    }
-    const removeEvent = async () => {
-      const response = await fetch(`${API_BASE}/admin/events/${eventItem.id}`, {
+    setEventDeleteConfirm({ id: eventItem.id, name: eventItem.name });
+  };
+
+  const confirmEventDelete = async () => {
+    if (!eventDeleteConfirm || !token) return;
+    setEventDeleteLoading(true);
+    try {
+      const response = await fetch(`${API_BASE}/admin/events/${eventDeleteConfirm.id}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -1844,12 +1958,16 @@ const AdminPage = () => {
         const data = await response.json().catch(() => ({}));
         throw new Error(data.error || "Kunde inte ta bort eventet.");
       }
-      if (String(selectedEventId) === String(eventItem.id)) {
+      if (String(selectedEventId) === String(eventDeleteConfirm.id)) {
         setSelectedEventId("");
       }
       await loadAdminEvents(token);
-    };
-    removeEvent().catch((err) => setError(err?.message || "Kunde inte ta bort eventet."));
+      setEventDeleteConfirm(null);
+    } catch (err) {
+      setError(err?.message || "Kunde inte ta bort eventet.");
+    } finally {
+      setEventDeleteLoading(false);
+    }
   };
 
   const handleProfileChange = (event) => {
@@ -2532,9 +2650,21 @@ const AdminPage = () => {
     }));
   };
 
+  const handleFaqInput = () => {
+    if (!faqEditorRef.current) {
+      return;
+    }
+    setAdminFaqText(faqEditorRef.current.innerHTML);
+  };
+
   const applyHeroCommand = (command, value) => {
     document.execCommand(command, false, value);
     handleHeroInput();
+  };
+
+  const applyFaqCommand = (command, value) => {
+    document.execCommand(command, false, value);
+    handleFaqInput();
   };
 
   const handleHeroSubmit = (event) => {
@@ -3154,13 +3284,16 @@ const AdminPage = () => {
 
   if (!token) {
     const showSignup = authView === "signup";
+    const showForgot = authView === "forgot";
     return (
       <div className="admin-auth">
         <div className="admin-auth-card">
           <a href="/" className="admin-auth-back">
             ← Tillbaka till startsidan
           </a>
-          <h2>{showSignup ? "Skapa användare" : "Logga in"}</h2>
+          <h2>
+            {showSignup ? "Skapa användare" : showForgot ? "Glömt lösenord" : "Logga in"}
+          </h2>
           {verificationEmailSent ? (
             <p className="admin-verification-sent">
               Vi har skickat ett e-postmeddelande till <strong>{verificationEmailSent}</strong>. Klicka på länken i mailet för att aktivera kontot. Sedan kan du logga in här.
@@ -3214,6 +3347,28 @@ const AdminPage = () => {
                 </button>
               </div>
             </form>
+          ) : showForgot ? (
+            <form className="admin-form" onSubmit={handleForgotPasswordRequest}>
+              <p className="muted">
+                Ange e-postadressen som är kopplad till ditt konto så skickar vi en länk för att
+                välja ett nytt lösenord.
+              </p>
+              <label className="field">
+                <span className="field-label">E-post</span>
+                <input
+                  name="email"
+                  type="email"
+                  value={forgotEmail}
+                  onChange={(event) => setForgotEmail(event.target.value)}
+                  required
+                />
+              </label>
+              <div className="admin-actions">
+                <button className="button" type="submit" disabled={forgotLoading}>
+                  Skicka återställningslänk
+                </button>
+              </div>
+            </form>
           ) : (
             <form className="admin-form" onSubmit={handleLogin}>
               <label className="field">
@@ -3244,13 +3399,43 @@ const AdminPage = () => {
             </form>
           )}
           {error ? <p className="admin-error">{error}</p> : null}
-          <button
-            type="button"
-            className="admin-auth-link"
-            onClick={() => setAuthView(showSignup ? "login" : "signup")}
-          >
-            {showSignup ? "Tillbaka till inloggning" : "Skapa användare"}
-          </button>
+          {forgotMessage ? (
+            <p className="admin-verification-sent">{forgotMessage}</p>
+          ) : null}
+          {showForgot ? (
+            <button
+              type="button"
+              className="admin-auth-link"
+              onClick={() => {
+                setAuthView("login");
+              }}
+            >
+              Tillbaka till inloggning
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="admin-auth-link"
+                onClick={() => setAuthView(showSignup ? "login" : "signup")}
+              >
+                {showSignup ? "Tillbaka till inloggning" : "Skapa användare"}
+              </button>
+              {!showSignup ? (
+                <button
+                  type="button"
+                  className="admin-auth-link"
+                  onClick={() => {
+                    setAuthView("forgot");
+                    setError("");
+                    setForgotMessage("");
+                  }}
+                >
+                  Glömt lösenord?
+                </button>
+              ) : null}
+            </>
+          )}
         </div>
       </div>
     );
@@ -3390,6 +3575,25 @@ const AdminPage = () => {
           </div>
         ) : null}
       </div>
+
+      {eventDeleteConfirm ? (
+        <div className="toaster-overlay" onClick={() => !eventDeleteLoading && setEventDeleteConfirm(null)} aria-hidden="false">
+          <div className="toaster toaster-confirm" onClick={(e) => e.stopPropagation()} role="dialog" aria-labelledby="toaster-event-delete-title" aria-modal="true">
+            <h3 id="toaster-event-delete-title" className="toaster-title">Ta bort event</h3>
+            <p className="toaster-message">
+              Ta bort &quot;{eventDeleteConfirm.name}&quot;? All data raderas.
+            </p>
+            <div className="toaster-actions">
+              <button type="button" className="button button-outline" onClick={() => setEventDeleteConfirm(null)} disabled={eventDeleteLoading}>
+                Avbryt
+              </button>
+              <button type="button" className="button button-danger" onClick={confirmEventDelete} disabled={eventDeleteLoading}>
+                {eventDeleteLoading ? "Tar bort…" : "Ta bort"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div className="admin-content">
         {token && isAdminUser && adminSection === "admin" ? (
@@ -5364,6 +5568,18 @@ const AdminPage = () => {
                   <div className="partner-grid admin-event-grid">
                     {events.map((item) => {
                       const isActive = String(selectedEventId) === String(item.id);
+                      const formatEventDateShort = (dateStr) => {
+                        if (!dateStr) return null;
+                        const d = new Date(`${String(dateStr).slice(0, 10)}T12:00:00`);
+                        if (Number.isNaN(d.getTime())) return null;
+                        return d.toLocaleDateString("sv-SE", { day: "numeric", month: "long" });
+                      };
+                      const startLabel = formatEventDateShort(item.event_start_date);
+                      const endLabel = formatEventDateShort(item.event_end_date);
+                      const dateLabel =
+                        startLabel && endLabel && String(item.event_start_date).slice(0, 10) !== String(item.event_end_date).slice(0, 10)
+                          ? `${startLabel} – ${endLabel}`
+                          : startLabel;
                       return (
                         <div
                           key={item.id}
@@ -5393,6 +5609,9 @@ const AdminPage = () => {
                             📅
                           </div>
                           <div className="partner-name admin-event-name">{item.name}</div>
+                          {dateLabel ? (
+                            <div className="admin-event-date">{dateLabel}</div>
+                          ) : null}
                         </div>
                       );
                     })}
@@ -5960,49 +6179,86 @@ const AdminPage = () => {
 
               <div className="section">
                 <div className="section-header">
-                  <div style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
-                    <h2>FAQ</h2>
-                    <label className="field" style={{ marginBottom: 0, maxWidth: "260px" }}>
-                      <input
-                        type="text"
-                        value={adminSectionLabels.faq}
-                        onChange={(e) => handleSectionLabelChange("faq", e.target.value)}
-                        onBlur={saveAdminSectionLabels}
-                        placeholder="Byt ut rubriknamn"
-                        aria-label="Byt ut rubriknamn för FAQ"
-                      />
-                    </label>
-                  </div>
+                  <h2>Text</h2>
                   <label className="field checkbox-field section-toggle">
                     <span className="field-label">Visa</span>
                     <input
-                      name="showFaq"
+                      name="showText"
                       type="checkbox"
-                      checked={adminSectionVisibility.showFaq}
+                      checked={adminSectionVisibility.showText}
                       onChange={handleSectionVisibilityChange}
                     />
                   </label>
                 </div>
-                <div className="admin-form">
+                <form className="admin-form" onSubmit={handleHeroSubmit}>
                   <label className="field">
-                    <span className="field-label">FAQ‑text</span>
-                    <textarea
-                      rows="6"
-                      value={adminFaqText}
-                      onChange={(e) => setAdminFaqText(e.target.value)}
-                      placeholder="Skriv frågor och svar eller annan viktig information om eventet."
-                    ></textarea>
+                    <span className="field-label">Rubrik</span>
+                    <input
+                      name="title"
+                      type="text"
+                      value={heroForm.title}
+                      onChange={handleHeroChange}
+                      required
+                    />
                   </label>
-                  <div className="admin-actions">
+                  <div className="editor-toolbar">
+                    <button type="button" className="icon-button" onClick={() => applyHeroCommand("bold")}>
+                      Fet
+                    </button>
+                    <button type="button" className="icon-button" onClick={() => applyHeroCommand("italic")}>
+                      Kursiv
+                    </button>
+                    <button type="button" className="icon-button" onClick={() => applyHeroCommand("underline")}>
+                      Understryk
+                    </button>
+                    <button type="button" className="icon-button" onClick={() => applyHeroCommand("insertUnorderedList")}>
+                      Punktlista
+                    </button>
+                    <button type="button" className="icon-button" onClick={() => applyHeroCommand("justifyLeft")}>
+                      Vänster
+                    </button>
+                    <button type="button" className="icon-button" onClick={() => applyHeroCommand("justifyCenter")}>
+                      Centrera
+                    </button>
+                    <button type="button" className="icon-button" onClick={() => applyHeroCommand("justifyRight")}>
+                      Höger
+                    </button>
                     <button
                       type="button"
-                      className="button"
-                      onClick={saveAdminSectionLabels}
+                      className="icon-button"
+                      onClick={() => {
+                        const url = window.prompt("Länk (https://...)");
+                        if (url) {
+                          applyHeroCommand("createLink", url);
+                        }
+                      }}
                     >
-                      Spara FAQ
+                      Länk
+                    </button>
+                    <select
+                      className="editor-select"
+                      onChange={(event) => applyHeroCommand("fontSize", event.target.value)}
+                      defaultValue="3"
+                    >
+                      <option value="2">Liten</option>
+                      <option value="3">Normal</option>
+                      <option value="4">Stor</option>
+                      <option value="5">Extra stor</option>
+                    </select>
+                  </div>
+                  <div
+                    className="editor"
+                    contentEditable
+                    ref={heroEditorRef}
+                    onInput={handleHeroInput}
+                    suppressContentEditableWarning
+                  ></div>
+                  <div className="admin-actions">
+                    <button className="button" type="submit">
+                      Spara
                     </button>
                   </div>
-                </div>
+                </form>
               </div>
 
               <div className="section">
@@ -6085,86 +6341,104 @@ const AdminPage = () => {
 
               <div className="section">
                 <div className="section-header">
-                  <h2>Text</h2>
+                  <div style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
+                    <h2>FAQ</h2>
+                    <label className="field" style={{ marginBottom: 0, maxWidth: "260px" }}>
+                      <input
+                        type="text"
+                        value={adminSectionLabels.faq}
+                        onChange={(e) => handleSectionLabelChange("faq", e.target.value)}
+                        onBlur={saveAdminSectionLabels}
+                        placeholder="Byt ut rubriknamn"
+                        aria-label="Byt ut rubriknamn för FAQ"
+                      />
+                    </label>
+                  </div>
                   <label className="field checkbox-field section-toggle">
                     <span className="field-label">Visa</span>
                     <input
-                      name="showText"
+                      name="showFaq"
                       type="checkbox"
-                      checked={adminSectionVisibility.showText}
+                      checked={adminSectionVisibility.showFaq}
                       onChange={handleSectionVisibilityChange}
                     />
                   </label>
                 </div>
-                <form className="admin-form" onSubmit={handleHeroSubmit}>
-                  <label className="field">
-                    <span className="field-label">Rubrik</span>
-                    <input
-                      name="title"
-                      type="text"
-                      value={heroForm.title}
-                      onChange={handleHeroChange}
-                      required
-                    />
-                  </label>
-                  <div className="editor-toolbar">
-                    <button type="button" className="icon-button" onClick={() => applyHeroCommand("bold")}>
-                      Fet
-                    </button>
-                    <button type="button" className="icon-button" onClick={() => applyHeroCommand("italic")}>
-                      Kursiv
-                    </button>
-                    <button type="button" className="icon-button" onClick={() => applyHeroCommand("underline")}>
-                      Understryk
-                    </button>
-                    <button type="button" className="icon-button" onClick={() => applyHeroCommand("insertUnorderedList")}>
-                      Punktlista
-                    </button>
-                    <button type="button" className="icon-button" onClick={() => applyHeroCommand("justifyLeft")}>
-                      Vänster
-                    </button>
-                    <button type="button" className="icon-button" onClick={() => applyHeroCommand("justifyCenter")}>
-                      Centrera
-                    </button>
-                    <button type="button" className="icon-button" onClick={() => applyHeroCommand("justifyRight")}>
-                      Höger
-                    </button>
+                <div className="admin-form">
+                  <div className="field">
+                    <span className="field-label">
+                      Detta är ett textfält som du kan använda för extra information, välj att visa eller inte visa det.
+                    </span>
+                    <div className="editor-toolbar">
+                      <button type="button" className="icon-button" onClick={() => applyFaqCommand("bold")}>
+                        Fet
+                      </button>
+                      <button type="button" className="icon-button" onClick={() => applyFaqCommand("italic")}>
+                        Kursiv
+                      </button>
+                      <button type="button" className="icon-button" onClick={() => applyFaqCommand("underline")}>
+                        Understryk
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-button"
+                        onClick={() => applyFaqCommand("insertUnorderedList")}
+                      >
+                        Punktlista
+                      </button>
+                      <button type="button" className="icon-button" onClick={() => applyFaqCommand("justifyLeft")}>
+                        Vänster
+                      </button>
+                      <button type="button" className="icon-button" onClick={() => applyFaqCommand("justifyCenter")}>
+                        Centrera
+                      </button>
+                      <button type="button" className="icon-button" onClick={() => applyFaqCommand("justifyRight")}>
+                        Höger
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-button"
+                        onClick={() => {
+                          const url = window.prompt("Länk (https://...)");
+                          if (url) {
+                            applyFaqCommand("createLink", url);
+                          }
+                        }}
+                      >
+                        Länk
+                      </button>
+                      <select
+                        className="editor-select"
+                        onChange={(event) => applyFaqCommand("fontSize", event.target.value)}
+                        defaultValue="3"
+                      >
+                        <option value="2">Liten</option>
+                        <option value="3">Normal</option>
+                        <option value="4">Stor</option>
+                        <option value="5">Extra stor</option>
+                      </select>
+                    </div>
+                    <div
+                      className="editor"
+                      contentEditable
+                      ref={faqEditorRef}
+                      onInput={handleFaqInput}
+                      suppressContentEditableWarning
+                    ></div>
+                  </div>
+                  <div className="admin-actions">
                     <button
                       type="button"
-                      className="icon-button"
+                      className="button"
                       onClick={() => {
-                        const url = window.prompt("Länk (https://...)");
-                        if (url) {
-                          applyHeroCommand("createLink", url);
-                        }
+                        handleFaqInput();
+                        saveAdminSectionLabels();
                       }}
                     >
-                      Länk
-                    </button>
-                    <select
-                      className="editor-select"
-                      onChange={(event) => applyHeroCommand("fontSize", event.target.value)}
-                      defaultValue="3"
-                    >
-                      <option value="2">Liten</option>
-                      <option value="3">Normal</option>
-                      <option value="4">Stor</option>
-                      <option value="5">Extra stor</option>
-                    </select>
-                  </div>
-                  <div
-                    className="editor"
-                    contentEditable
-                    ref={heroEditorRef}
-                    onInput={handleHeroInput}
-                    suppressContentEditableWarning
-                  ></div>
-                  <div className="admin-actions">
-                    <button className="button" type="submit">
-                      Spara
+                      Spara FAQ
                     </button>
                   </div>
-                </form>
+                </div>
               </div>
 
               <div className="section">
@@ -6462,6 +6736,39 @@ const AdminPage = () => {
                         style={{ maxWidth: "12rem" }}
                       />
                     </label>
+                    <div className="field-row" style={{ marginTop: "1rem" }}>
+                      <label className="field">
+                        <span className="field-label">Max antal deltagare</span>
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={maxParticipantsInput}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (val === "") {
+                              setMaxParticipantsInput("");
+                              return;
+                            }
+                            const num = Number(val);
+                            if (Number.isNaN(num) || num < 0) return;
+                            setMaxParticipantsInput(String(Math.floor(num)));
+                          }}
+                          placeholder="Obegränsat"
+                          style={{ maxWidth: "10rem" }}
+                        />
+                      </label>
+                      <div className="field" style={{ marginTop: "1.85rem" }}>
+                        <span className="field-label">Anmälda</span>
+                        <p className="muted" style={{ marginTop: "0.25rem" }}>
+                          {participantCountLoading
+                            ? "Laddar..."
+                            : participantCount != null && participantCount > 0
+                              ? `${participantCount} deltagare`
+                              : "Inga anmälningar ännu."}
+                        </p>
+                      </div>
+                    </div>
                     {!maxDeadline && (
                       <p className="field-hint" style={{ marginTop: "0.35rem", color: "var(--muted)" }}>
                         Ange eventdatum (under Event) först om du vill sätta senaste anmälningsdag.
@@ -6492,7 +6799,8 @@ const AdminPage = () => {
                               },
                               body: JSON.stringify({
                                 theme: selectedEvent?.theme || "default",
-                                registrationDeadline: registrationDeadlineInput.trim() || ""
+                                registrationDeadline: registrationDeadlineInput.trim() || "",
+                                maxParticipants: maxParticipantsInput.trim() || ""
                               })
                             }
                           );
@@ -7070,6 +7378,127 @@ function VerifyEmailPage() {
   );
 }
 
+function ResetPasswordPage() {
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [status, setStatus] = useState("form");
+  const [message, setMessage] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get("token") || "";
+
+  useEffect(() => {
+    if (!token) {
+      setStatus("error");
+      setMessage("Länk saknar återställningskod.");
+    }
+  }, [token]);
+
+  const handleSubmit = (event) => {
+    event.preventDefault();
+    if (!token) {
+      setStatus("error");
+      setMessage("Länk saknar återställningskod.");
+      return;
+    }
+    if (!password || !confirm) {
+      setMessage("Fyll i båda fälten.");
+      setStatus("form");
+      return;
+    }
+    if (password !== confirm) {
+      setMessage("Lösenorden matchar inte.");
+      setStatus("form");
+      return;
+    }
+    if (password.length < 8) {
+      setMessage("Lösenordet behöver vara minst 8 tecken.");
+      setStatus("form");
+      return;
+    }
+    setSubmitting(true);
+    setMessage("");
+    fetch(`${API_BASE}/admin/password-reset`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, password })
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.ok) {
+          setStatus("success");
+          setMessage(data.message || "Lösenordet är uppdaterat. Du kan nu logga in.");
+        } else {
+          setStatus("error");
+          setMessage(data.error || "Kunde inte uppdatera lösenordet.");
+        }
+      })
+      .catch(() => {
+        setStatus("error");
+        setMessage("Nätverksfel. Försök igen senare.");
+      })
+      .finally(() => {
+        setSubmitting(false);
+      });
+  };
+
+  return (
+    <div className="page admin-auth">
+      <div className="admin-auth-card">
+        <a href="/admin" className="admin-auth-back">
+          ← Tillbaka till inloggning
+        </a>
+        <h2>Återställ lösenord</h2>
+        {status === "form" && (
+          <form className="admin-form" onSubmit={handleSubmit}>
+            <label className="field">
+              <span className="field-label">Nytt lösenord</span>
+              <input
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                required
+              />
+            </label>
+            <label className="field">
+              <span className="field-label">Bekräfta nytt lösenord</span>
+              <input
+                type="password"
+                value={confirm}
+                onChange={(event) => setConfirm(event.target.value)}
+                required
+              />
+            </label>
+            {message ? <p className="admin-error">{message}</p> : null}
+            <div className="admin-actions">
+              <button className="button" type="submit" disabled={submitting || !token}>
+                Spara nytt lösenord
+              </button>
+            </div>
+          </form>
+        )}
+        {status === "success" && (
+          <>
+            <p className="admin-verification-sent">{message}</p>
+            <a href="/admin" className="button">
+              Gå till inloggning
+            </a>
+          </>
+        )}
+        {status === "error" && (
+          <>
+            <p className="admin-error">{message}</p>
+            <a href="/admin" className="button">
+              Tillbaka till inloggning
+            </a>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [form, setForm] = useState({
     name: "",
@@ -7096,6 +7525,9 @@ function App() {
   const isVerifyEmailRoute =
     window.location.pathname === "/verify-email" ||
     window.location.pathname.replace(/\/+$/, "") === "/verify-email";
+  const isResetPasswordRoute =
+    window.location.pathname === "/reset-password" ||
+    window.location.pathname.replace(/\/+$/, "") === "/reset-password";
   const isLandingRoute =
     window.location.pathname === "/" || window.location.pathname === "";
   const eventSlug = getEventSlugFromPath();
@@ -7155,7 +7587,7 @@ function App() {
   }, [event?.name, isAdminRoute, isPaymentStatusRoute]);
 
   useEffect(() => {
-    if (!event || isAdminRoute || isPaymentStatusRoute || isVerifyEmailRoute) {
+    if (!event || isAdminRoute || isPaymentStatusRoute || isVerifyEmailRoute || isResetPasswordRoute) {
       setIsEventInPast(false);
       return;
     }
@@ -7182,7 +7614,7 @@ function App() {
     const [y, m, d] = dateStr.split("-").map((n) => Number(n));
     const endDate = new Date(y, m - 1, d, 23, 59, 59, 999);
     setIsEventInPast(endDate.getTime() < now.getTime());
-  }, [event, isAdminRoute, isPaymentStatusRoute, isVerifyEmailRoute]);
+  }, [event, isAdminRoute, isPaymentStatusRoute, isVerifyEmailRoute, isResetPasswordRoute]);
 
   useEffect(() => {
     if (isAdminRoute || isPaymentStatusRoute) {
@@ -7214,7 +7646,7 @@ function App() {
   }, [isAdminRoute, isPaymentStatusRoute]);
 
   useEffect(() => {
-    if (isAdminRoute || isPaymentStatusRoute || isVerifyEmailRoute) {
+    if (isAdminRoute || isPaymentStatusRoute || isVerifyEmailRoute || isResetPasswordRoute) {
       return;
     }
     if (!eventSlug) {
@@ -7259,7 +7691,7 @@ function App() {
         setEventError("Eventet kunde inte hittas.");
       })
       .finally(() => setEventLoading(false));
-  }, [eventSlug, isAdminRoute, isPaymentStatusRoute, isVerifyEmailRoute, isLandingRoute]);
+  }, [eventSlug, isAdminRoute, isPaymentStatusRoute, isVerifyEmailRoute, isResetPasswordRoute, isLandingRoute]);
 
   const loadProgramItems = async (eventId) => {
     const response = await fetch(`${API_BASE}/program?eventId=${eventId}`);
@@ -7667,6 +8099,10 @@ function App() {
     return <PaymentStatusPage />;
   }
 
+  if (isResetPasswordRoute) {
+    return <ResetPasswordPage />;
+  }
+
   if (isVerifyEmailRoute) {
     return <VerifyEmailPage />;
   }
@@ -7739,9 +8175,10 @@ function App() {
             <div className="section" key="faq">
               <h2>{sectionLabels.faq.trim() || "FAQ"}</h2>
               {faqText && faqText.trim() ? (
-                <p className="faq-text">
-                  {faqText}
-                </p>
+                <div
+                  className="hero-body faq-body"
+                  dangerouslySetInnerHTML={{ __html: faqText }}
+                />
               ) : (
                 <p className="muted">FAQ uppdateras snart.</p>
               )}
