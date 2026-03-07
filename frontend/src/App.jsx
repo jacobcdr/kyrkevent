@@ -1346,12 +1346,14 @@ const AdminPage = () => {
       throw new Error("Payout summary failed");
     }
     const data = await response.json();
+    const threshold = Number(data.payoutFeeThreshold);
+    const amount = Number(data.payoutFeeAmount);
     setPayoutSummary({
       events: data.events || [],
       grandTotal: data.grandTotal ?? 0,
       payoutDaysAfterEvent: data.payoutDaysAfterEvent ?? 1,
-      payoutFeeThreshold: data.payoutFeeThreshold ?? 500,
-      payoutFeeAmount: data.payoutFeeAmount ?? 50
+      payoutFeeThreshold: Number.isFinite(threshold) ? threshold : 500,
+      payoutFeeAmount: Number.isFinite(amount) ? amount : 50
     });
   };
 
@@ -1372,6 +1374,8 @@ const AdminPage = () => {
         clearAuth();
       });
     loadProfile(token).catch(() => {});
+    // Ladda avgiftskonfiguration direkt vid inloggning så Hjälp visar rätt belopp (t.ex. 1000 kr / 100 kr)
+    loadPayoutSummary(token).catch(() => {});
   }, [token]);
 
   useEffect(() => {
