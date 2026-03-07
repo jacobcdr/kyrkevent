@@ -421,7 +421,7 @@ const LandingPage = () => {
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Köp av enstaka betalevent</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Anpassade listor om vilka som har betalat</li>
             </ul>
-            <p className="landing-pricing-price">129 kr/betalevent</p>
+            <p className="landing-pricing-price">95 kr/betalevent</p>
             <a href="/admin?view=signup" className="landing-pricing-btn">Kom igång</a>
           </div>
 
