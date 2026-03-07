@@ -764,6 +764,8 @@ const AdminPage = () => {
   const [heroImageUrl, setHeroImageUrl] = useState("");
   const heroEditorRef = useRef(null);
   const faqEditorRef = useRef(null);
+  const speakerImageInputRef = useRef(null);
+  const partnerImageInputRef = useRef(null);
   const [pricesAdmin, setPricesAdmin] = useState([]);
   const [priceForm, setPriceForm] = useState({ name: "", amount: "", description: "" });
   const [priceEditingId, setPriceEditingId] = useState(null);
@@ -2962,6 +2964,9 @@ const AdminPage = () => {
       }
       setSpeakerForm({ name: "", bio: "", image: null });
       setSpeakerEditingId(null);
+      if (speakerImageInputRef.current) {
+        speakerImageInputRef.current.value = "";
+      }
       await loadSpeakers(selectedEventId);
     };
     saveSpeaker()
@@ -2979,6 +2984,9 @@ const AdminPage = () => {
   const handleSpeakerCancel = () => {
     setSpeakerForm({ name: "", bio: "", image: null });
     setSpeakerEditingId(null);
+    if (speakerImageInputRef.current) {
+      speakerImageInputRef.current.value = "";
+    }
   };
 
   const handleSpeakerDelete = (speaker) => {
@@ -3058,6 +3066,9 @@ const AdminPage = () => {
       }
       setPartnerForm({ url: "", image: null });
       setPartnerEditingId(null);
+      if (partnerImageInputRef.current) {
+        partnerImageInputRef.current.value = "";
+      }
       await loadPartners(selectedEventId);
       localStorage.setItem(buildStorageKey("partnersUpdatedAt", selectedEventId), String(Date.now()));
     };
@@ -3072,6 +3083,9 @@ const AdminPage = () => {
   const handlePartnerCancel = () => {
     setPartnerForm({ url: "", image: null });
     setPartnerEditingId(null);
+    if (partnerImageInputRef.current) {
+      partnerImageInputRef.current.value = "";
+    }
   };
 
   const handlePartnerDelete = (partner) => {
@@ -6493,12 +6507,12 @@ const AdminPage = () => {
                       rows="4"
                       value={speakerForm.bio}
                       onChange={handleSpeakerChange}
-                      required
                     ></textarea>
                   </label>
                   <label className="field">
                     <span className="field-label">Bild</span>
                     <input
+                      ref={speakerImageInputRef}
                       name="image"
                       type="file"
                       accept="image/*"
@@ -6604,6 +6618,7 @@ const AdminPage = () => {
                   <label className="field">
                     <span className="field-label">Logga</span>
                     <input
+                      ref={partnerImageInputRef}
                       name="image"
                       type="file"
                       accept="image/*"

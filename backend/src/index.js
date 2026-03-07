@@ -4384,7 +4384,7 @@ app.post("/admin/speakers", requireAdmin, upload.single("image"), async (req, re
   if (!parsedEventId) {
     return;
   }
-  if (!name || !bio) {
+  if (!name || String(name).trim() === "") {
     res.status(400).json({ ok: false, error: "Missing required fields" });
     return;
   }
@@ -4394,9 +4394,10 @@ app.post("/admin/speakers", requireAdmin, upload.single("image"), async (req, re
   }
   try {
     const imageUrl = `/uploads/${req.file.filename}`;
+    const bioValue = String(bio ?? "").trim();
     const result = await pool.query(
       "INSERT INTO speakers (event_id, name, bio, image_url) VALUES ($1, $2, $3, $4) RETURNING id, name, bio, image_url, created_at",
-      [parsedEventId, String(name).trim(), String(bio).trim(), imageUrl]
+      [parsedEventId, String(name).trim(), bioValue, imageUrl]
     );
     res.status(201).json({ ok: true, speaker: result.rows[0] });
   } catch (error) {
@@ -4433,7 +4434,7 @@ app.put("/admin/speakers/:id", requireAdmin, upload.single("image"), async (req,
   if (!parsedEventId) {
     return;
   }
-  if (!name || !bio) {
+  if (!name || String(name).trim() === "") {
     res.status(400).json({ ok: false, error: "Missing required fields" });
     return;
   }
@@ -4448,9 +4449,10 @@ app.put("/admin/speakers/:id", requireAdmin, upload.single("image"), async (req,
     }
     const previousImage = existing.rows[0].image_url;
     const nextImage = req.file ? `/uploads/${req.file.filename}` : previousImage;
+    const bioValue = String(bio ?? "").trim();
     const result = await pool.query(
       "UPDATE speakers SET name = $1, bio = $2, image_url = $3 WHERE id = $4 AND event_id = $5 RETURNING id, name, bio, image_url, created_at",
-      [String(name).trim(), String(bio).trim(), nextImage, id, parsedEventId]
+      [String(name).trim(), bioValue, nextImage, id, parsedEventId]
     );
     if (req.file && previousImage && previousImage !== nextImage) {
       const filePath = path.resolve(previousImage.replace(/^\/+/, ""));
