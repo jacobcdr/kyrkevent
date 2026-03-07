@@ -668,6 +668,12 @@ const PaymentStatusPage = () => {
                       <span>Ordernummer</span>
                       <strong>{orderNumber}</strong>
                     </div>
+                    {summary.eventName ? (
+                      <div className="receipt-row">
+                        <span>Event</span>
+                        <strong>{summary.eventName}</strong>
+                      </div>
+                    ) : null}
                     <div className="receipt-row">
                       <span>Betalning</span>
                       <strong>Online</strong>
@@ -711,6 +717,12 @@ const PaymentStatusPage = () => {
                         })}
                       </strong>
                     </div>
+                    {summary.eventName ? (
+                      <div className="receipt-row">
+                        <span>Event</span>
+                        <strong>{summary.eventName}</strong>
+                      </div>
+                    ) : null}
                     <div className="receipt-row">
                       <span>Arrangör</span>
                       <strong>{summary.sellerName || "–"}</strong>

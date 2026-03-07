@@ -339,6 +339,7 @@ const buildReceiptEmail = ({
       "",
       `Ordernummer: ${orderNumber}`,
       `Datum & tid: ${createdDate.toLocaleString("sv-SE")}`,
+      ...(eventName ? [`Event: ${eventName}`] : []),
       `Arrangör: ${sellerName}`,
       "",
       "Vänliga hälsningar,",
@@ -352,6 +353,7 @@ const buildReceiptEmail = ({
         <tbody>
           <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Ordernummer</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">${orderNumber}</td></tr>
           <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Datum &amp; tid</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">${createdDate.toLocaleString("sv-SE")}</td></tr>
+          ${eventName ? `<tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Event</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">${eventName}</td></tr>` : ""}
           <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Arrangör</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">${sellerName}</td></tr>
         </tbody>
       </table>
@@ -391,6 +393,7 @@ const buildReceiptEmail = ({
     "",
     `Ordernummer: ${orderNumber}`,
     `Datum & tid: ${createdDate.toLocaleString("sv-SE")}`,
+    ...(eventName ? [`Event: ${eventName}`] : []),
     `Betalning: ${RECEIPT_PAYMENT_METHOD}`,
     `Säljare: ${sellerName}`,
     `Biljett såld genom: ${RECEIPT_ISSUER}`,
@@ -410,6 +413,7 @@ const buildReceiptEmail = ({
   const htmlRows = [
     ["Ordernummer", orderNumber],
     ["Datum & tid", createdDate.toLocaleString("sv-SE")],
+    ...(eventName ? [["Event", eventName]] : []),
     ["Betalning", RECEIPT_PAYMENT_METHOD],
     ["Säljare", sellerName],
     ["Biljett såld genom", RECEIPT_ISSUER],
@@ -1580,10 +1584,20 @@ app.get("/payments/verify", async (req, res) => {
       totalPaid = basTotal;
     }
 
+    let eventNameForSummary = "";
+    if (payload.type !== "bas") {
+      const eventId = firstItem?.eventId || (isCart && payload.items?.[0]?.eventId);
+      if (eventId) {
+        const eventRow = await pool.query("SELECT name FROM events WHERE id = $1", [eventId]);
+        eventNameForSummary = eventRow.rows[0]?.name || "";
+      }
+    }
+
     const summary = {
       name: firstItem?.name || "",
       names,
       email: firstItem?.email || "",
+      eventName: eventNameForSummary,
       ticket:
         payload.type === "bas"
           ? `Bas-eventkrediter (${payload.quantity || 1} st)`
