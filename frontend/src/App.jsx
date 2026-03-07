@@ -3134,7 +3134,7 @@ const AdminPage = () => {
       return;
     }
     if (!selectedEventId) {
-      setError("Välj ett event först.");
+      setError("Välj ett event först");
       return;
     }
     const saveOrder = async () => {
@@ -3431,7 +3431,7 @@ const AdminPage = () => {
                     setForgotMessage("");
                   }}
                 >
-                  Glömt lösenord?
+                  Glömt lösenord? 
                 </button>
               ) : null}
             </>
