@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS payout_requests (
   user_id INTEGER NOT NULL,
   profile_id TEXT NOT NULL DEFAULT '',
   organization TEXT NOT NULL DEFAULT '',
+  org_number TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'pågår',
   event_ids INTEGER[] NOT NULL DEFAULT '{}',
   event_names TEXT NOT NULL DEFAULT '',
@@ -89,6 +90,7 @@ CREATE TABLE IF NOT EXISTS payout_requests (
 );
 
 ALTER TABLE payout_requests
+  ADD COLUMN IF NOT EXISTS org_number TEXT NOT NULL DEFAULT '',
   ADD COLUMN IF NOT EXISTS payout_fee NUMERIC(12, 2) NOT NULL DEFAULT 0,
   ADD COLUMN IF NOT EXISTS net_amount NUMERIC(12, 2);
 

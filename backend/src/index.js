@@ -2805,8 +2805,8 @@ app.post("/admin/payout-request", requireAdmin, async (req, res) => {
       html: body.replace(/\n/g, "<br>")
     });
     await pool.query(
-      "INSERT INTO payout_requests (user_id, profile_id, organization, status, event_ids, event_names, amount, payout_fee, net_amount) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-      [req.userId, profile.profile_id || "", profile.organization || "", "pågår", eventIds, eventNamesStr, grandTotal, payoutFee, netAmount]
+      "INSERT INTO payout_requests (user_id, profile_id, organization, org_number, status, event_ids, event_names, amount, payout_fee, net_amount) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+      [req.userId, profile.profile_id || "", profile.organization || "", profile.org_number || "", "pågår", eventIds, eventNamesStr, grandTotal, payoutFee, netAmount]
     );
     res.json({ ok: true, message: "Begäran skickad. Ekonomiavdelningen kommer att återkomma." });
   } catch (error) {
@@ -3327,7 +3327,7 @@ app.get("/admin/payout-requests/:id/receipt.pdf", requireAdmin, async (req, res)
       return res.status(400).json({ ok: false, error: "Ogiltigt id" });
     }
     const result = await pool.query(
-      "SELECT id, user_id, organization, event_ids, event_names, amount, payout_fee, net_amount, requested_at FROM payout_requests WHERE id = $1 AND status = $2",
+      "SELECT id, user_id, organization, org_number, event_ids, event_names, amount, payout_fee, net_amount, requested_at FROM payout_requests WHERE id = $1 AND status = $2",
       [id, "betald"]
     );
     const row = result.rows[0];
@@ -3345,7 +3345,7 @@ app.get("/admin/payout-requests/:id/receipt.pdf", requireAdmin, async (req, res)
     const eventIds = Array.isArray(row.event_ids) ? row.event_ids : [];
     const [profileResult, bookingCountResult, eventDatesResult] = await Promise.all([
       pool.query(
-        "SELECT organization AS profile_organization, org_number AS profile_org_number FROM admin_user_profiles WHERE user_id = $1",
+        "SELECT organization, org_number FROM admin_user_profiles WHERE user_id = $1",
         [ownerId]
       ),
       eventIds.length > 0
@@ -3388,8 +3388,15 @@ app.get("/admin/payout-requests/:id/receipt.pdf", requireAdmin, async (req, res)
     doc.text(`Kvittonummer: ${row.id}`);
     doc.moveDown(0.5);
     doc.text("Utbetalande organisation: Lonetec AB");
-    doc.text(`Mottagande organisation: ${profile.profile_organization || row.organization || "–"}`);
-    doc.text(`Organisationsnummer: ${profile.profile_org_number || "–"}`);
+    doc.text(`Organisationsnummer: 556907-4189`);
+    doc.text(`Mottagande organisation: ${row.organization || profile.organization || "–"}`);
+    const orgNumberValue =
+      (row.org_number != null && String(row.org_number).trim() !== "")
+        ? String(row.org_number).trim()
+        : (profile.org_number != null && String(profile.org_number).trim() !== "")
+          ? String(profile.org_number).trim()
+          : "–";
+
     doc.moveDown(0.5);
     doc.text(`Event: ${row.event_names || "–"}`);
     doc.text(`Antal bokningar: ${bookingCount}`);
@@ -5245,6 +5252,7 @@ const ensureBookingsTable = async () => {
   await pool.query("ALTER TABLE payout_requests ADD COLUMN IF NOT EXISTS event_names TEXT NOT NULL DEFAULT ''");
   await pool.query("ALTER TABLE payout_requests ADD COLUMN IF NOT EXISTS amount NUMERIC(12, 2) NOT NULL DEFAULT 0");
   await pool.query("ALTER TABLE payout_requests ADD COLUMN IF NOT EXISTS bookings_anonymized_at TIMESTAMPTZ");
+  await pool.query("ALTER TABLE payout_requests ADD COLUMN IF NOT EXISTS org_number TEXT NOT NULL DEFAULT ''");
   await pool.query("ALTER TABLE payout_requests ADD COLUMN IF NOT EXISTS payout_fee NUMERIC(12, 2) NOT NULL DEFAULT 0");
   await pool.query("ALTER TABLE payout_requests ADD COLUMN IF NOT EXISTS net_amount NUMERIC(12, 2)");
 
