@@ -5444,8 +5444,8 @@ const AdminPage = () => {
               </li>
               <li>
                 <strong>Administrationsavgift vid utbetalning</strong> – om den sammanlagda utbetalningssumman överstiger{" "}
-                <strong>{(payoutSummary.payoutFeeThreshold ?? 500).toLocaleString("sv-SE")} kr</strong> dras en
-                administrationsavgift på <strong>{(payoutSummary.payoutFeeAmount ?? 50).toLocaleString("sv-SE")} kr</strong> från
+                <strong> 1000 kr</strong> dras en
+                administrationsavgift på <strong>100 kr</strong> från
                 utbetalningen. Under gränsen är utbetalningen avgiftsfri. Värdena visas i Utbetalning-vyn innan du skickar din begäran.
               </li>
               <li>
