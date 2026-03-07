@@ -2326,12 +2326,23 @@ app.post("/admin/payments/start-bas", requireAdmin, paymentLimiter, async (req, 
   const quantity = Math.min(5, Math.max(1, Math.floor(Number(req.body?.quantity) || 1)));
   try {
     const profileRow = await pool.query(
-      "SELECT profile_id FROM admin_user_profiles WHERE user_id = $1",
+      "SELECT profile_id, first_name, last_name, organization FROM admin_user_profiles WHERE user_id = $1",
       [req.userId]
     );
-    const profileId = profileRow.rows[0]?.profile_id || "";
+    const row = profileRow.rows[0];
+    const profileId = row?.profile_id || "";
     if (!profileId) {
       res.status(400).json({ ok: false, error: "Profil saknas. Spara profilen först." });
+      return;
+    }
+    const firstName = String(row?.first_name ?? "").trim();
+    const lastName = String(row?.last_name ?? "").trim();
+    const organization = String(row?.organization ?? "").trim();
+    if (!firstName || !lastName || !organization) {
+      res.status(400).json({
+        ok: false,
+        error: "Fyll i förnamn, efternamn och organisation under Profil och spara innan du köper Bas-eventkrediter."
+      });
       return;
     }
     const amountSek = quantity * BAS_PRICE_PER_EVENT;

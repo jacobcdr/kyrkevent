@@ -781,6 +781,16 @@ const AdminPage = () => {
   const [bookingsPage, setBookingsPage] = useState(1);
   const [sort, setSort] = useState({ key: "created_at", dir: "desc" });
   const [error, setError] = useState("");
+  const [toastMessage, setToastMessage] = useState("");
+  const toastTimeoutRef = useRef(null);
+  const showToast = (message) => {
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    setToastMessage(message);
+    toastTimeoutRef.current = setTimeout(() => {
+      setToastMessage("");
+      toastTimeoutRef.current = null;
+    }, 5000);
+  };
   const [loading, setLoading] = useState(false);
   const [backendStatus, setBackendStatus] = useState("checking");
   const [dbStatus, setDbStatus] = useState("checking");
@@ -930,6 +940,9 @@ const AdminPage = () => {
       faqEditorRef.current.innerHTML = adminFaqText || "";
     }
   }, [adminSection, selectedEventId]);
+  useEffect(() => () => {
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+  }, []);
   const [customFieldForm, setCustomFieldForm] = useState({
     label: "",
     fieldType: "text",
@@ -2026,7 +2039,20 @@ const AdminPage = () => {
       return;
     }
     if (plan === "bas") {
-      setShowBasConfirm(true);
+      const firstName = (profileForm.firstName ?? "").toString().trim();
+      const lastName = (profileForm.lastName ?? "").toString().trim();
+      const organization = (profileForm.organization ?? "").toString().trim();
+      if (!firstName || !lastName || !organization) {
+        setError("");
+        showToast("Fyll i förnamn, efternamn och organisation och spara profilen först. Välj sedan Bas och klicka Fortsätt.");
+        return;
+      }
+      setError("");
+      setProfileLoading(true);
+      performProfileSave()
+        .then(() => setShowBasConfirm(true))
+        .catch(() => setError("Kunde inte spara profilen."))
+        .finally(() => setProfileLoading(false));
       return;
     }
     setError("");
@@ -2051,7 +2077,11 @@ const AdminPage = () => {
       });
       const data = await response.json();
       if (!data.ok || !data.checkoutUrl || !data.paymentId) {
-        setError(data.error || "Kunde inte starta betalning.");
+        const errMsg = data.error || "Kunde inte starta betalning.";
+        setError(errMsg);
+        if (errMsg.includes("förnamn") || errMsg.includes("organisation")) {
+          showToast(errMsg);
+        }
         return;
       }
       localStorage.setItem("pendingPaymentId", data.paymentId);
@@ -3457,6 +3487,19 @@ const AdminPage = () => {
 
   return (
     <div className="page admin-page">
+      {toastMessage ? (
+        <div className="admin-toast" role="status" aria-live="polite">
+          <p className="admin-toast-message">{toastMessage}</p>
+          <button
+            type="button"
+            className="admin-toast-dismiss"
+            onClick={() => { setToastMessage(""); if (toastTimeoutRef.current) { clearTimeout(toastTimeoutRef.current); toastTimeoutRef.current = null; } }}
+            aria-label="Stäng"
+          >
+            ✕
+          </button>
+        </div>
+      ) : null}
       <div className="admin-topbar">
         <button
           type="button"
