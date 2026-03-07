@@ -77,10 +77,30 @@ app.use(
     crossOriginResourcePolicy: { policy: "cross-origin" }
   })
 );
-const allowedOrigins = String(FRONTEND_URL || "")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
+function normalizeOrigins(urlList) {
+  const list = String(urlList || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const seen = new Set();
+  for (const url of list) {
+    try {
+      const u = new URL(url);
+      const origin = u.origin;
+      seen.add(origin);
+      const host = u.hostname;
+      if (host.startsWith("www.")) {
+        seen.add(`${u.protocol}//${host.slice(4)}${u.port ? `:${u.port}` : ""}`);
+      } else if (host && host !== "localhost" && !host.endsWith(".localhost")) {
+        seen.add(`${u.protocol}//www.${host}${u.port ? `:${u.port}` : ""}`);
+      }
+    } catch (_) {
+      seen.add(url);
+    }
+  }
+  return [...seen];
+}
+const allowedOrigins = normalizeOrigins(FRONTEND_URL);
 // Primär frontend-URL för länkar i e-post m.m.
 const primaryFrontendUrl =
   allowedOrigins[0] ||
