@@ -1014,9 +1014,12 @@ app.post("/bookings", async (req, res) => {
     const orderNumber = formatOrderNumber(booking.created_at);
     await pool.query("UPDATE bookings SET order_number = $1 WHERE id = $2", [orderNumber, booking.id]);
     const sellerName = await getSellerNameForEvent(parsed.payload.eventId);
+    const eventNameRow = await pool.query("SELECT name FROM events WHERE id = $1", [parsed.payload.eventId]);
+    const eventName = eventNameRow.rows[0]?.name || "";
     await sendReceiptEmail({
       name: booking.name,
       email: booking.email,
+      eventName,
       priceName: parsed.payload.priceName,
       priceAmount: parsed.payload.priceAmount,
       discountedAmount: parsed.payload.priceAmount,
@@ -1397,9 +1400,12 @@ app.post("/payments/start-cart", paymentLimiter, async (req, res) => {
         await pool.query("UPDATE bookings SET order_number = $1 WHERE id = $2", [orderNumber, booking.id]);
         bookings.push(booking);
         const itemSellerName = await getSellerNameForEvent(payload.eventId);
+        const itemEventNameRow = await pool.query("SELECT name FROM events WHERE id = $1", [payload.eventId]);
+        const itemEventName = itemEventNameRow.rows[0]?.name || "";
         await sendReceiptEmail({
           name: booking.name,
           email: booking.email,
+          eventName: itemEventName,
           priceName: payload.priceName,
           priceAmount: payload.priceAmount,
           discountedAmount: payload.priceAmount,
@@ -1785,10 +1791,13 @@ app.get("/payments/verify", async (req, res) => {
                 );
               }
               const sellerName = await getSellerNameForEvent(item.eventId);
+              const itemEventNameRes = await client.query("SELECT name FROM events WHERE id = $1", [item.eventId]);
+              const itemEventName = itemEventNameRes.rows[0]?.name || "";
               const ticketTotal = pay.items.reduce((s, p) => s + (p.discountedAmount ?? p.priceAmount ?? 0), 0);
               await sendReceiptEmail({
                 name: item.name,
                 email: item.email,
+                eventName: itemEventName,
                 priceName: pay.items.length > 1 ? `${pay.items.length} st` : (item.priceName || ""),
                 priceAmount: item.priceAmount,
                 discountedAmount: ticketTotal,
@@ -1837,9 +1846,12 @@ app.get("/payments/verify", async (req, res) => {
               [status, bid, paymentId]
             );
             const sellerName = await getSellerNameForEvent(pay.eventId);
+            const payEventNameRes = await client.query("SELECT name FROM events WHERE id = $1", [pay.eventId]);
+            const payEventName = payEventNameRes.rows[0]?.name || "";
             await sendReceiptEmail({
               name: pay.name,
               email: pay.email,
+              eventName: payEventName,
               priceName: pay.priceName,
               priceAmount: pay.priceAmount,
               discountedAmount: finalAmount,
@@ -3333,7 +3345,7 @@ app.get("/admin/payout-requests/:id/receipt.pdf", requireAdmin, async (req, res)
     const eventIds = Array.isArray(row.event_ids) ? row.event_ids : [];
     const [profileResult, bookingCountResult, eventDatesResult] = await Promise.all([
       pool.query(
-        "SELECT organization, org_number FROM admin_user_profiles WHERE user_id = $1",
+        "SELECT organization AS profile_organization, org_number AS profile_org_number FROM admin_user_profiles WHERE user_id = $1",
         [ownerId]
       ),
       eventIds.length > 0
@@ -3376,8 +3388,8 @@ app.get("/admin/payout-requests/:id/receipt.pdf", requireAdmin, async (req, res)
     doc.text(`Kvittonummer: ${row.id}`);
     doc.moveDown(0.5);
     doc.text("Utbetalande organisation: Lonetec AB");
-    doc.text(`Mottagande organisation: ${profile.organization || row.organization || "–"}`);
-    doc.text(`Organisationsnummer: ${profile.org_number || "–"}`);
+    doc.text(`Mottagande organisation: ${profile.profile_organization || row.organization || "–"}`);
+    doc.text(`Organisationsnummer: ${profile.profile_org_number || "–"}`);
     doc.moveDown(0.5);
     doc.text(`Event: ${row.event_names || "–"}`);
     doc.text(`Antal bokningar: ${bookingCount}`);

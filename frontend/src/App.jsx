@@ -1427,6 +1427,9 @@ const AdminPage = () => {
       loadMyPayoutRequests(token);
       loadAnonymizeEligible(token);
     }
+    if (token && adminSection === "help") {
+      loadPayoutSummary(token).catch(() => {});
+    }
   }, [token, adminSection]);
 
   const loadAdminPayments = async () => {
@@ -4574,7 +4577,7 @@ const AdminPage = () => {
                     <th>Event</th>
                     <th>Antal betalda</th>
                     <th>Intäkter</th>
-                    <th>Utbetalning</th>
+                    <th>Utbetalning (exkl.avg.)</th>
                     <th>Status</th>
                   </tr>
                 </thead>
@@ -5432,12 +5435,14 @@ const AdminPage = () => {
                 behandlar utbetalningen inom cirka 10 dagar.
               </li>
               <li>
-                <strong>Välj event för utbetalning</strong> – markera ett eller flera event och begär utbetalning. Systemet visar hur
-                mycket som kommer att betalas ut totalt.
+                <strong>Välj event för utbetalning</strong> – markera ett eller flera event och begär utbetalning. Systemet räknar
+                ihop intäkterna från de valda eventen och visar summa, eventuell avgift och nettoutbetalning.
               </li>
               <li>
-                <strong>Administrationsavgifter</strong> – om det finns villkor för t.ex. lägsta belopp eller administrativ avgift vid
-                små utbetalningar visas detta i Utbetalning-vyn innan du skickar din begäran.
+                <strong>Administrationsavgift vid utbetalning</strong> – om den sammanlagda utbetalningssumman överstiger{" "}
+                <strong>{(payoutSummary.payoutFeeThreshold ?? 500).toLocaleString("sv-SE")} kr</strong> dras en
+                administrationsavgift på <strong>{(payoutSummary.payoutFeeAmount ?? 50).toLocaleString("sv-SE")} kr</strong> från
+                utbetalningen. Under gränsen är utbetalningen avgiftsfri. Värdena visas i Utbetalning-vyn innan du skickar din begäran.
               </li>
               <li>
                 <strong>Utbetalningskvitto (PDF)</strong> – när du markerar en utbetalning som betald kan du ladda ner ett
@@ -6836,7 +6841,7 @@ const AdminPage = () => {
                     </label>
                     <div className="field-row" style={{ marginTop: "1rem" }}>
                       <label className="field">
-                        <span className="field-label">Max antal deltagare</span>
+                        <span className="field-label">Max antal deltagare/biljetter</span>
                         <input
                           type="number"
                           min="0"
