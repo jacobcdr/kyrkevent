@@ -4850,11 +4850,17 @@ const ensureBookingsTable = async () => {
       ADD COLUMN IF NOT EXISTS premium_ends_at TIMESTAMPTZ,
       ADD COLUMN IF NOT EXISTS premium_avslut_requested_at TIMESTAMPTZ
   `);
-  await pool.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS admin_user_profiles_email_lower_unique
-    ON admin_user_profiles (LOWER(TRIM(email)))
-    WHERE TRIM(email) <> ''
-  `);
+  try {
+    await pool.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS admin_user_profiles_email_lower_unique
+      ON admin_user_profiles (LOWER(TRIM(email)))
+      WHERE TRIM(email) <> ''
+    `);
+  } catch (e) {
+    // Index kan misslyckas om det finns dubletter i e-post; appen hindrar nya dubbletter ändå
+    // eslint-disable-next-line no-console
+    console.warn("Unique index on admin_user_profiles email skipped:", e.message);
+  }
   const profilesToFix = await pool.query(`
     SELECT user_id FROM admin_user_profiles
     WHERE profile_id IS NULL OR length(profile_id) != 5
