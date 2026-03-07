@@ -71,6 +71,11 @@ ALTER TABLE admin_user_profiles
   ADD COLUMN IF NOT EXISTS premium_ends_at TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS premium_avslut_requested_at TIMESTAMPTZ;
 
+-- En e-postadress får bara kopplas till ett konto (case-insensitive, tom e-post undantagen)
+CREATE UNIQUE INDEX IF NOT EXISTS admin_user_profiles_email_lower_unique
+  ON admin_user_profiles (LOWER(TRIM(email)))
+  WHERE TRIM(email) <> '';
+
 CREATE TABLE IF NOT EXISTS payout_requests (
   id SERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL,

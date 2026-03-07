@@ -1882,6 +1882,17 @@ app.post("/admin/users", async (req, res) => {
     return;
   }
 
+  if (normalizedEmail) {
+    const existingEmail = await pool.query(
+      "SELECT 1 FROM admin_user_profiles WHERE LOWER(TRIM(email)) = LOWER(TRIM($1)) LIMIT 1",
+      [normalizedEmail]
+    );
+    if (existingEmail?.rows?.length > 0) {
+      res.status(400).json({ ok: false, error: "Den här e-postadressen är redan registrerad." });
+      return;
+    }
+  }
+
   try {
     const passwordHash = await bcrypt.hash(String(password), 10);
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
@@ -1956,7 +1967,12 @@ app.post("/admin/users", async (req, res) => {
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("POST /admin/users error:", error);
-    const message = error?.code === "23505" ? "Användarnamnet används redan." : "Failed to create user";
+    let message = "Failed to create user";
+    if (error?.code === "23505") {
+      message = error?.constraint === "admin_user_profiles_email_lower_unique"
+        ? "Den här e-postadressen är redan registrerad."
+        : "Användarnamnet används redan.";
+    }
     res.status(500).json({ ok: false, error: message });
   }
 });
@@ -4813,6 +4829,11 @@ const ensureBookingsTable = async () => {
       ADD COLUMN IF NOT EXISTS premium_activated_at TIMESTAMPTZ,
       ADD COLUMN IF NOT EXISTS premium_ends_at TIMESTAMPTZ,
       ADD COLUMN IF NOT EXISTS premium_avslut_requested_at TIMESTAMPTZ
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS admin_user_profiles_email_lower_unique
+    ON admin_user_profiles (LOWER(TRIM(email)))
+    WHERE TRIM(email) <> ''
   `);
   const profilesToFix = await pool.query(`
     SELECT user_id FROM admin_user_profiles
