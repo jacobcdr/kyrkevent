@@ -1601,6 +1601,18 @@ app.get("/payments/verify", async (req, res) => {
       summary.orderType = "bas";
       summary.quantity = payload.quantity;
       summary.unitPrice = BAS_PRICE_PER_EVENT;
+      if (payload.profile_id) {
+        const profileRow = await pool.query(
+          "SELECT first_name, last_name, organization FROM admin_user_profiles WHERE profile_id = $1",
+          [payload.profile_id]
+        );
+        const p = profileRow.rows[0];
+        if (p) {
+          summary.organization = String(p.organization ?? "").trim();
+          summary.firstName = String(p.first_name ?? "").trim();
+          summary.lastName = String(p.last_name ?? "").trim();
+        }
+      }
     }
 
     const alreadyFulfilled = order.booking_id || (order.booking_ids && order.booking_ids.length > 0);
@@ -1645,7 +1657,7 @@ app.get("/payments/verify", async (req, res) => {
                 const vatAmount = Math.round((amountSek * 0.25 / 1.25) * 100) / 100;
                 const netAmount = Math.round((amountSek - vatAmount) * 100) / 100;
                 const fullName = `${profile.first_name || ""} ${profile.last_name || ""}`.trim();
-                const customerLabel = profile.organization || fullName || profile.email;
+                const organization = String(profile.organization ?? "").trim() || "–";
 
                 const subject = "Kvitto – köp av Bas-eventkrediter";
                 const textLines = [
@@ -1657,7 +1669,8 @@ app.get("/payments/verify", async (req, res) => {
                   "",
                   `Ordernummer: ${orderNumber}`,
                   `Datum & tid: ${createdDate.toLocaleString("sv-SE")}`,
-                  `Kund: ${customerLabel}`,
+                  `Organisation: ${organization}`,
+                  `För- och efternamn: ${fullName || "–"}`,
                   "",
                   `Produkt: Bas-eventkrediter`,
                   `Antal: ${qty} st`,
@@ -1690,7 +1703,8 @@ app.get("/payments/verify", async (req, res) => {
                       <tbody>
                         <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Ordernummer</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">${orderNumber}</td></tr>
                         <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Datum &amp; tid</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">${createdDate.toLocaleString("sv-SE")}</td></tr>
-                        <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Kund</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">${customerLabel}</td></tr>
+                        <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Organisation</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">${organization}</td></tr>
+                        <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">För- och efternamn</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">${fullName || "–"}</td></tr>
                         <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Produkt</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right;">Bas-eventkrediter</td></tr>
                         <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Antal</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right;">${qty} st</td></tr>
                         <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Pris (exkl. moms)</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right;">${netAmount.toLocaleString("sv-SE", {

@@ -588,14 +588,29 @@ const PaymentStatusPage = () => {
                     <strong>{summary.eventName}</strong>
                   </div>
                 ) : null}
-                <div className="summary-row">
-                  <span>Namn</span>
-                  <strong>
-                    {Array.isArray(summary.names) && summary.names.length > 0
-                      ? summary.names.join(", ")
-                      : summary.name || "-"}
-                  </strong>
-                </div>
+                {summary?.orderType === "bas" ? (
+                  <>
+                    <div className="summary-row">
+                      <span>Organisation</span>
+                      <strong>{summary.organization || "-"}</strong>
+                    </div>
+                    <div className="summary-row">
+                      <span>För- och efternamn</span>
+                      <strong>
+                        {[summary.firstName, summary.lastName].filter(Boolean).join(" ") || "-"}
+                      </strong>
+                    </div>
+                  </>
+                ) : (
+                  <div className="summary-row">
+                    <span>Namn</span>
+                    <strong>
+                      {Array.isArray(summary.names) && summary.names.length > 0
+                        ? summary.names.join(", ")
+                        : summary.name || "-"}
+                    </strong>
+                  </div>
+                )}
                 <div className="summary-row">
                   <span>Biljett</span>
                   <strong>{summary.ticket || "-"}</strong>
@@ -4934,17 +4949,30 @@ const AdminPage = () => {
                   ) : null}
                 </div>
               </div>
-              <label className="field">
-                <span className="field-label">Profil-ID (kan inte ändras)</span>
-                <input
-                  type="text"
-                  value={profileForm.profileId || "–"}
-                  readOnly
-                  disabled
-                  className="field-readonly"
-                  aria-readonly="true"
-                />
-              </label>
+              <div className="field-row">
+                <label className="field">
+                  <span className="field-label">Profil-ID (kan inte ändras)</span>
+                  <input
+                    type="text"
+                    value={profileForm.profileId || "–"}
+                    readOnly
+                    disabled
+                    className="field-readonly"
+                    aria-readonly="true"
+                  />
+                </label>
+                <label className="field">
+                  <span className="field-label">Användarnamn</span>
+                  <input
+                    type="text"
+                    value={adminUsername ?? "–"}
+                    readOnly
+                    disabled
+                    className="field-readonly"
+                    aria-readonly="true"
+                  />
+                </label>
+              </div>
               <div className="field-row">
                 <label className="field">
                   <span className="field-label">Förnamn</span>
