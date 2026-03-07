@@ -1427,7 +1427,7 @@ const AdminPage = () => {
       loadMyPayoutRequests(token);
       loadAnonymizeEligible(token);
     }
-    if (token && adminSection === "help") {
+    if (token && (adminSection === "help" || adminSection === "profile")) {
       loadPayoutSummary(token).catch(() => {});
     }
   }, [token, adminSection]);
