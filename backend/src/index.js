@@ -357,6 +357,7 @@ const buildReceiptEmail = ({
       "",
       `Ordernummer: ${orderNumber}`,
       `Datum & tid: ${createdDate.toLocaleString("sv-SE")}`,
+      name ? `Namn: ${name}` : null,
       ...(eventName ? [`Event: ${eventName}`] : []),
       ...(organizerName ? [`Arrangör: ${organizerName}`, ""] : []),
       ...(confirmationNote ? [confirmationNote, ""] : []),
@@ -373,6 +374,11 @@ const buildReceiptEmail = ({
         <tbody>
           <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Ordernummer</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">${orderNumber}</td></tr>
           <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Datum &amp; tid</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">${createdDate.toLocaleString("sv-SE")}</td></tr>
+          ${
+            name
+              ? `<tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Namn</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">${name}</td></tr>`
+              : ""
+          }
           ${eventName ? `<tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Event</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">${eventName}</td></tr>` : ""}
           ${
             organizerName

@@ -376,7 +376,7 @@ const LandingPage = () => {
           className="landing-image"
         />
       </div>
-      <h2 className="landing-events-heading">Konserter, fester, läger, församlingshelger, hajk, julshow, middagar, nyår ?</h2>
+      <h2 className="landing-events-heading">Vill du anordna konserter, fester, läger, församlingshelger, hajk, julshow, middagar, nyår ?</h2>
       <p className="landing-intro landing-description">
         En plattform som gör det enkelt och snyggt att skapa anmälningssidor och biljettförsäljning för alla typer av evenemang. Oavsett om du arrangerar ett läger, en konferens, en konsert, en middag eller något helt annat kan du snabbt bygga en professionell sida som tar emot bokningar i stilren design. Vill du dessutom ta betalt för ditt arrangemang gör du det lika smidigt direkt via plattformen. Du skapar din sida på ett par minuter, testa får du se...
       </p>
@@ -471,8 +471,16 @@ const PaymentStatusPage = () => {
               ? "Dina anmälningar är registrerade."
               : "Din anmälan är registrerad."
           );
+          const parsedNames = Array.isArray(parsed.names)
+            ? parsed.names
+            : parsed.name
+              ? [parsed.name]
+              : [];
           setSummary({
-            name: parsed.name ?? (parsed.cart ? `${parsed.count} anmälningar` : null),
+            name:
+              parsed.name ||
+              (parsedNames.length > 0 ? parsedNames.join(", ") : null),
+            names: parsedNames,
             email: parsed.email ?? null,
             ticket: parsed.ticket || (parsed.cart ? `${parsed.count} anmälningar` : "Anmälan"),
             total: typeof parsed.amount === "number" ? parsed.amount : (parsed.cart ? 0 : null),
@@ -604,11 +612,7 @@ const PaymentStatusPage = () => {
                 ) : (
                   <div className="summary-row">
                     <span>Namn</span>
-                    <strong>
-                      {Array.isArray(summary.names) && summary.names.length > 0
-                        ? summary.names.join(", ")
-                        : summary.name || "-"}
-                    </strong>
+                    <strong>{summary.name || "-"}</strong>
                   </div>
                 )}
                 <div className="summary-row">
@@ -8197,6 +8201,7 @@ function App() {
           JSON.stringify({
             cart: true,
             count: data.bookings?.length ?? bookingCart.length,
+            names: (data.bookings || []).map((b) => b.name).filter((n) => !!n),
             eventName: data.eventName || event?.name || "Event",
             sellerName: data.sellerName || null,
             orderNumber: data.orderNumber || null
