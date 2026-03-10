@@ -290,7 +290,7 @@ const normalizeCustomFieldType = (value) => {
 };
 
 const getSellerNameForEvent = async (eventId) => {
-  if (!eventId) return RECEIPT_SELLER;
+  if (!eventId) return "";
   try {
     const result = await pool.query(
       "SELECT p.organization FROM events e JOIN admin_user_profiles p ON p.user_id = e.user_id WHERE e.id = $1",
@@ -301,7 +301,7 @@ const getSellerNameForEvent = async (eventId) => {
   } catch {
     // ignore
   }
-  return RECEIPT_SELLER;
+  return "";
 };
 
 const buildReceiptEmail = ({
@@ -316,14 +316,31 @@ const buildReceiptEmail = ({
   createdAt,
   sellerName: sellerNamePayload,
   orderNumber: orderNumberPayload,
-  eventHasPrices: eventHasPricesPayload
+  eventHasPrices: eventHasPricesPayload,
+  eventConfirmationNote
 }) => {
-  const sellerName = sellerNamePayload && String(sellerNamePayload).trim() ? sellerNamePayload : RECEIPT_SELLER;
+  const organizerName =
+    sellerNamePayload && String(sellerNamePayload).trim()
+      ? String(sellerNamePayload).trim()
+      : "";
+  const sellerName = organizerName || RECEIPT_SELLER;
   const createdDate = createdAt instanceof Date ? createdAt : new Date();
   const orderNumber =
     orderNumberPayload && String(orderNumberPayload).trim()
       ? String(orderNumberPayload).trim()
       : formatOrderNumber(createdDate);
+
+  const confirmationNote =
+    eventConfirmationNote && String(eventConfirmationNote).trim()
+      ? String(eventConfirmationNote).trim()
+      : "";
+
+  const confirmationNoteHtml = confirmationNote
+    ? confirmationNote
+        .split(/\r?\n/)
+        .map((part) => (part === "" ? "&nbsp;" : part))
+        .join("<br/>")
+    : "";
 
   const eventHasPrices = eventHasPricesPayload !== false;
   const hasPrice =
@@ -335,29 +352,38 @@ const buildReceiptEmail = ({
     const lines = [
       `Hej ${name || ""}!`,
       "",
+      ...(confirmationNote ? [confirmationNote, ""] : []),
       eventName ? `Tack för din anmälan till ${eventName}.` : "Tack för din anmälan.",
       "",
       `Ordernummer: ${orderNumber}`,
       `Datum & tid: ${createdDate.toLocaleString("sv-SE")}`,
       ...(eventName ? [`Event: ${eventName}`] : []),
-      `Arrangör: ${sellerName}`,
-      "",
-      "Vänliga hälsningar,",
-      sellerName
+      ...(organizerName ? [`Arrangör: ${organizerName}`, ""] : []),
+      ...(confirmationNote ? [confirmationNote, ""] : []),
+      ...(organizerName
+        ? ["Vänliga hälsningar,", organizerName]
+        : ["Vänliga hälsningar"])
     ];
     const html = `
     <div style="font-family: Arial, sans-serif; color:#111827;">
       <p>Hej ${name || ""}!</p>
+      ${confirmationNoteHtml ? `<p>${confirmationNoteHtml}</p>` : ""}
       <p>${eventName ? `Tack för din anmälan till <strong>${eventName}</strong>.` : "Tack för din anmälan."}</p>
       <table style="border-collapse: collapse; width: 100%; max-width: 520px;">
         <tbody>
           <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Ordernummer</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">${orderNumber}</td></tr>
           <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Datum &amp; tid</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">${createdDate.toLocaleString("sv-SE")}</td></tr>
           ${eventName ? `<tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Event</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">${eventName}</td></tr>` : ""}
-          <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Arrangör</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">${sellerName}</td></tr>
+          ${
+            organizerName
+              ? `<tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Arrangör</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">${organizerName}</td></tr>`
+              : ""
+          }
         </tbody>
       </table>
-      <p style="margin-top:16px;">Vänliga hälsningar,<br/>${sellerName}</p>
+      <p style="margin-top:16px;">
+        Vänliga hälsningar${organizerName ? `<br/>${organizerName}` : ""}
+      </p>
     </div>
   `;
     return {
@@ -389,6 +415,7 @@ const buildReceiptEmail = ({
   const lines = [
     `Hej ${name || ""}!`,
     "",
+    ...(confirmationNote ? [confirmationNote, ""] : []),
     eventName ? `Tack för din bokning till ${eventName}. Här är ditt kvitto:` : "Tack för din bokning. Här är ditt kvitto:",
     "",
     `Ordernummer: ${orderNumber}`,
@@ -406,8 +433,9 @@ const buildReceiptEmail = ({
     `Moms (25%): ${formatSek(vatAmount)}`,
     `Totalbelopp: ${formatSek(totalAmount)}`,
     "",
-    "Vänliga hälsningar,",
-    sellerName
+    ...(organizerName
+      ? ["Vänliga hälsningar,", organizerName]
+      : ["Vänliga hälsningar"])
   ].filter(Boolean);
 
   const htmlRows = [
@@ -431,6 +459,7 @@ const buildReceiptEmail = ({
   const html = `
     <div style="font-family: Arial, sans-serif; color:#111827;">
       <p>Hej ${name || ""}!</p>
+      ${confirmationNoteHtml ? `<p>${confirmationNoteHtml}</p>` : ""}
       <p>Tack för din bokning. Här är ditt kvitto:</p>
       <table style="border-collapse: collapse; width: 100%; max-width: 520px;">
         <tbody>
@@ -448,7 +477,9 @@ const buildReceiptEmail = ({
             .join("")}
         </tbody>
       </table>
-      <p style="margin-top:16px;">Vänliga hälsningar,<br/>${sellerName}</p>
+      <p style="margin-top:16px;">
+        Vänliga hälsningar${organizerName ? `<br/>${organizerName}` : ""}
+      </p>
     </div>
   `;
 
@@ -577,7 +608,7 @@ app.get("/events/:slug", async (req, res) => {
   }
   try {
     const result = await pool.query(
-      "SELECT id, slug, name, theme, event_start_date, event_end_date, registration_deadline, max_participants, created_at FROM events WHERE slug = $1",
+      "SELECT id, slug, name, theme, event_start_date, event_end_date, registration_deadline, max_participants, confirmation_note, created_at FROM events WHERE slug = $1",
       [String(slug).trim()]
     );
     if (result.rowCount === 0) {
@@ -1014,8 +1045,15 @@ app.post("/bookings", async (req, res) => {
     const orderNumber = formatOrderNumber(booking.created_at);
     await pool.query("UPDATE bookings SET order_number = $1 WHERE id = $2", [orderNumber, booking.id]);
     const sellerName = await getSellerNameForEvent(parsed.payload.eventId);
-    const eventNameRow = await pool.query("SELECT name FROM events WHERE id = $1", [parsed.payload.eventId]);
-    const eventName = eventNameRow.rows[0]?.name || "";
+    const eventRowRes = await pool.query("SELECT name, confirmation_note FROM events WHERE id = $1", [
+      parsed.payload.eventId
+    ]);
+    const eventRowForEmail = eventRowRes.rows[0] || {};
+    const eventName = eventRowForEmail.name || "";
+    const eventConfirmationNote =
+      eventRowForEmail.confirmation_note && String(eventRowForEmail.confirmation_note).trim()
+        ? String(eventRowForEmail.confirmation_note).trim()
+        : "";
     await sendReceiptEmail({
       name: booking.name,
       email: booking.email,
@@ -1027,7 +1065,8 @@ app.post("/bookings", async (req, res) => {
       serviceFee: 0,
       createdAt: booking.created_at,
       sellerName,
-      orderNumber
+      orderNumber,
+      eventConfirmationNote
     });
     res.status(201).json({ ok: true, booking });
   } catch (error) {
@@ -1121,10 +1160,15 @@ app.post("/payments/start", paymentLimiter, async (req, res) => {
       const orderNumber = formatOrderNumber(booking.created_at);
       await pool.query("UPDATE bookings SET order_number = $1 WHERE id = $2", [orderNumber, booking.id]);
       const eventNameRow = await pool.query(
-        "SELECT name FROM events WHERE id = $1",
+        "SELECT name, confirmation_note FROM events WHERE id = $1",
         [parsed.payload.eventId]
       );
-      const eventName = eventNameRow.rows[0]?.name || "Event";
+      const eventRowForEmail = eventNameRow.rows[0] || {};
+      const eventName = eventRowForEmail.name || "Event";
+      const eventConfirmationNote =
+        eventRowForEmail.confirmation_note && String(eventRowForEmail.confirmation_note).trim()
+          ? String(eventRowForEmail.confirmation_note).trim()
+          : "";
       const sellerName = await getSellerNameForEvent(parsed.payload.eventId);
       await sendReceiptEmail({
         name: booking.name,
@@ -1138,7 +1182,8 @@ app.post("/payments/start", paymentLimiter, async (req, res) => {
         createdAt: booking.created_at,
         sellerName,
         orderNumber,
-        eventHasPrices: false
+        eventHasPrices: false,
+        eventConfirmationNote
       });
       return res.json({
         ok: true,
@@ -1365,8 +1410,13 @@ app.post("/payments/start-cart", paymentLimiter, async (req, res) => {
       };
       const allowedFields = await loadCustomFieldsForEvent(eventId);
       const bookings = [];
-      const eventNameRow = await pool.query("SELECT name FROM events WHERE id = $1", [eventId]);
-      const eventName = eventNameRow.rows[0]?.name || "Event";
+      const eventMetaRow = await pool.query("SELECT name, confirmation_note FROM events WHERE id = $1", [eventId]);
+      const eventMeta = eventMetaRow.rows[0] || {};
+      const eventName = eventMeta.name || "Event";
+      const eventConfirmationNote =
+        eventMeta.confirmation_note && String(eventMeta.confirmation_note).trim()
+          ? String(eventMeta.confirmation_note).trim()
+          : "";
       const orderNumber = formatOrderNumber(new Date());
       for (const payload of parsedItems) {
         const baseValidation = validateBaseFields(payload, sections);
@@ -1400,12 +1450,10 @@ app.post("/payments/start-cart", paymentLimiter, async (req, res) => {
         await pool.query("UPDATE bookings SET order_number = $1 WHERE id = $2", [orderNumber, booking.id]);
         bookings.push(booking);
         const itemSellerName = await getSellerNameForEvent(payload.eventId);
-        const itemEventNameRow = await pool.query("SELECT name FROM events WHERE id = $1", [payload.eventId]);
-        const itemEventName = itemEventNameRow.rows[0]?.name || "";
         await sendReceiptEmail({
           name: booking.name,
           email: booking.email,
-          eventName: itemEventName,
+          eventName,
           priceName: payload.priceName,
           priceAmount: payload.priceAmount,
           discountedAmount: payload.priceAmount,
@@ -1414,7 +1462,8 @@ app.post("/payments/start-cart", paymentLimiter, async (req, res) => {
           createdAt: booking.created_at,
           sellerName: itemSellerName,
           orderNumber,
-          eventHasPrices: false
+          eventHasPrices: false,
+          eventConfirmationNote
         });
       }
       const sellerName = await getSellerNameForEvent(eventId);
@@ -1791,8 +1840,15 @@ app.get("/payments/verify", async (req, res) => {
                 );
               }
               const sellerName = await getSellerNameForEvent(item.eventId);
-              const itemEventNameRes = await client.query("SELECT name FROM events WHERE id = $1", [item.eventId]);
-              const itemEventName = itemEventNameRes.rows[0]?.name || "";
+              const itemEventNameRes = await client.query("SELECT name, confirmation_note FROM events WHERE id = $1", [
+                item.eventId
+              ]);
+              const itemEventRow = itemEventNameRes.rows[0] || {};
+              const itemEventName = itemEventRow.name || "";
+              const itemEventConfirmationNote =
+                itemEventRow.confirmation_note && String(itemEventRow.confirmation_note).trim()
+                  ? String(itemEventRow.confirmation_note).trim()
+                  : "";
               const ticketTotal = pay.items.reduce((s, p) => s + (p.discountedAmount ?? p.priceAmount ?? 0), 0);
               await sendReceiptEmail({
                 name: item.name,
@@ -1805,7 +1861,8 @@ app.get("/payments/verify", async (req, res) => {
                 serviceFee: typeof pay.serviceFee === "number" ? pay.serviceFee : 0,
                 createdAt: booking.rows[0]?.created_at,
                 sellerName,
-                orderNumber: pay.orderNumber || null
+                orderNumber: pay.orderNumber || null,
+                eventConfirmationNote: itemEventConfirmationNote
               });
             }
             await client.query(
@@ -1846,8 +1903,15 @@ app.get("/payments/verify", async (req, res) => {
               [status, bid, paymentId]
             );
             const sellerName = await getSellerNameForEvent(pay.eventId);
-            const payEventNameRes = await client.query("SELECT name FROM events WHERE id = $1", [pay.eventId]);
-            const payEventName = payEventNameRes.rows[0]?.name || "";
+            const payEventNameRes = await client.query("SELECT name, confirmation_note FROM events WHERE id = $1", [
+              pay.eventId
+            ]);
+            const payEventRow = payEventNameRes.rows[0] || {};
+            const payEventName = payEventRow.name || "";
+            const payEventConfirmationNote =
+              payEventRow.confirmation_note && String(payEventRow.confirmation_note).trim()
+                ? String(payEventRow.confirmation_note).trim()
+                : "";
             await sendReceiptEmail({
               name: pay.name,
               email: pay.email,
@@ -1859,7 +1923,8 @@ app.get("/payments/verify", async (req, res) => {
               serviceFee: typeof pay.serviceFee === "number" ? pay.serviceFee : 0,
               createdAt: bCreatedAt,
               sellerName,
-              orderNumber: pay.orderNumber || null
+              orderNumber: pay.orderNumber || null,
+              eventConfirmationNote: payEventConfirmationNote
             });
           }
         }
@@ -2559,7 +2624,7 @@ app.put("/admin/profile/password", requireAdmin, async (req, res) => {
 app.get("/admin/events", requireAdmin, async (_req, res) => {
   try {
     const result = await pool.query(
-      "SELECT id, slug, name, theme, event_start_date, event_end_date, registration_deadline, max_participants, created_at FROM events WHERE user_id = $1 ORDER BY created_at DESC, id DESC",
+      "SELECT id, slug, name, theme, event_start_date, event_end_date, registration_deadline, max_participants, confirmation_note, created_at FROM events WHERE user_id = $1 ORDER BY created_at DESC, id DESC",
       [_req.userId]
     );
     res.json({ ok: true, events: (result.rows || []).map(formatEventDates) });
@@ -3741,7 +3806,7 @@ app.post("/admin/events", requireAdmin, async (req, res) => {
     }
 
     const eventResult = await client.query(
-      "INSERT INTO events (slug, name, user_id, event_start_date, event_end_date) VALUES ($1, $2, $3, $4, $5) RETURNING id, slug, name, theme, event_start_date, event_end_date, created_at",
+      "INSERT INTO events (slug, name, user_id, event_start_date, event_end_date) VALUES ($1, $2, $3, $4, $5) RETURNING id, slug, name, theme, event_start_date, event_end_date, registration_deadline, max_participants, confirmation_note, created_at",
       [finalSlug, String(name).trim(), req.userId, eventStartDate, eventEndDate]
     );
     const newEvent = eventResult.rows[0];
@@ -3824,7 +3889,7 @@ app.delete("/admin/events/:id", requireAdmin, async (req, res) => {
 
 app.put("/admin/events/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { theme, startDate, endDate, registrationDeadline, maxParticipants } = req.body || {};
+  const { theme, startDate, endDate, registrationDeadline, maxParticipants, confirmationNote } = req.body || {};
   const eventId = await ensureEventOwnership(id, req.userId, res);
   if (!eventId) {
     return;
@@ -3877,6 +3942,8 @@ app.put("/admin/events/:id", requireAdmin, async (req, res) => {
       maxParticipantsValue = Math.floor(parsedMax);
     }
   }
+  const confirmationNoteValue =
+    confirmationNote === undefined ? null : String(confirmationNote || "").trim();
   try {
     let result;
     if (eventStartDate != null) {
@@ -3886,11 +3953,12 @@ app.put("/admin/events/:id", requireAdmin, async (req, res) => {
           SET theme = COALESCE($1, theme),
               event_start_date = $2,
               event_end_date = $3,
-              max_participants = COALESCE($4, max_participants)
-          WHERE id = $5
-          RETURNING id, slug, name, theme, event_start_date, event_end_date, registration_deadline, max_participants, created_at
+              max_participants = COALESCE($4, max_participants),
+              confirmation_note = COALESCE($5, confirmation_note)
+          WHERE id = $6
+          RETURNING id, slug, name, theme, event_start_date, event_end_date, registration_deadline, max_participants, confirmation_note, created_at
         `,
-        [normalizedTheme, eventStartDate, eventEndDate, maxParticipantsValue, eventId]
+        [normalizedTheme, eventStartDate, eventEndDate, maxParticipantsValue, confirmationNoteValue, eventId]
       );
     } else if (registrationDeadline !== undefined || maxParticipants !== undefined) {
       result = await pool.query(
@@ -3898,21 +3966,23 @@ app.put("/admin/events/:id", requireAdmin, async (req, res) => {
           UPDATE events
           SET theme = COALESCE($1, theme),
               registration_deadline = COALESCE($2, registration_deadline),
-              max_participants = COALESCE($3, max_participants)
-          WHERE id = $4
-          RETURNING id, slug, name, theme, event_start_date, event_end_date, registration_deadline, max_participants, created_at
+              max_participants = COALESCE($3, max_participants),
+              confirmation_note = COALESCE($4, confirmation_note)
+          WHERE id = $5
+          RETURNING id, slug, name, theme, event_start_date, event_end_date, registration_deadline, max_participants, confirmation_note, created_at
         `,
-        [normalizedTheme, deadlineValue, maxParticipantsValue, eventId]
+        [normalizedTheme, deadlineValue, maxParticipantsValue, confirmationNoteValue, eventId]
       );
     } else {
       result = await pool.query(
         `
           UPDATE events
-          SET theme = COALESCE($1, theme)
-          WHERE id = $2
-          RETURNING id, slug, name, theme, event_start_date, event_end_date, registration_deadline, max_participants, created_at
+          SET theme = COALESCE($1, theme),
+              confirmation_note = COALESCE($2, confirmation_note)
+          WHERE id = $3
+          RETURNING id, slug, name, theme, event_start_date, event_end_date, registration_deadline, max_participants, confirmation_note, created_at
         `,
-        [normalizedTheme, eventId]
+        [normalizedTheme, confirmationNoteValue, eventId]
       );
     }
     if (result.rowCount === 0) {

@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS events (
   registration_deadline DATE,
   bas_credit_used BOOLEAN NOT NULL DEFAULT FALSE,
   max_participants INTEGER,
+  confirmation_note TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -26,7 +27,8 @@ ALTER TABLE events
   ADD COLUMN IF NOT EXISTS event_end_date DATE,
   ADD COLUMN IF NOT EXISTS registration_deadline DATE,
   ADD COLUMN IF NOT EXISTS bas_credit_used BOOLEAN NOT NULL DEFAULT FALSE,
-  ADD COLUMN IF NOT EXISTS max_participants INTEGER;
+  ADD COLUMN IF NOT EXISTS max_participants INTEGER,
+  ADD COLUMN IF NOT EXISTS confirmation_note TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS admin_users (
   id SERIAL PRIMARY KEY,

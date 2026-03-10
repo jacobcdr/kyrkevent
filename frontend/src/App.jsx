@@ -723,10 +723,12 @@ const PaymentStatusPage = () => {
                         <strong>{summary.eventName}</strong>
                       </div>
                     ) : null}
-                    <div className="receipt-row">
-                      <span>Arrangör</span>
-                      <strong>{summary.sellerName || "–"}</strong>
-                    </div>
+                    {summary.sellerName ? (
+                      <div className="receipt-row">
+                        <span>Arrangör</span>
+                        <strong>{summary.sellerName}</strong>
+                      </div>
+                    ) : null}
                   </div>
                 )}
               </div>
@@ -882,6 +884,7 @@ const AdminPage = () => {
   const [maxParticipantsInput, setMaxParticipantsInput] = useState("");
   const [participantCount, setParticipantCount] = useState(null);
   const [participantCountLoading, setParticipantCountLoading] = useState(false);
+  const [eventConfirmationNoteInput, setEventConfirmationNoteInput] = useState("");
   const [eventDeleteConfirm, setEventDeleteConfirm] = useState(null);
   const [eventDeleteLoading, setEventDeleteLoading] = useState(false);
   useEffect(() => {
@@ -897,6 +900,10 @@ const AdminPage = () => {
     const raw = selectedEvent?.registration_deadline;
     setRegistrationDeadlineInput(raw ? String(raw).slice(0, 10) : "");
   }, [selectedEvent?.registration_deadline, selectedEventId]);
+  useEffect(() => {
+    const rawNote = selectedEvent?.confirmation_note;
+    setEventConfirmationNoteInput(rawNote != null ? String(rawNote) : "");
+  }, [selectedEvent?.confirmation_note, selectedEventId]);
   useEffect(() => {
     if (!token || !selectedEventId || adminSection !== "settings") {
       setParticipantCount(null);
@@ -5748,46 +5755,6 @@ const AdminPage = () => {
                 </label>
               </div>
               <h2>Bokningar</h2>
-              {(() => {
-                const startRaw = selectedEvent?.event_start_date;
-                const endRaw = selectedEvent?.event_end_date;
-                const toDateStr = (v) => {
-                  if (v == null) return null;
-                  if (typeof v === "string") return v.slice(0, 10);
-                  if (v instanceof Date && !Number.isNaN(v.getTime())) return v.toISOString().slice(0, 10);
-                  return null;
-                };
-                const startStr = toDateStr(startRaw);
-                const endStr = toDateStr(endRaw);
-                if (!startStr) return null;
-                const parseLocalDate = (str) => {
-                  const parts = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-                  if (!parts) return null;
-                  const [, y, m, d] = parts.map(Number);
-                  const date = new Date(y, m - 1, d);
-                  return Number.isNaN(date.getTime()) ? null : date;
-                };
-                const startDate = parseLocalDate(startStr);
-                const endDate = endStr ? parseLocalDate(endStr) : startDate;
-                if (!startDate) return null;
-                const fmtLong = (d) =>
-                  d.toLocaleDateString("sv-SE", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
-                const fmtShort = (d, withYear = false) =>
-                  d.toLocaleDateString("sv-SE", {
-                    weekday: "short",
-                    month: "short",
-                    day: "numeric",
-                    ...(withYear ? { year: "numeric" } : {})
-                  });
-                return (
-                  <p className="muted" style={{ marginBottom: "1rem" }}>
-                    <strong>Eventdatum:</strong>{" "}
-                    {startStr === endStr || !endStr || !endDate
-                      ? fmtLong(startDate)
-                      : `${fmtShort(startDate)} – ${fmtShort(endDate, true)}`}
-                  </p>
-                );
-              })()}
               <div className="admin-summary">
                 <div className="summary-item">
                   <span>Antal betalande</span>
@@ -6935,6 +6902,60 @@ const AdminPage = () => {
                   </div>
                 );
               })()}
+              <div className="section">
+                <h2>Text i bekräftelsemail</h2>
+                <p className="field-hint" style={{ marginBottom: "0.5rem" }}>
+                  Den här texten läggs till längst ned i bekräftelsemailet vid anmälan – både för
+                  gratisanmälningar och biljetter med pris.
+                </p>
+                <label className="field">
+                  <span className="field-label">Tillvalstext</span>
+                  <textarea
+                    value={eventConfirmationNoteInput}
+                    onChange={(e) => setEventConfirmationNoteInput(e.target.value)}
+                    rows={4}
+                    placeholder="Till exempel praktisk information, kontaktuppgifter eller annan viktig info som ska finnas i bekräftelsemailet."
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="button"
+                  style={{ marginTop: "0.5rem" }}
+                  disabled={!token || !selectedEventId}
+                  onClick={async () => {
+                    if (!token || !selectedEventId) return;
+                    try {
+                      const response = await fetch(`${API_BASE}/admin/events/${selectedEventId}`, {
+                        method: "PUT",
+                        headers: {
+                          "Content-Type": "application/json",
+                          Authorization: `Bearer ${token}`
+                        },
+                        body: JSON.stringify({
+                          theme: selectedEvent?.theme || "default",
+                          confirmationNote: eventConfirmationNoteInput
+                        })
+                      });
+                      if (!response.ok) {
+                        const data = await response.json().catch(() => ({}));
+                        throw new Error(data.error || "Kunde inte spara texten.");
+                      }
+                      const data = await response.json();
+                      if (data?.event) {
+                        setEvents((prev) =>
+                          prev.map((ev) =>
+                            String(ev.id) === String(data.event.id) ? data.event : ev
+                          )
+                        );
+                      }
+                    } catch (err) {
+                      setStatusMessage(err?.message || "Kunde inte spara texten för bekräftelsemail.");
+                    }
+                  }}
+                >
+                  Spara text
+                </button>
+              </div>
               <div className="section">
                 <h2>Eventbild</h2>
                 <label className="field">
@@ -8747,7 +8768,7 @@ function App() {
               <p>
                 Lonetec AB är personuppgiftsansvarig.
                 <br />
-                Kontakt: <a href="mailto:bokning@lonetec.se">bokning@lonetec.se</a>
+                Kontakt: <a href="mailto:kontakt@lonetec.se">kontakt@lonetec.se</a>
                 <br />
                 Organisationsnummer: 556907–4189
               </p>
