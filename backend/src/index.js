@@ -830,6 +830,8 @@ const resolveEventId = (value) => {
 const parseBookingPayload = (body) => {
   const {
     name,
+    firstName,
+    lastName,
     email,
     city,
     phone,
@@ -849,7 +851,9 @@ const parseBookingPayload = (body) => {
   if (terms !== true) {
     return { ok: false, error: "Terms must be accepted" };
   }
-  const noPrice = priceName === undefined && (priceAmount === undefined || priceAmount === null || priceAmount === "");
+  const noPrice =
+    priceName === undefined &&
+    (priceAmount === undefined || priceAmount === null || priceAmount === "");
   const defaultPriceName = "Anmälan";
   const defaultPriceAmount = 0;
   if (!noPrice) {
@@ -863,11 +867,29 @@ const parseBookingPayload = (body) => {
   }
   const finalPriceName = noPrice ? defaultPriceName : String(priceName || "").trim();
   const finalPriceAmount = noPrice ? defaultPriceAmount : Number(priceAmount);
+
+  const rawFirstName = String(firstName || "").trim();
+  const rawLastName = String(lastName || "").trim();
+  let finalFirstName = rawFirstName;
+  let finalLastName = rawLastName;
+  if (!finalFirstName && typeof name === "string" && name.trim()) {
+    const parts = name.trim().split(/\s+/);
+    finalFirstName = parts[0] || "";
+    if (!finalLastName && parts.length > 1) {
+      finalLastName = parts.slice(1).join(" ");
+    }
+  }
+  const fullName =
+    String(name || "").trim() ||
+    [finalFirstName, finalLastName].filter(Boolean).join(" ");
+
   return {
     ok: true,
     payload: {
       eventId: parsedEventId,
-      name: String(name || "").trim(),
+      name: fullName,
+      firstName: finalFirstName,
+      lastName: finalLastName,
       email: String(email || "").trim(),
       city: String(city || "").trim(),
       phone: String(phone || "").trim(),
@@ -1031,10 +1053,11 @@ app.post("/bookings", async (req, res) => {
       return;
     }
     const result = await pool.query(
-      "INSERT INTO bookings (event_id, name, email, city, phone, organization, ticket, other_info, terms, payment_status, pris, custom_fields) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id, event_id, name, email, city, phone, organization, ticket, other_info, terms, payment_status, pris, custom_fields, created_at",
+      "INSERT INTO bookings (event_id, name, last_name, email, city, phone, organization, ticket, other_info, terms, payment_status, pris, custom_fields) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id, event_id, name, email, city, phone, organization, ticket, other_info, terms, payment_status, pris, custom_fields, created_at",
       [
         parsed.payload.eventId,
         parsed.payload.name,
+        parsed.payload.lastName || "",
         parsed.payload.email,
         parsed.payload.city,
         parsed.payload.phone,
@@ -1147,10 +1170,11 @@ app.post("/payments/start", paymentLimiter, async (req, res) => {
         return;
       }
       const insertResult = await pool.query(
-        "INSERT INTO bookings (event_id, name, email, city, phone, organization, ticket, terms, payment_status, pris, custom_fields) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id, event_id, name, email, city, phone, organization, ticket, terms, payment_status, pris, custom_fields, created_at",
+        "INSERT INTO bookings (event_id, name, last_name, email, city, phone, organization, ticket, terms, payment_status, pris, custom_fields) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id, event_id, name, email, city, phone, organization, ticket, terms, payment_status, pris, custom_fields, created_at",
         [
           parsed.payload.eventId,
           parsed.payload.name,
+          parsed.payload.lastName || "",
           parsed.payload.email,
           parsed.payload.city,
           parsed.payload.phone,
@@ -1437,10 +1461,11 @@ app.post("/payments/start-cart", paymentLimiter, async (req, res) => {
           return;
         }
         const insertResult = await pool.query(
-          "INSERT INTO bookings (event_id, name, email, city, phone, organization, ticket, terms, payment_status, pris, custom_fields) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id, name, email, ticket, pris, created_at",
+          "INSERT INTO bookings (event_id, name, last_name, email, city, phone, organization, ticket, terms, payment_status, pris, custom_fields) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id, name, email, ticket, pris, created_at",
           [
             payload.eventId,
             payload.name,
+            payload.lastName || "",
             payload.email,
             payload.city,
             payload.phone,
@@ -1878,10 +1903,11 @@ app.get("/payments/verify", async (req, res) => {
           } else {
             const finalAmount = pay.discountedAmount ?? pay.priceAmount;
             const booking = await client.query(
-              "INSERT INTO bookings (event_id, name, email, city, phone, organization, ticket, other_info, terms, payment_status, pris, custom_fields) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id, created_at",
+              "INSERT INTO bookings (event_id, name, last_name, email, city, phone, organization, ticket, other_info, terms, payment_status, pris, custom_fields) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id, created_at",
               [
                 pay.eventId,
                 pay.name,
+                pay.lastName || "",
                 pay.email,
                 pay.city,
                 pay.phone,

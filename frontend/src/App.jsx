@@ -5386,7 +5386,7 @@ const AdminPage = () => {
               </li>
               <li>
                 <strong>Bas-abonnemang</strong> – du köper ett antal eventkrediter och kan lägga till priser på motsvarande antal event.
-                Krediter dras när du aktiverar priser på ett event.
+                En kredit dras när du aktiverar ett eller flera priser på ett event.
               </li>
               <li>
                 <strong>Premium-abonnemang</strong> – ger tillgång till betalda event enligt din prisplan utan att behöva köpa
@@ -6964,6 +6964,10 @@ const AdminPage = () => {
                 <h2>Eventbild</h2>
                 <label className="field">
                   <span className="field-label">Ladda upp bild</span>
+                  <p className="field-hint" style={{ marginBottom: "0.5rem" }}>
+                    För bästa resultat, använd en liggande bild (t.ex. 1200×600 px) med tydlig kontrast och utan
+                    text som är väldigt nära kanterna.
+                  </p>
                   <input name="heroImage" type="file" accept="image/*" onChange={handleHeroImageChange} />
                 </label>
                 {heroImageUrl ? (
@@ -7066,7 +7070,7 @@ const AdminPage = () => {
                 <h2>Anmäl dig här</h2>
                 <div className="field-row">
                   <label className="field checkbox-field">
-                    <span className="field-label">Namn</span>
+                    <span className="field-label">För- och Efternamn</span>
                     <input
                       name="showName"
                       type="checkbox"
@@ -7633,7 +7637,8 @@ function ResetPasswordPage() {
 
 function App() {
   const [form, setForm] = useState({
-    name: "",
+    firstName: "",
+    lastName: "",
     email: "",
     city: "",
     phone: "",
@@ -8082,7 +8087,8 @@ function App() {
 
   const resetBookingForm = () => {
     setForm({
-      name: "",
+      firstName: "",
+      lastName: "",
       email: "",
       city: "",
       phone: "",
@@ -8124,9 +8130,12 @@ function App() {
       return;
     }
     setPaymentError("");
+    const fullName = [form.firstName.trim(), form.lastName.trim()].filter(Boolean).join(" ");
     const payload = {
       eventId: event.id,
-      name: form.name.trim(),
+      name: fullName,
+      firstName: form.firstName.trim(),
+      lastName: form.lastName.trim(),
       email: form.email.trim(),
       city: form.city.trim(),
       phone: form.phone.trim(),
@@ -8406,13 +8415,24 @@ function App() {
               <form className="form" onSubmit={handleAddToCart} id="booking-form">
           {sectionVisibility.showName ? (
             <label className="field">
-              <span className="field-label">Namn</span>
+              <span className="field-label">Förnamn</span>
               <input
-                name="name"
+                name="firstName"
                 type="text"
-                value={form.name}
+                value={form.firstName}
                 onChange={handleChange}
                 required
+              />
+            </label>
+          ) : null}
+          {sectionVisibility.showName ? (
+            <label className="field">
+              <span className="field-label">Efternamn</span>
+              <input
+                name="lastName"
+                type="text"
+                value={form.lastName}
+                onChange={handleChange}
               />
             </label>
           ) : null}
