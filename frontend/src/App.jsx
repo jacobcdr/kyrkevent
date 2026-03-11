@@ -384,7 +384,7 @@ const LandingPage = () => {
       </div>
       <h2 className="landing-events-heading">Vill du anordna konserter, fester, läger, församlingshelger, hajk, julshow, middagar, nyår ?</h2>
       <p className="landing-intro landing-description">
-        En plattform som gör det enkelt och snyggt att skapa anmälningssidor och biljettförsäljning för alla typer av evenemang. Oavsett om du arrangerar ett läger, en konferens, en konsert, en middag eller något helt annat kan du snabbt bygga en professionell sida som tar emot bokningar i stilren design. Vill du dessutom ta betalt för ditt arrangemang gör du det lika smidigt direkt via plattformen. Du skapar din sida på ett par minuter, testa får du se...
+        En plattform som gör det enkelt och snyggt att skapa <b>anmälningssidor</b> och <b>biljettförsäljning</b> för alla typer av evenemang. Oavsett om du arrangerar ett läger, en konferens, en konsert, en middag eller något helt annat kan du snabbt <b>bygga en professionell bokningssida</b> som tar emot bokningar i stilren design. Vill du dessutom ta betalt för ditt arrangemang gör du det lika smidigt direkt via plattformen. Du skapar din sida på ett par minuter, testa får du se...
       </p>
       <p className="landing-intro">Logga in eller skapa konto för att hantera dina event.</p>
       <div className="landing-actions">
