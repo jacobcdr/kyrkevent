@@ -370,11 +370,17 @@ const LandingPage = () => {
             className="landing-logo"
           />
         </div>
-        <img
-          src="/landing-hero.png"
-          alt="Bokning, evenemang och aktiviteter"
+        <video
           className="landing-image"
-        />
+          autoPlay
+          loop
+          muted
+          playsInline
+          poster="/landing-hero.png"
+          aria-label="Bokning, evenemang och aktiviteter"
+        >
+          <source src="/landing-hero.mp4" type="video/mp4" />
+        </video>
       </div>
       <h2 className="landing-events-heading">Vill du anordna konserter, fester, läger, församlingshelger, hajk, julshow, middagar, nyår ?</h2>
       <p className="landing-intro landing-description">
@@ -442,6 +448,19 @@ const LandingPage = () => {
             <a href="/admin?view=signup" className="landing-pricing-btn">Kom igång</a>
           </div>
         </div>
+      </section>
+      <section className="landing-promo-video" aria-label="Introduktionsvideo om Kyrkevent">
+        <p className="landing-promo-caption">Skapa ditt event på några minuter</p>
+        <video
+          className="landing-promo-video-element"
+          autoPlay
+          loop
+          muted
+          playsInline
+          controls
+        >
+          <source src="/promo.mp4" type="video/mp4" />
+        </video>
       </section>
       <footer className="landing-footer">
         Tjänsten drivs av Lonetec AB org. 556907-4189 – webb: <a href="https://lonetec.se" target="_blank" rel="noreferrer">lonetec.se</a> – mail: <a href="mailto:kontakt@lonetec.se">kontakt@lonetec.se</a> – tel: 010-199 86 40
@@ -5463,6 +5482,35 @@ const AdminPage = () => {
                 <strong>Utbetalningskvitto (PDF)</strong> – när du markerar en utbetalning som betald kan du ladda ner ett
                 utbetalningskvitto som PDF. Där framgår antal bokningar, totalbelopp, moms, utbetalande och mottagande organisation,
                 betalmetod och utbetalningsdatum.
+              </li>
+              <li>
+                <span>
+                  Godkänn och skicka begäran om utbetalning, senare kan du ladda ner kvitto för transaktionerna nedan
+                </span>
+                <div
+                  style={{
+                    marginTop: "0.5rem",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "0.5rem"
+                  }}
+                >
+                  <img
+                    src="/help-payout-1.png"
+                    alt="Exempel: begära utbetalning"
+                    style={{ maxWidth: "66%", borderRadius: "6px" }}
+                  />
+                  <img
+                    src="/help-payout-2.png"
+                    alt="Exempel: lista över pågående/begärda utbetalningar"
+                    style={{ maxWidth: "66%", borderRadius: "6px" }}
+                  />
+                  <img
+                    src="/help-payout-3.png"
+                    alt="Exempel: utbetald utbetalning med kvitto"
+                    style={{ maxWidth: "66%", borderRadius: "6px" }}
+                  />
+                </div>
               </li>
             </ul>
 

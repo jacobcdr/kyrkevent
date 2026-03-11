@@ -3061,13 +3061,75 @@ app.patch("/admin/payout-requests/:id", requireAdmin, requireSuperAdmin, async (
     return res.status(400).json({ ok: false, error: "Endast status 'betald' kan sättas" });
   }
   try {
-    const result = await pool.query(
+    const payoutResult = await pool.query(
+      `SELECT pr.id,
+              pr.user_id,
+              pr.organization,
+              pr.event_names,
+              pr.amount,
+              pr.net_amount,
+              p.first_name,
+              p.last_name,
+              p.organization AS profile_organization,
+              p.email
+       FROM payout_requests pr
+       LEFT JOIN admin_user_profiles p ON p.user_id = pr.user_id
+       WHERE pr.id = $1`,
+      [id]
+    );
+    if (payoutResult.rowCount === 0) {
+      return res.status(404).json({ ok: false, error: "Begäran hittades inte." });
+    }
+
+    const updateResult = await pool.query(
       "UPDATE payout_requests SET status = $1 WHERE id = $2 AND status = $3 RETURNING id",
       ["betald", id, "pågår"]
     );
-    if (result.rowCount === 0) {
+    if (updateResult.rowCount === 0) {
       return res.status(404).json({ ok: false, error: "Begäran hittades inte eller är redan utbetald." });
     }
+
+    const payoutRow = payoutResult.rows[0];
+    const recipientEmail = (payoutRow.email || "").trim();
+
+    if (resend && RESEND_FROM && recipientEmail) {
+      const fullName = [payoutRow.first_name, payoutRow.last_name].filter(Boolean).join(" ");
+      const displayName =
+        fullName || payoutRow.profile_organization || payoutRow.organization || "kund";
+      const amount =
+        (payoutRow.net_amount != null ? Number(payoutRow.net_amount) : Number(payoutRow.amount)) ||
+        0;
+      const eventsText = payoutRow.event_names || "";
+
+      const lines = [
+        `Hej ${displayName},`,
+        "",
+        "Din begäran om utbetalning har nu markerats som utbetald av administratör.",
+        amount > 0 ? `Belopp: ${amount.toFixed(2)} SEK` : null,
+        eventsText ? `Gäller följande event: ${eventsText}` : null,
+        "",
+        "Utbetalning är på väg och ett utbetalningskvitto finns att ladda ner under menyn Utbetalningar i Kyrkevent.",
+        "",
+        "Vänliga hälsningar,",
+        "Kyrkevent.se"
+      ].filter(Boolean);
+
+      const body = lines.join("\n");
+
+      try {
+        await resend.emails.send({
+          from: RESEND_FROM,
+          to: recipientEmail,
+          subject: "Bekräftelse – utbetalning på väg",
+          text: body,
+          html: body.replace(/\n/g, "<br>")
+        });
+      } catch (emailError) {
+        // eslint-disable-next-line no-console
+        console.error("Failed to send payout confirmation email", emailError);
+      }
+    }
+
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Kunde inte uppdatera status" });
