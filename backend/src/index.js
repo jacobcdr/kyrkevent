@@ -29,7 +29,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "";
 const MOLLIE_API_KEY = process.env.MOLLIE_API_KEY || "";
 const MOLLIE_AMOUNT = process.env.MOLLIE_AMOUNT || "";
 const MOLLIE_CURRENCY = process.env.MOLLIE_CURRENCY || "SEK";
-const BAS_PRICE_DEFAULT = 95;
+const BAS_PRICE_DEFAULT = 129;
 const BAS_PRICE_PER_EVENT = Math.max(1, Number(process.env.BAS_PRICE_PER_EVENT || String(BAS_PRICE_DEFAULT)) || BAS_PRICE_DEFAULT);
 const SERVICE_FEE_AMOUNT =
   Math.max(0, Number(process.env.SERVICE_FEE_AMOUNT || "10") || 0);
