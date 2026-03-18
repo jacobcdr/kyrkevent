@@ -384,7 +384,7 @@ const LandingPage = () => {
       </div>
       <h2 className="landing-events-heading">Vill du anordna konserter, fester, läger, församlingshelger, hajk, julshow, middagar, nyår ?</h2>
       <p className="landing-intro landing-description">
-        En plattform som gör det enkelt och snyggt att skapa <b>anmälningssidor</b> och <b>biljettförsäljning</b> för alla typer av evenemang. Oavsett om du arrangerar ett läger, en konferens, en konsert, en middag eller något helt annat kan du snabbt <b>bygga en professionell bokningssida</b> som tar emot bokningar i stilren design. Vill du dessutom ta betalt för ditt arrangemang gör du det lika smidigt direkt via plattformen. Du skapar din sida på ett par minuter, testa får du se...
+        En plattform som gör det enkelt och snyggt att skapa anmälningssidor och biljettförsäljning för alla typer av evenemang. Oavsett om du arrangerar ett läger, en konferens, en konsert, en middag eller något helt annat kan du snabbt bygga en professionell sida som tar emot bokningar i stilren design. Vill du dessutom ta betalt för ditt arrangemang gör du det lika smidigt direkt via plattformen. Du skapar din sida på ett par minuter, testa får du se...
       </p>
       <p className="landing-intro">Logga in eller skapa konto för att hantera dina event.</p>
       <div className="landing-actions">
@@ -427,7 +427,7 @@ const LandingPage = () => {
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Köp av enstaka betalevent</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Anpassade listor om vilka som har betalat</li>
             </ul>
-            <p className="landing-pricing-price">129 kr/betalevent</p>
+            <p className="landing-pricing-price">95 kr/betalevent</p>
             <a href="/admin?view=signup" className="landing-pricing-btn">Kom igång</a>
           </div>
 
@@ -450,7 +450,6 @@ const LandingPage = () => {
         </div>
       </section>
       <section className="landing-promo-video" aria-label="Introduktionsvideo om Kyrkevent">
-        <p className="landing-promo-caption">Skapa ditt event på några minuter</p>
         <video
           className="landing-promo-video-element"
           autoPlay
@@ -461,6 +460,7 @@ const LandingPage = () => {
         >
           <source src="/promo.mp4" type="video/mp4" />
         </video>
+        <p className="landing-promo-caption">Skapa ditt event på några minuter</p>
       </section>
       <footer className="landing-footer">
         Tjänsten drivs av Lonetec AB org. 556907-4189 – webb: <a href="https://lonetec.se" target="_blank" rel="noreferrer">lonetec.se</a> – mail: <a href="mailto:kontakt@lonetec.se">kontakt@lonetec.se</a> – tel: 010-199 86 40
@@ -900,6 +900,7 @@ const AdminPage = () => {
   const [adminFaqText, setAdminFaqText] = useState("");
   const DEFAULT_SECTION_ORDER = ["text", "program", "faq", "form", "speakers", "partners", "place"];
   const [adminSectionOrder, setAdminSectionOrder] = useState([...DEFAULT_SECTION_ORDER]);
+  const [adminFormFieldOrder, setAdminFormFieldOrder] = useState([]);
   const [pendingTheme, setPendingTheme] = useState("default");
   const [themeSaving, setThemeSaving] = useState(false);
   const [registrationDeadlineInput, setRegistrationDeadlineInput] = useState("");
@@ -1301,8 +1302,9 @@ const AdminPage = () => {
       showText: data.sections?.showText !== false,
       showSpeakers: data.sections?.showSpeakers !== false,
       showPartners: data.sections?.showPartners !== false,
-      showName: data.sections?.showName !== false,
-      showEmail: data.sections?.showEmail !== false,
+      // För- och Efternamn & Email ska alltid vara på
+      showName: true,
+      showEmail: true,
       showPhone: data.sections?.showPhone !== false,
       showCity: data.sections?.showCity !== false,
       showOrganization: data.sections?.showOrganization !== false,
@@ -1323,6 +1325,7 @@ const AdminPage = () => {
       faq: data.sections?.sectionLabelFaq ?? ""
     });
     setAdminFaqText(data.sections?.faqText || "");
+    setAdminFormFieldOrder(Array.isArray(data.sections?.formFieldOrder) ? data.sections.formFieldOrder : []);
   };
 
   const loadAdminCustomFields = async (authToken, eventId) => {
@@ -2863,6 +2866,7 @@ const AdminPage = () => {
           eventId: Number(selectedEventId),
           ...next,
           sectionOrder: adminSectionOrder,
+          formFieldOrder: adminMergedFormFieldOrder,
           sectionLabelProgram: adminSectionLabels.program,
           sectionLabelSpeakers: adminSectionLabels.speakers,
           sectionLabelPartners: adminSectionLabels.partners,
@@ -2890,6 +2894,7 @@ const AdminPage = () => {
           eventId: Number(selectedEventId),
           ...adminSectionVisibility,
           sectionOrder: adminSectionOrder,
+          formFieldOrder: adminMergedFormFieldOrder,
           sectionLabelProgram: adminSectionLabels.program,
           sectionLabelSpeakers: adminSectionLabels.speakers,
           sectionLabelPartners: adminSectionLabels.partners,
@@ -2936,9 +2941,12 @@ const AdminPage = () => {
           eventId: Number(selectedEventId),
           ...adminSectionVisibility,
           sectionOrder: next,
+          formFieldOrder: adminMergedFormFieldOrder,
           sectionLabelProgram: adminSectionLabels.program,
           sectionLabelSpeakers: adminSectionLabels.speakers,
-          sectionLabelPartners: adminSectionLabels.partners
+          sectionLabelPartners: adminSectionLabels.partners,
+          sectionLabelFaq: adminSectionLabels.faq,
+          faqText: adminFaqText
         })
       });
       if (!response.ok) throw new Error("Sections save failed");
@@ -2948,10 +2956,17 @@ const AdminPage = () => {
 
   const handleCustomFieldFormChange = (event) => {
     const { name, value, type, checked } = event.target;
-    setCustomFieldForm((prev) => ({
-      ...prev,
-      [name]: type === "checkbox" ? checked : value
-    }));
+    setCustomFieldForm((prev) => {
+      const nextValue = type === "checkbox" ? checked : value;
+      const next = { ...prev, [name]: nextValue };
+      if (name === "fieldType" && (String(value) === "paragraph" || String(value) === "linebreak")) {
+        next.required = false;
+      }
+      if (name === "fieldType" && String(value) === "linebreak") {
+        next.label = "Radbrytning";
+      }
+      return next;
+    });
   };
 
   const handleCustomFieldSubmit = (event) => {
@@ -2976,7 +2991,10 @@ const AdminPage = () => {
           eventId: Number(selectedEventId),
           label: customFieldForm.label.trim(),
           fieldType: customFieldForm.fieldType,
-          required: customFieldForm.required
+          required:
+            customFieldForm.fieldType === "paragraph" || customFieldForm.fieldType === "linebreak"
+              ? false
+              : customFieldForm.required
         })
       });
       if (!response.ok) {
@@ -2986,6 +3004,94 @@ const AdminPage = () => {
       await loadAdminCustomFields(token, selectedEventId);
     };
     saveField().catch(() => setError("Kunde inte spara fältet."));
+  };
+
+  const BASE_FORM_ITEMS = useMemo(
+    () => [
+      { key: "name", label: "För- och Efternamn", visibilityKey: "showName", canHide: false },
+      { key: "email", label: "Email", visibilityKey: "showEmail", canHide: false },
+      { key: "city", label: "Ort", visibilityKey: "showCity" },
+      { key: "phone", label: "Telnr", visibilityKey: "showPhone" },
+      { key: "organization", label: "Organisation", visibilityKey: "showOrganization" },
+      { key: "discountCode", label: "Rabattkod", visibilityKey: "showDiscountCode" }
+    ],
+    []
+  );
+
+  const [draggingFormItemKey, setDraggingFormItemKey] = useState(null);
+
+  const getMergedFormFieldOrder = (rawOrder) => {
+    const baseKeys = BASE_FORM_ITEMS.map((b) => b.key);
+    const customKeys = customFieldsAdmin.map((f) => `custom:${f.id}`);
+    const normalize = (v) => String(v || "").trim();
+    const isValid = (k) =>
+      baseKeys.includes(k) || k.startsWith("custom:") || k === "custom";
+    const initial = Array.isArray(rawOrder) && rawOrder.length > 0 ? rawOrder.map(normalize) : [];
+    const filtered = initial.filter(isValid);
+    const expanded = [];
+    filtered.forEach((k) => {
+      if (k === "custom") expanded.push(...customKeys);
+      else expanded.push(k);
+    });
+    const present = new Set(expanded);
+    baseKeys.forEach((k) => {
+      if (!present.has(k)) {
+        expanded.push(k);
+        present.add(k);
+      }
+    });
+    customKeys.forEach((k) => {
+      if (!present.has(k)) {
+        expanded.push(k);
+        present.add(k);
+      }
+    });
+    const customSet = new Set(customKeys);
+    return expanded.filter((k) => (k.startsWith("custom:") ? customSet.has(k) : true));
+  };
+
+  const adminMergedFormFieldOrder = useMemo(
+    () => getMergedFormFieldOrder(adminFormFieldOrder),
+    [adminFormFieldOrder, customFieldsAdmin, BASE_FORM_ITEMS]
+  );
+
+  const persistFormFieldOrder = async (nextOrder) => {
+    if (!token || !selectedEventId) return;
+    const response = await fetch(`${API_BASE}/admin/form-fields/order`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        eventId: Number(selectedEventId),
+        order: nextOrder
+      })
+    });
+    if (!response.ok) {
+      throw new Error("Reorder failed");
+    }
+    const data = await response.json().catch(() => ({}));
+    if (Array.isArray(data.formFieldOrder)) {
+      setAdminFormFieldOrder(data.formFieldOrder);
+    } else {
+      setAdminFormFieldOrder(nextOrder);
+    }
+    await loadAdminCustomFields(token, selectedEventId);
+  };
+
+  const moveFormFieldItem = (fromKey, toKey) => {
+    const order = [...adminMergedFormFieldOrder];
+    const fromIndex = order.findIndex((k) => String(k) === String(fromKey));
+    const toIndex = order.findIndex((k) => String(k) === String(toKey));
+    if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return;
+    const next = [...order];
+    const [moved] = next.splice(fromIndex, 1);
+    next.splice(toIndex, 0, moved);
+    setAdminFormFieldOrder(next);
+    persistFormFieldOrder(next).catch(() => {
+      setError("Kunde inte spara ordningen för formulärfälten.");
+    });
   };
 
   const handleCustomFieldDelete = (field) => {
@@ -5963,7 +6069,9 @@ const AdminPage = () => {
                       {bookingColumnVisibility.order_number ? (
                         <th>Ordernummer</th>
                       ) : null}
-                      {customFieldsAdmin.map((field) =>
+                      {customFieldsAdmin
+                        .filter((field) => field.field_type !== "paragraph" && field.field_type !== "linebreak")
+                        .map((field) =>
                         bookingCustomFieldVisibility[String(field.id)] !== false ? (
                           <th key={`custom-header-${field.id}`}>{field.label}</th>
                         ) : null
@@ -5991,7 +6099,10 @@ const AdminPage = () => {
                           colSpan={
                             Object.values(bookingColumnVisibility).filter(Boolean).length +
                             customFieldsAdmin.filter(
-                              (field) => bookingCustomFieldVisibility[String(field.id)] !== false
+                              (field) =>
+                                field.field_type !== "paragraph" &&
+                                field.field_type !== "linebreak" &&
+                                bookingCustomFieldVisibility[String(field.id)] !== false
                             ).length
                           }
                           className="muted"
@@ -6026,7 +6137,9 @@ const AdminPage = () => {
                           {bookingColumnVisibility.order_number ? (
                             <td>{booking.order_number || "–"}</td>
                           ) : null}
-                          {customFieldsAdmin.map((field) =>
+                          {customFieldsAdmin
+                            .filter((field) => field.field_type !== "paragraph" && field.field_type !== "linebreak")
+                            .map((field) =>
                             bookingCustomFieldVisibility[String(field.id)] !== false ? (
                               <td key={`custom-${booking.id}-${field.id}`}>
                                 {getBookingCustomFieldValue(booking, field)}
@@ -6120,11 +6233,15 @@ const AdminPage = () => {
                         </label>
                       ))}
                     </div>
-                    {customFieldsAdmin.length > 0 ? (
+                    {customFieldsAdmin.filter(
+                      (field) => field.field_type !== "paragraph" && field.field_type !== "linebreak"
+                    ).length > 0 ? (
                       <>
                         <h4>Extra fält</h4>
                         <div className="field-row">
-                          {customFieldsAdmin.map((field) => (
+                          {customFieldsAdmin
+                            .filter((field) => field.field_type !== "paragraph" && field.field_type !== "linebreak")
+                            .map((field) => (
                             <label key={field.id} className="field checkbox-field">
                               <span className="field-label">{field.label}</span>
                               <input
@@ -7115,66 +7232,10 @@ const AdminPage = () => {
                 </button>
               </div>
               <div className="section">
-                <h2>Anmäl dig här</h2>
-                <div className="field-row">
-                  <label className="field checkbox-field">
-                    <span className="field-label">För- och Efternamn</span>
-                    <input
-                      name="showName"
-                      type="checkbox"
-                      checked={adminSectionVisibility.showName}
-                      onChange={handleSectionVisibilityChange}
-                    />
-                  </label>
-                  <label className="field checkbox-field">
-                    <span className="field-label">Email</span>
-                    <input
-                      name="showEmail"
-                      type="checkbox"
-                      checked={adminSectionVisibility.showEmail}
-                      onChange={handleSectionVisibilityChange}
-                    />
-                  </label>
-                  <label className="field checkbox-field">
-                    <span className="field-label">Ort</span>
-                    <input
-                      name="showCity"
-                      type="checkbox"
-                      checked={adminSectionVisibility.showCity}
-                      onChange={handleSectionVisibilityChange}
-                    />
-                  </label>
-                  <label className="field checkbox-field">
-                    <span className="field-label">Telnr</span>
-                    <input
-                      name="showPhone"
-                      type="checkbox"
-                      checked={adminSectionVisibility.showPhone}
-                      onChange={handleSectionVisibilityChange}
-                    />
-                  </label>
-                  <label className="field checkbox-field">
-                    <span className="field-label">Organisation</span>
-                    <input
-                      name="showOrganization"
-                      type="checkbox"
-                      checked={adminSectionVisibility.showOrganization}
-                      onChange={handleSectionVisibilityChange}
-                    />
-                  </label>
-                  <label className="field checkbox-field">
-                    <span className="field-label">Rabattkod</span>
-                    <input
-                      name="showDiscountCode"
-                      type="checkbox"
-                      checked={adminSectionVisibility.showDiscountCode}
-                      onChange={handleSectionVisibilityChange}
-                    />
-                  </label>
-                </div>
-              </div>
-              <div className="section">
                 <h2>Formulärfält</h2>
+                <p className="muted" style={{ marginTop: 0 }}>
+                  Här kan du slå på/av standardfält (namn, e-post m.m.) och hantera egna fält.
+                </p>
                 <form className="admin-form" onSubmit={handleCustomFieldSubmit}>
                   <label className="field">
                     <span className="field-label">Fältnamn</span>
@@ -7184,6 +7245,7 @@ const AdminPage = () => {
                       value={customFieldForm.label}
                       onChange={handleCustomFieldFormChange}
                       required
+                      disabled={customFieldForm.fieldType === "linebreak"}
                     />
                   </label>
                   <label className="field">
@@ -7193,9 +7255,11 @@ const AdminPage = () => {
                       value={customFieldForm.fieldType}
                       onChange={handleCustomFieldFormChange}
                     >
-                      <option value="text">Textfält</option>
-                      <option value="textarea">Större textruta</option>
+                      <option value="text">Liten textbox</option>
+                      <option value="textarea">Större textbox</option>
                       <option value="checkbox">Checkbox</option>
+                      <option value="paragraph">Informations text</option>
+                      <option value="linebreak">Radbrytning (ny rad)</option>
                     </select>
                   </label>
                   <label className="field checkbox-field">
@@ -7205,6 +7269,7 @@ const AdminPage = () => {
                       type="checkbox"
                       checked={customFieldForm.required}
                       onChange={handleCustomFieldFormChange}
+                      disabled={customFieldForm.fieldType === "paragraph" || customFieldForm.fieldType === "linebreak"}
                     />
                   </label>
                   <div className="admin-actions">
@@ -7213,46 +7278,110 @@ const AdminPage = () => {
                     </button>
                   </div>
                 </form>
-                {customFieldsAdmin.length > 0 ? (
-                  <div className="table-wrap">
-                    <table className="table">
-                      <thead>
-                        <tr>
-                          <th>Fältnamn</th>
-                          <th>Typ</th>
-                          <th>Obligatoriskt</th>
-                          <th></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {customFieldsAdmin.map((field) => (
-                          <tr key={field.id}>
-                            <td>{field.label}</td>
-                            <td>
-                              {field.field_type === "checkbox"
-                                ? "Checkbox"
-                                : field.field_type === "textarea"
-                                ? "Större textruta"
-                                : "Textfält"}
-                            </td>
-                            <td>{field.is_required ? "Ja" : "Nej"}</td>
-                            <td>
-                              <button
-                                type="button"
-                                className="icon-button danger"
-                                onClick={() => handleCustomFieldDelete(field)}
+                <div className="table-wrap">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th></th>
+                        <th>Fältnamn</th>
+                        <th>Typ</th>
+                        <th>Visa</th>
+                        <th>Obligatoriskt</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {adminMergedFormFieldOrder.map((itemKey) => {
+                        const isCustom = String(itemKey).startsWith("custom:");
+                        const base = BASE_FORM_ITEMS.find((b) => b.key === itemKey);
+                        const customId = isCustom ? String(itemKey).slice("custom:".length) : null;
+                        const field = isCustom
+                          ? customFieldsAdmin.find((f) => String(f.id) === String(customId))
+                          : null;
+                        if (!base && !field) {
+                          return null;
+                        }
+                        return (
+                          <tr
+                            key={String(itemKey)}
+                            onDragOver={(event) => event.preventDefault()}
+                            onDrop={() => {
+                              if (!draggingFormItemKey) return;
+                              moveFormFieldItem(draggingFormItemKey, itemKey);
+                            }}
+                          >
+                            <td style={{ width: "2.25rem" }}>
+                              <span
+                                className="drag-handle"
+                                role="button"
+                                tabIndex={0}
+                                aria-label="Dra för att ändra ordning"
+                                draggable
+                                onDragStart={() => setDraggingFormItemKey(itemKey)}
+                                onDragEnd={() => setDraggingFormItemKey(null)}
                               >
-                                Ta bort
-                              </button>
+                                ≡
+                              </span>
+                            </td>
+                            <td>{base ? base.label : field?.label}</td>
+                            <td>
+                              {base
+                                ? "Standardfält"
+                                : field?.field_type === "checkbox"
+                                ? "Checkbox"
+                                : field?.field_type === "textarea"
+                                ? "Större textbox"
+                                : field?.field_type === "paragraph"
+                                ? "Informations text"
+                                : field?.field_type === "linebreak"
+                                ? "Radbrytning"
+                                : "Liten textbox"}
+                            </td>
+                            <td>
+                              {base ? (
+                                base.canHide === false ? (
+                                  <span className="muted">Alltid</span>
+                                ) : (
+                                  <input
+                                    type="checkbox"
+                                    checked={adminSectionVisibility[base.visibilityKey] !== false}
+                                    onChange={(e) =>
+                                      handleSectionVisibilityChange({
+                                        target: {
+                                          name: base.visibilityKey,
+                                          checked: e.target.checked
+                                        }
+                                      })
+                                    }
+                                  />
+                                )
+                              ) : (
+                                "–"
+                              )}
+                            </td>
+                            <td>{base ? "Ja" : field?.is_required ? "Ja" : "Nej"}</td>
+                            <td>
+                              {base ? null : (
+                                <button
+                                  type="button"
+                                  className="icon-button danger"
+                                  onClick={() => handleCustomFieldDelete(field)}
+                                >
+                                  Ta bort
+                                </button>
+                              )}
                             </td>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <p className="muted">Inga extra fält ännu.</p>
-                )}
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {customFieldsAdmin.length === 0 ? (
+                  <p className="muted" style={{ marginTop: "0.75rem" }}>
+                    Inga egna fält ännu.
+                  </p>
+                ) : null}
               </div>
               <div className="section">
                 <h2>Biljettpriser</h2>
@@ -7739,6 +7868,7 @@ function App() {
     showTranslate: true,
     showDiscountCode: true
   });
+  const [formFieldOrder, setFormFieldOrder] = useState([]);
   const publicDefaultSectionOrder = ["text", "program", "faq", "form", "speakers", "partners", "place"];
   const [sectionOrder, setSectionOrder] = useState([...publicDefaultSectionOrder]);
   const [programItems, setProgramItems] = useState([]);
@@ -7926,8 +8056,9 @@ function App() {
       showText: data.sections?.showText !== false,
       showSpeakers: data.sections?.showSpeakers !== false,
       showPartners: data.sections?.showPartners !== false,
-      showName: data.sections?.showName !== false,
-      showEmail: data.sections?.showEmail !== false,
+      // För- och Efternamn & Email ska alltid vara på även publikt
+      showName: true,
+      showEmail: true,
       showPhone: data.sections?.showPhone !== false,
       showCity: data.sections?.showCity !== false,
       showOrganization: data.sections?.showOrganization !== false,
@@ -7948,6 +8079,7 @@ function App() {
       faq: data.sections?.sectionLabelFaq ?? ""
     });
     setFaqText(data.sections?.faqText || "");
+    setFormFieldOrder(Array.isArray(data.sections?.formFieldOrder) ? data.sections.formFieldOrder : []);
   };
 
   const loadSpeakers = async (eventId) => {
@@ -8147,6 +8279,9 @@ function App() {
     });
     const emptyCustom = {};
     customFields.forEach((f) => {
+      if (f.field_type === "paragraph" || f.field_type === "linebreak") {
+        return;
+      }
       emptyCustom[f.id] = f.field_type === "checkbox" ? false : "";
     });
     setCustomFieldValues(emptyCustom);
@@ -8191,13 +8326,47 @@ function App() {
       terms: true,
       priceName: selectedPrice ? selectedPrice.name : "Anmälan",
       priceAmount: selectedPrice ? selectedPrice.amount : 0,
-      customFields: customFields.map((field) => ({
-        id: field.id,
-        value: customFieldValues[field.id]
-      }))
+      customFields: customFields
+        .map((field) => ({
+          id: field.id,
+          value: customFieldValues[field.id]
+        }))
+        .filter((entry) => {
+          const field = customFields.find((f) => String(f.id) === String(entry.id));
+          return field?.field_type !== "paragraph" && field?.field_type !== "linebreak";
+        })
     };
     setBookingCart((prev) => [...prev, payload]);
     resetBookingForm();
+  };
+
+  const getMergedPublicFormFieldOrder = () => {
+    const baseKeys = ["name", "email", "city", "phone", "organization", "discountCode"];
+    const customKeys = customFields.map((f) => `custom:${f.id}`);
+    const normalize = (v) => String(v || "").trim();
+    const isValid = (k) => baseKeys.includes(k) || k.startsWith("custom:") || k === "custom";
+    const initial = Array.isArray(formFieldOrder) && formFieldOrder.length > 0 ? formFieldOrder.map(normalize) : [];
+    const filtered = initial.filter(isValid);
+    const expanded = [];
+    filtered.forEach((k) => {
+      if (k === "custom") expanded.push(...customKeys);
+      else expanded.push(k);
+    });
+    const present = new Set(expanded);
+    baseKeys.forEach((k) => {
+      if (!present.has(k)) {
+        expanded.push(k);
+        present.add(k);
+      }
+    });
+    customKeys.forEach((k) => {
+      if (!present.has(k)) {
+        expanded.push(k);
+        present.add(k);
+      }
+    });
+    const customSet = new Set(customKeys);
+    return expanded.filter((k) => (k.startsWith("custom:") ? customSet.has(k) : true));
   };
 
   const handleApplyDiscountCode = async () => {
@@ -8461,117 +8630,204 @@ function App() {
             <div className="section" key="form">
               <h2>Anmäl dig här</h2>
               <form className="form" onSubmit={handleAddToCart} id="booking-form">
-          {sectionVisibility.showName ? (
-            <label className="field">
-              <span className="field-label">Förnamn</span>
-              <input
-                name="firstName"
-                type="text"
-                value={form.firstName}
-                onChange={handleChange}
-                required
-              />
-            </label>
-          ) : null}
-          {sectionVisibility.showName ? (
-            <label className="field">
-              <span className="field-label">Efternamn</span>
-              <input
-                name="lastName"
-                type="text"
-                value={form.lastName}
-                onChange={handleChange}
-              />
-            </label>
-          ) : null}
-          {sectionVisibility.showEmail ? (
-            <label className="field">
-              <span className="field-label">Email</span>
-              <input
-                name="email"
-                type="email"
-                value={form.email}
-                onChange={handleChange}
-                required
-              />
-            </label>
-          ) : null}
-          {sectionVisibility.showCity ? (
-            <label className="field">
-              <span className="field-label">Ort</span>
-              <input
-                name="city"
-                type="text"
-                value={form.city}
-                onChange={handleChange}
-                required
-              />
-            </label>
-          ) : null}
-          {sectionVisibility.showPhone ? (
-            <label className="field">
-              <span className="field-label">Telnr</span>
-              <input
-                name="phone"
-                type="tel"
-                value={form.phone}
-                onChange={handleChange}
-                required
-              />
-            </label>
-          ) : null}
-          {sectionVisibility.showOrganization ? (
-            <label className="field">
-              <span className="field-label">Organisation</span>
-              <input
-                name="organization"
-                type="text"
-                value={form.organization}
-                onChange={handleChange}
-                required
-              />
-            </label>
-          ) : null}
-          {customFields.map((field) =>
-            field.field_type === "checkbox" ? (
-              <label className="field checkbox-field" key={field.id}>
-                <span className="field-label">{field.label}</span>
-                <input
-                  type="checkbox"
-                  checked={Boolean(customFieldValues[field.id])}
-                  onChange={(event) =>
-                    handleCustomFieldChange(field.id, field.field_type, event.target.checked)
-                  }
-                  required={field.is_required}
-                />
-              </label>
-            ) : field.field_type === "textarea" ? (
-              <label className="field" key={field.id}>
-                <span className="field-label">{field.label}</span>
-                <textarea
-                  rows="3"
-                  value={customFieldValues[field.id] ?? ""}
-                  onChange={(event) =>
-                    handleCustomFieldChange(field.id, field.field_type, event.target.value)
-                  }
-                  required={field.is_required}
-                ></textarea>
-              </label>
-            ) : (
-              <label className="field" key={field.id}>
-                <span className="field-label">{field.label}</span>
-                <input
-                  type="text"
-                  value={customFieldValues[field.id] ?? ""}
-                  onChange={(event) =>
-                    handleCustomFieldChange(field.id, field.field_type, event.target.value)
-                  }
-                  required={field.is_required}
-                />
-              </label>
-            )
-          )}
-          <label className="field checkbox-field">
+          {(() => {
+            const order = getMergedPublicFormFieldOrder();
+            const customMap = new Map(customFields.map((f) => [String(f.id), f]));
+            const renderDiscount = () =>
+              sectionVisibility.showDiscountCode && prices.length > 0 ? (
+                <div className="field discount-field">
+                  <span className="field-label">Kod</span>
+                  <div className="field-with-action">
+                    <input
+                      name="discountCode"
+                      type="text"
+                      value={form.discountCode}
+                      onChange={handleChange}
+                      placeholder="Ange kod"
+                    />
+                    <button
+                      type="button"
+                      className="button button-outline button-small"
+                      onClick={handleApplyDiscountCode}
+                    >
+                      Använd kod
+                    </button>
+                  </div>
+                  {cartDiscountCode ? (
+                    <p className="muted">
+                      Rabattkod: <strong>{cartDiscountCode}</strong>{" "}
+                      <button
+                        type="button"
+                        className="icon-button-clear"
+                        onClick={() => {
+                          setCartDiscountCode("");
+                          setCartDiscountPercent(0);
+                        }}
+                      >
+                        <span aria-hidden="true">✕</span>
+                        <span className="sr-only">Ta bort rabattkod</span>
+                      </button>
+                    </p>
+                  ) : null}
+                </div>
+              ) : null;
+
+            return order.map((k) => {
+              if (k === "name") {
+                if (!sectionVisibility.showName) return null;
+                return (
+                  <div className="form-name-row" key="name">
+                    <label className="field">
+                      <span className="field-label">Förnamn</span>
+                      <input
+                        name="firstName"
+                        type="text"
+                        value={form.firstName}
+                        onChange={handleChange}
+                        required
+                      />
+                    </label>
+                    <label className="field">
+                      <span className="field-label">Efternamn</span>
+                      <input
+                        name="lastName"
+                        type="text"
+                        value={form.lastName}
+                        onChange={handleChange}
+                      />
+                    </label>
+                  </div>
+                );
+              }
+              if (k === "email") {
+                if (!sectionVisibility.showEmail) return null;
+                return (
+                  <label className="field" key="email">
+                    <span className="field-label">Email</span>
+                    <input
+                      name="email"
+                      type="email"
+                      value={form.email}
+                      onChange={handleChange}
+                      required
+                    />
+                  </label>
+                );
+              }
+              if (k === "city") {
+                if (!sectionVisibility.showCity) return null;
+                return (
+                  <label className="field" key="city">
+                    <span className="field-label">Ort</span>
+                    <input
+                      name="city"
+                      type="text"
+                      value={form.city}
+                      onChange={handleChange}
+                      required
+                    />
+                  </label>
+                );
+              }
+              if (k === "phone") {
+                if (!sectionVisibility.showPhone) return null;
+                return (
+                  <label className="field" key="phone">
+                    <span className="field-label">Telnr</span>
+                    <input
+                      name="phone"
+                      type="tel"
+                      value={form.phone}
+                      onChange={handleChange}
+                      required
+                    />
+                  </label>
+                );
+              }
+              if (k === "organization") {
+                if (!sectionVisibility.showOrganization) return null;
+                return (
+                  <label className="field" key="organization">
+                    <span className="field-label">Organisation</span>
+                    <input
+                      name="organization"
+                      type="text"
+                      value={form.organization}
+                      onChange={handleChange}
+                      required
+                    />
+                  </label>
+                );
+              }
+              if (k === "discountCode") {
+                return <div key="discountCode">{renderDiscount()}</div>;
+              }
+              if (String(k).startsWith("custom:")) {
+                const id = String(k).slice("custom:".length);
+                const field = customMap.get(id);
+                if (!field) return null;
+                if (field.field_type === "linebreak") {
+                  return <div className="form-linebreak" key={field.id} aria-hidden="true" />;
+                }
+                if (field.field_type === "paragraph") {
+                  return (
+                    <div className="form-static-text" key={field.id}>
+                      {(field.label || "").split("\n").map((line, idx) => (
+                        <p key={idx} style={{ margin: idx === 0 ? 0 : "0.5rem 0 0" }}>
+                          {line}
+                        </p>
+                      ))}
+                    </div>
+                  );
+                }
+                if (field.field_type === "checkbox") {
+                  return (
+                    <label className="field checkbox-field" key={field.id}>
+                      <span className="field-label">{field.label}</span>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(customFieldValues[field.id])}
+                        onChange={(event) =>
+                          handleCustomFieldChange(field.id, field.field_type, event.target.checked)
+                        }
+                        required={field.is_required}
+                      />
+                    </label>
+                  );
+                }
+                if (field.field_type === "textarea") {
+                  return (
+                    <label className="field" key={field.id}>
+                      <span className="field-label">{field.label}</span>
+                      <textarea
+                        rows="3"
+                        value={customFieldValues[field.id] ?? ""}
+                        onChange={(event) =>
+                          handleCustomFieldChange(field.id, field.field_type, event.target.value)
+                        }
+                        required={field.is_required}
+                      ></textarea>
+                    </label>
+                  );
+                }
+                return (
+                  <label className="field" key={field.id}>
+                    <span className="field-label">{field.label}</span>
+                    <input
+                      type="text"
+                      value={customFieldValues[field.id] ?? ""}
+                      onChange={(event) =>
+                        handleCustomFieldChange(field.id, field.field_type, event.target.value)
+                      }
+                      required={field.is_required}
+                    />
+                  </label>
+                );
+              }
+              return null;
+            });
+          })()}
+          <label className="field checkbox-field form-terms">
             <span className="field-label">
               Jag godkänner villkor{" "}
               <button
@@ -8612,43 +8868,6 @@ function App() {
                   </button>
                 ))}
               </div>
-            </div>
-          ) : null}
-          {sectionVisibility.showDiscountCode && prices.length > 0 ? (
-            <div className="field discount-field">
-              <span className="field-label">Kod</span>
-              <div className="field-with-action">
-                <input
-                  name="discountCode"
-                  type="text"
-                  value={form.discountCode}
-                  onChange={handleChange}
-                  placeholder="Ange kod"
-                />
-                <button
-                  type="button"
-                  className="button button-outline button-small"
-                  onClick={handleApplyDiscountCode}
-                >
-                  Använd kod
-                </button>
-              </div>
-              {cartDiscountCode ? (
-                <p className="muted">
-                  Rabattkod: <strong>{cartDiscountCode}</strong>{" "}
-                  <button
-                    type="button"
-                    className="icon-button-clear"
-                    onClick={() => {
-                      setCartDiscountCode("");
-                      setCartDiscountPercent(0);
-                    }}
-                  >
-                    <span aria-hidden="true">✕</span>
-                    <span className="sr-only">Ta bort rabattkod</span>
-                  </button>
-                </p>
-              ) : null}
             </div>
           ) : null}
               <button

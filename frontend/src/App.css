@@ -423,6 +423,18 @@ h2 {
   user-select: none;
 }
 
+.form-static-text {
+  padding: 0.75rem 1rem;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--text);
+}
+
+.form-linebreak {
+  height: 0.75rem;
+}
+
 .program-admin-item:active .drag-handle {
   cursor: grabbing;
   opacity: 1;
@@ -797,7 +809,21 @@ h2 {
 
 .form {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 1rem;
+  align-items: end;
+}
+
+.form .form-linebreak,
+.form .form-static-text,
+.form .form-terms {
+  grid-column: 1 / -1;
+}
+
+.form-name-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
   gap: 1rem;
   align-items: end;
 }
@@ -813,6 +839,15 @@ h2 {
 
 .form .button.full-width {
   grid-column: 1 / -1;
+}
+
+@media (max-width: 720px) {
+  .form {
+    grid-template-columns: 1fr;
+  }
+  .form-name-row {
+    grid-template-columns: 1fr;
+  }
 }
 
 .booking-cart-list {
@@ -1033,8 +1068,24 @@ h2 {
   background: #fffdf3;
 }
 
+.field select {
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 0.95rem;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  background: #fffdf3;
+  font-family: inherit;
+}
+
 .field input.field-readonly,
 .field input:disabled {
+  background: var(--border);
+  color: var(--muted);
+  cursor: default;
+}
+
+.field select:disabled {
   background: var(--border);
   color: var(--muted);
   cursor: default;

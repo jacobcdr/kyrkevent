@@ -29,7 +29,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "";
 const MOLLIE_API_KEY = process.env.MOLLIE_API_KEY || "";
 const MOLLIE_AMOUNT = process.env.MOLLIE_AMOUNT || "";
 const MOLLIE_CURRENCY = process.env.MOLLIE_CURRENCY || "SEK";
-const BAS_PRICE_DEFAULT = 129;
+const BAS_PRICE_DEFAULT = 95;
 const BAS_PRICE_PER_EVENT = Math.max(1, Number(process.env.BAS_PRICE_PER_EVENT || String(BAS_PRICE_DEFAULT)) || BAS_PRICE_DEFAULT);
 const SERVICE_FEE_AMOUNT =
   Math.max(0, Number(process.env.SERVICE_FEE_AMOUNT || "10") || 0);
@@ -282,10 +282,73 @@ function parseSectionOrder(raw) {
   }
 }
 
+const DEFAULT_FORM_FIELD_ORDER = ["name", "email", "city", "phone", "organization", "custom", "discountCode"];
+const VALID_FORM_FIELD_BASE_KEYS = new Set(["name", "email", "city", "phone", "organization", "discountCode"]);
+
+function parseFormFieldOrder(raw, customFieldIds = []) {
+  const customKeys = customFieldIds.map((id) => `custom:${id}`);
+  const normalize = (k) => String(k || "").trim();
+  const onlyValid = (key) => {
+    if (VALID_FORM_FIELD_BASE_KEYS.has(key)) return true;
+    if (key === "custom") return true;
+    if (key.startsWith("custom:")) return true;
+    return false;
+  };
+
+  let arr;
+  try {
+    arr = raw ? (Array.isArray(raw) ? raw : JSON.parse(raw)) : null;
+  } catch {
+    arr = null;
+  }
+
+  const baseDefault = [...DEFAULT_FORM_FIELD_ORDER];
+  const initial = Array.isArray(arr) ? arr.map(normalize) : baseDefault;
+  const filtered = initial.filter(onlyValid);
+
+  // Expand "custom" placeholder to concrete custom ids (in order)
+  const expanded = [];
+  filtered.forEach((k) => {
+    if (k === "custom") {
+      expanded.push(...customKeys);
+    } else {
+      expanded.push(k);
+    }
+  });
+
+  // Ensure all base keys exist (keep relative order of expanded)
+  const present = new Set(expanded);
+  const withMissingBase = [...expanded];
+  baseDefault.forEach((k) => {
+    if (k === "custom") return;
+    if (!present.has(k)) {
+      withMissingBase.push(k);
+      present.add(k);
+    }
+  });
+
+  // Ensure all custom fields exist
+  customKeys.forEach((k) => {
+    if (!present.has(k)) {
+      withMissingBase.push(k);
+      present.add(k);
+    }
+  });
+
+  // Drop custom:* ids that no longer exist
+  const customSet = new Set(customKeys);
+  return withMissingBase.filter((k) => {
+    if (k.startsWith("custom:")) return customSet.has(k);
+    return true;
+  });
+}
+
 const normalizeCustomFieldType = (value) => {
   const type = String(value || "").trim().toLowerCase();
   if (type === "checkbox") return "checkbox";
   if (type === "textarea") return "textarea";
+  if (type === "paragraph" || type === "brödtext" || type === "brodtext") return "paragraph";
+  if (type === "linebreak" || type === "radbrytning") return "linebreak";
   return "text";
 };
 
@@ -697,11 +760,18 @@ app.get("/sections", async (req, res) => {
       res.status(400).json({ ok: false, error: "Missing event" });
       return;
     }
+    const customIdsResult = await pool.query(
+      "SELECT id FROM event_custom_fields WHERE event_id = $1 ORDER BY position ASC, id ASC",
+      [eventId]
+    );
+    const customIds = (customIdsResult.rows || [])
+      .map((r) => Number(r.id))
+      .filter(Number.isFinite);
     const result = await pool.query(
       `
         SELECT show_program, show_place, show_text, show_speakers, show_partners,
                show_name, show_email, show_phone, show_city, show_organization, show_translate, show_discount_code,
-               show_faq, section_order,
+               show_faq, section_order, form_field_order,
                section_label_program, section_label_speakers, section_label_partners, section_label_faq,
                faq_text
         FROM event_sections
@@ -710,7 +780,14 @@ app.get("/sections", async (req, res) => {
       [eventId]
     );
     if (result.rowCount === 0) {
-      res.json({ ok: true, sections: { ...defaultSectionVisibility, sectionOrder: DEFAULT_SECTION_ORDER } });
+      res.json({
+        ok: true,
+        sections: {
+          ...defaultSectionVisibility,
+          sectionOrder: DEFAULT_SECTION_ORDER,
+          formFieldOrder: parseFormFieldOrder(null, customIds)
+        }
+      });
       return;
     }
     const row = result.rows[0];
@@ -731,6 +808,7 @@ app.get("/sections", async (req, res) => {
         showDiscountCode: row.show_discount_code,
         showFaq: row.show_faq,
         sectionOrder: parseSectionOrder(row.section_order),
+        formFieldOrder: parseFormFieldOrder(row.form_field_order, customIds),
         sectionLabelProgram: row.section_label_program ?? "",
         sectionLabelSpeakers: row.section_label_speakers ?? "",
         sectionLabelPartners: row.section_label_partners ?? "",
@@ -933,6 +1011,9 @@ const sanitizeCustomFields = (customFields, allowedFields) => {
       if (!allowed) {
         return null;
       }
+      if (allowed.field_type === "paragraph" || allowed.field_type === "linebreak") {
+        return null;
+      }
       if (allowed.field_type === "checkbox") {
         return { id, value: Boolean(entry?.value) };
       }
@@ -945,6 +1026,7 @@ const validateCustomFields = (customFields, allowedFields) => {
   const values = new Map(customFields.map((entry) => [String(entry.id), entry.value]));
   for (const field of allowedFields) {
     if (!field.is_required) continue;
+    if (field.field_type === "paragraph" || field.field_type === "linebreak") continue;
     const value = values.get(String(field.id));
     if (field.field_type === "checkbox") {
       if (value !== true) {
@@ -3585,11 +3667,18 @@ app.get("/admin/sections", requireAdmin, async (req, res) => {
     if (!eventId) {
       return;
     }
+    const customIdsResult = await pool.query(
+      "SELECT id FROM event_custom_fields WHERE event_id = $1 ORDER BY position ASC, id ASC",
+      [eventId]
+    );
+    const customIds = (customIdsResult.rows || [])
+      .map((r) => Number(r.id))
+      .filter(Number.isFinite);
     const result = await pool.query(
       `
         SELECT show_program, show_place, show_text, show_speakers, show_partners,
                show_name, show_email, show_phone, show_city, show_organization, show_translate, show_discount_code,
-               show_faq, section_order,
+               show_faq, section_order, form_field_order,
                section_label_program, section_label_speakers, section_label_partners, section_label_faq,
                faq_text
         FROM event_sections
@@ -3598,7 +3687,14 @@ app.get("/admin/sections", requireAdmin, async (req, res) => {
       [eventId]
     );
     if (result.rowCount === 0) {
-      res.json({ ok: true, sections: { ...defaultSectionVisibility, sectionOrder: DEFAULT_SECTION_ORDER } });
+      res.json({
+        ok: true,
+        sections: {
+          ...defaultSectionVisibility,
+          sectionOrder: DEFAULT_SECTION_ORDER,
+          formFieldOrder: parseFormFieldOrder(null, customIds)
+        }
+      });
       return;
     }
     const row = result.rows[0];
@@ -3619,6 +3715,7 @@ app.get("/admin/sections", requireAdmin, async (req, res) => {
         showDiscountCode: row.show_discount_code,
         showFaq: row.show_faq,
         sectionOrder: parseSectionOrder(row.section_order),
+        formFieldOrder: parseFormFieldOrder(row.form_field_order, customIds),
         sectionLabelProgram: row.section_label_program ?? "",
         sectionLabelSpeakers: row.section_label_speakers ?? "",
         sectionLabelPartners: row.section_label_partners ?? "",
@@ -3648,6 +3745,7 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
     showDiscountCode,
     showFaq,
     sectionOrder,
+    formFieldOrder,
     sectionLabelProgram,
     sectionLabelSpeakers,
     sectionLabelPartners,
@@ -3659,6 +3757,14 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
     return;
   }
   const orderJson = JSON.stringify(parseSectionOrder(sectionOrder));
+  const customIdsResult = await pool.query(
+    "SELECT id FROM event_custom_fields WHERE event_id = $1 ORDER BY position ASC, id ASC",
+    [parsedEventId]
+  );
+  const customIds = (customIdsResult.rows || [])
+    .map((r) => Number(r.id))
+    .filter(Number.isFinite);
+  const formOrderJson = JSON.stringify(parseFormFieldOrder(formFieldOrder, customIds));
   const labelProgram = typeof sectionLabelProgram === "string" ? sectionLabelProgram.trim() : "";
   const labelSpeakers = typeof sectionLabelSpeakers === "string" ? sectionLabelSpeakers.trim() : "";
   const labelPartners = typeof sectionLabelPartners === "string" ? sectionLabelPartners.trim() : "";
@@ -3670,9 +3776,9 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
         INSERT INTO event_sections
           (event_id, show_program, show_place, show_text, show_speakers, show_partners,
            show_name, show_email, show_phone, show_city, show_organization, show_translate, show_discount_code, show_faq,
-           section_order, section_label_program, section_label_speakers, section_label_partners, section_label_faq, faq_text)
+           section_order, form_field_order, section_label_program, section_label_speakers, section_label_partners, section_label_faq, faq_text)
         VALUES
-          ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+          ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
         ON CONFLICT (event_id) DO UPDATE SET
           show_program = EXCLUDED.show_program,
           show_place = EXCLUDED.show_place,
@@ -3688,6 +3794,7 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
           show_discount_code = EXCLUDED.show_discount_code,
           show_faq = EXCLUDED.show_faq,
           section_order = EXCLUDED.section_order,
+          form_field_order = EXCLUDED.form_field_order,
           section_label_program = EXCLUDED.section_label_program,
           section_label_speakers = EXCLUDED.section_label_speakers,
           section_label_partners = EXCLUDED.section_label_partners,
@@ -3695,7 +3802,7 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
           faq_text = EXCLUDED.faq_text
         RETURNING show_program, show_place, show_text, show_speakers, show_partners,
                   show_name, show_email, show_phone, show_city, show_organization, show_translate, show_discount_code, show_faq,
-                  section_order, section_label_program, section_label_speakers, section_label_partners, section_label_faq, faq_text
+                  section_order, form_field_order, section_label_program, section_label_speakers, section_label_partners, section_label_faq, faq_text
       `,
       [
         parsedEventId,
@@ -3713,6 +3820,7 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
         showDiscountCode !== false,
         showFaq !== false,
         orderJson,
+        formOrderJson,
         labelProgram,
         labelSpeakers,
         labelPartners,
@@ -3738,6 +3846,7 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
         showDiscountCode: row.show_discount_code,
         showFaq: row.show_faq,
         sectionOrder: parseSectionOrder(row.section_order),
+        formFieldOrder: parseFormFieldOrder(row.form_field_order, customIds),
         sectionLabelProgram: row.section_label_program ?? "",
         sectionLabelSpeakers: row.section_label_speakers ?? "",
         sectionLabelPartners: row.section_label_partners ?? "",
@@ -3777,11 +3886,17 @@ app.post("/admin/custom-fields", requireAdmin, async (req, res) => {
   if (!parsedEventId) {
     return;
   }
-  if (!label || !String(label).trim()) {
+  const normalizedType = normalizeCustomFieldType(fieldType);
+  const normalizedLabel =
+    normalizedType === "linebreak"
+      ? "Radbrytning"
+      : label != null
+        ? String(label).trim()
+        : "";
+  if (!normalizedLabel) {
     res.status(400).json({ ok: false, error: "Missing label" });
     return;
   }
-  const normalizedType = normalizeCustomFieldType(fieldType);
   try {
     const result = await pool.query(
       `
@@ -3792,11 +3907,114 @@ app.post("/admin/custom-fields", requireAdmin, async (req, res) => {
         SELECT $1, $2, $3, $4, pos FROM next_pos
         RETURNING id, label, field_type, is_required
       `,
-      [parsedEventId, String(label).trim(), normalizedType, required === true]
+      [
+        parsedEventId,
+        normalizedLabel,
+        normalizedType,
+        normalizedType === "paragraph" || normalizedType === "linebreak" ? false : required === true
+      ]
     );
     res.status(201).json({ ok: true, field: result.rows[0] });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to create field" });
+  }
+});
+
+app.patch("/admin/custom-fields/reorder", requireAdmin, async (req, res) => {
+  const { eventId, orderedIds } = req.body || {};
+  const parsedEventId = await ensureEventOwnership(eventId, req.userId, res);
+  if (!parsedEventId) {
+    return;
+  }
+  const ids = Array.isArray(orderedIds)
+    ? orderedIds.map((id) => Number(id)).filter(Number.isFinite)
+    : [];
+  const uniqueIds = Array.from(new Set(ids));
+  if (uniqueIds.length === 0) {
+    return res.status(400).json({ ok: false, error: "Missing ids" });
+  }
+
+  try {
+    const owned = await pool.query(
+      "SELECT id FROM event_custom_fields WHERE event_id = $1 AND id = ANY($2::int[])",
+      [parsedEventId, uniqueIds]
+    );
+    if (owned.rowCount !== uniqueIds.length) {
+      return res.status(400).json({ ok: false, error: "Invalid ids for event" });
+    }
+
+    await pool.query(
+      `
+        WITH ordered AS (
+          SELECT unnest($2::int[]) AS id,
+                 generate_subscripts($2::int[], 1) AS pos
+        )
+        UPDATE event_custom_fields f
+        SET position = ordered.pos
+        FROM ordered
+        WHERE f.event_id = $1 AND f.id = ordered.id
+      `,
+      [parsedEventId, uniqueIds]
+    );
+
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Failed to reorder fields" });
+  }
+});
+
+app.patch("/admin/form-fields/order", requireAdmin, async (req, res) => {
+  const { eventId, order } = req.body || {};
+  const parsedEventId = await ensureEventOwnership(eventId, req.userId, res);
+  if (!parsedEventId) {
+    return;
+  }
+  const requested = Array.isArray(order) ? order : [];
+
+  try {
+    const idsResult = await pool.query(
+      "SELECT id FROM event_custom_fields WHERE event_id = $1 ORDER BY position ASC, id ASC",
+      [parsedEventId]
+    );
+    const customIds = (idsResult.rows || [])
+      .map((r) => Number(r.id))
+      .filter(Number.isFinite);
+    const normalizedOrder = parseFormFieldOrder(requested, customIds);
+
+    // Save order for full form rendering
+    await pool.query(
+      `
+        INSERT INTO event_sections (event_id, form_field_order)
+        VALUES ($1, $2)
+        ON CONFLICT (event_id) DO UPDATE SET form_field_order = EXCLUDED.form_field_order
+      `,
+      [parsedEventId, JSON.stringify(normalizedOrder)]
+    );
+
+    // Also update custom field positions to match their relative order
+    const orderedCustomIds = normalizedOrder
+      .filter((k) => String(k).startsWith("custom:"))
+      .map((k) => Number(String(k).slice("custom:".length)))
+      .filter(Number.isFinite);
+    if (orderedCustomIds.length > 0) {
+      await pool.query(
+        `
+          WITH ordered AS (
+            SELECT unnest($2::int[]) AS id,
+                   generate_subscripts($2::int[], 1) AS pos
+          )
+          UPDATE event_custom_fields f
+          SET position = ordered.pos
+          FROM ordered
+          WHERE f.event_id = $1 AND f.id = ordered.id
+        `,
+        [parsedEventId, orderedCustomIds]
+      );
+    }
+
+    res.json({ ok: true, formFieldOrder: normalizedOrder });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Failed to update form field order" });
   }
 });
 
@@ -5174,6 +5392,7 @@ const ensureBookingsTable = async () => {
       show_discount_code BOOLEAN NOT NULL DEFAULT TRUE,
       show_faq BOOLEAN NOT NULL DEFAULT FALSE,
       section_order TEXT,
+      form_field_order TEXT,
       section_label_program TEXT DEFAULT '',
       section_label_speakers TEXT DEFAULT '',
       section_label_partners TEXT DEFAULT '',
@@ -5192,6 +5411,7 @@ const ensureBookingsTable = async () => {
       ADD COLUMN IF NOT EXISTS show_discount_code BOOLEAN NOT NULL DEFAULT TRUE,
       ADD COLUMN IF NOT EXISTS show_faq BOOLEAN NOT NULL DEFAULT FALSE,
       ADD COLUMN IF NOT EXISTS section_order TEXT,
+      ADD COLUMN IF NOT EXISTS form_field_order TEXT,
       ADD COLUMN IF NOT EXISTS section_label_program TEXT DEFAULT '',
       ADD COLUMN IF NOT EXISTS section_label_speakers TEXT DEFAULT '',
       ADD COLUMN IF NOT EXISTS section_label_partners TEXT DEFAULT '',
