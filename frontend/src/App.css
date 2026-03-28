@@ -2179,6 +2179,7 @@ h2 {
 .modal {
   width: min(520px, 100% - 2rem);
   max-height: 80vh;
+  min-height: 0;
   background: var(--card);
   border-radius: 16px;
   border: 1px solid var(--border);
@@ -2188,6 +2189,7 @@ h2 {
 }
 
 .modal-header {
+  flex-shrink: 0;
   padding: 1rem 1.25rem;
   border-bottom: 1px solid var(--border);
   display: flex;
@@ -2202,10 +2204,17 @@ h2 {
 }
 
 .modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
   padding: 1rem 1.25rem;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .modal-footer {
+  flex-shrink: 0;
   padding: 0.75rem 1.25rem 1rem;
   border-top: 1px solid var(--border);
   display: flex;
