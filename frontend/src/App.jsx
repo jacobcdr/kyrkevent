@@ -8933,7 +8933,7 @@ function App() {
                             }, 0)
                           : baseTotal;
                       const rabattTotal = Math.max(0, baseTotal - discountedTotal);
-                      const serviceFeeCart = discountedTotal > 0 ? 10 : 0;
+                      const serviceFeeCart = discountedTotal > 0 ? 20 : 0;
                       const payableTotal = discountedTotal + serviceFeeCart;
                       return (
                         <>
@@ -8992,6 +8992,23 @@ function App() {
         }
         return null;
       })}
+
+      <footer className="public-host-footer" aria-label="Kyrkevent sidfot">
+        <a
+          href="https://kyrkevent.se"
+          target="_blank"
+          rel="noreferrer"
+          aria-label="Öppna kyrkevent.se"
+        >
+          <img
+            src="/kyrkevent-logo.png"
+            alt="Kyrkevent.se"
+            className="public-host-footer-logo"
+            loading="lazy"
+          />
+        </a>
+        <div className="public-host-footer-text">Sidan hostas av kyrkevent.se</div>
+      </footer>
 
       {showTermsInfo ? (
         <div
