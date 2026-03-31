@@ -32,7 +32,7 @@ const MOLLIE_CURRENCY = process.env.MOLLIE_CURRENCY || "SEK";
 const BAS_PRICE_DEFAULT = 95;
 const BAS_PRICE_PER_EVENT = Math.max(1, Number(process.env.BAS_PRICE_PER_EVENT || String(BAS_PRICE_DEFAULT)) || BAS_PRICE_DEFAULT);
 const SERVICE_FEE_AMOUNT =
-  Math.max(0, Number(process.env.SERVICE_FEE_AMOUNT || "10") || 0);
+  Math.max(0, Number(process.env.SERVICE_FEE_AMOUNT || "15") || 0);
 const FRONTEND_URL = process.env.FRONTEND_URL || "";
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.resolve("uploads");
 const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
