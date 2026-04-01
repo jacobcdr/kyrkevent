@@ -8959,7 +8959,7 @@ function App() {
                             }, 0)
                           : baseTotal;
                       const rabattTotal = Math.max(0, baseTotal - discountedTotal);
-                      const serviceFeeCart = discountedTotal > 0 ? 20 : 0;
+                      const serviceFeeCart = discountedTotal > 0 ? 15 : 0;
                       const payableTotal = discountedTotal + serviceFeeCart;
                       return (
                         <>
