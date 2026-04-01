@@ -690,6 +690,36 @@ app.get("/events/:slug", async (req, res) => {
   }
 });
 
+app.post("/events/:slug/view", async (req, res) => {
+  const { slug } = req.params;
+  if (!slug) {
+    res.status(400).json({ ok: false, error: "Missing slug" });
+    return;
+  }
+  try {
+    const eventResult = await pool.query("SELECT id FROM events WHERE slug = $1", [String(slug).trim()]);
+    if (eventResult.rowCount === 0) {
+      res.status(404).json({ ok: false, error: "Event not found" });
+      return;
+    }
+    const eventId = eventResult.rows[0].id;
+    const result = await pool.query(
+      `
+        INSERT INTO event_page_views (event_id, view_count, updated_at)
+        VALUES ($1, 1, NOW())
+        ON CONFLICT (event_id) DO UPDATE SET
+          view_count = event_page_views.view_count + 1,
+          updated_at = NOW()
+        RETURNING view_count
+      `,
+      [eventId]
+    );
+    res.json({ ok: true, viewCount: result.rows[0]?.view_count ?? null });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Failed to track view" });
+  }
+});
+
 app.get("/bookings", async (req, res) => {
   try {
     const result = await pool.query(
@@ -5247,6 +5277,23 @@ app.get("/admin/bookings/export.xlsx", requireAdmin, async (_req, res) => {
   }
 });
 
+app.get("/admin/event-views", requireAdmin, async (req, res) => {
+  try {
+    const eventId = await ensureEventOwnership(req.query.eventId, req.userId, res);
+    if (!eventId) {
+      return;
+    }
+    const result = await pool.query(
+      "SELECT view_count FROM event_page_views WHERE event_id = $1",
+      [eventId]
+    );
+    const viewCount = result.rowCount > 0 ? Number(result.rows[0].view_count) || 0 : 0;
+    res.json({ ok: true, viewCount });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Failed to load views" });
+  }
+});
+
 const ensureBookingsTable = async () => {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS admin_users (
@@ -5427,6 +5474,14 @@ const ensureBookingsTable = async () => {
       is_required BOOLEAN NOT NULL DEFAULT FALSE,
       position INTEGER NOT NULL DEFAULT 0,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS event_page_views (
+      event_id INTEGER PRIMARY KEY,
+      view_count INTEGER NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
   await pool.query(`

@@ -1178,6 +1178,18 @@ const AdminPage = () => {
     setBookings(data.bookings || []);
   };
 
+  const [adminEventViews, setAdminEventViews] = useState(0);
+  const loadAdminEventViews = async (authToken, eventId) => {
+    const response = await fetch(`${API_BASE}/admin/event-views?eventId=${eventId}`, {
+      headers: { Authorization: `Bearer ${authToken}` }
+    });
+    if (!response.ok) {
+      throw new Error("Admin views fetch failed");
+    }
+    const data = await response.json().catch(() => ({}));
+    setAdminEventViews(Number(data.viewCount) || 0);
+  };
+
   const loadProgramItems = async (eventId) => {
     const response = await fetch(`${API_BASE}/program?eventId=${eventId}`);
     if (!response.ok) {
@@ -1705,6 +1717,7 @@ const AdminPage = () => {
       return;
     }
     loadAdminBookings(token, selectedEventId).catch(() => setBookings([]));
+    loadAdminEventViews(token, selectedEventId).catch(() => setAdminEventViews(0));
     loadAdminPrices(token, selectedEventId).catch(() => setPricesAdmin([]));
     loadAdminDiscounts(token, selectedEventId).catch(() => setDiscounts([]));
     loadProgramItems(selectedEventId).catch(() => setProgramItems([]));
@@ -5922,6 +5935,10 @@ const AdminPage = () => {
                   <span>Totala intäkter</span>
                   <strong>{paidTotalText} SEK</strong>
                 </div>
+                <div className="summary-item">
+                  <span>Besök på eventsidan</span>
+                  <strong>{adminEventViews}</strong>
+                </div>
               </div>
               <div className="admin-actions">
                 <button className="button button-outline" type="button" onClick={handleExportBookings}>
@@ -7999,6 +8016,15 @@ function App() {
       const data = await response.json();
       setEvent(data.event || null);
       setEventError("");
+      try {
+        const guardKey = `__kyrkevent_view_tracked__:${String(eventSlug)}`;
+        if (!window[guardKey]) {
+          window[guardKey] = true;
+          await fetch(`${API_BASE}/events/${eventSlug}/view`, { method: "POST" });
+        }
+      } catch {
+        // ignore tracking errors
+      }
     };
     loadEvent()
       .catch(() => {
