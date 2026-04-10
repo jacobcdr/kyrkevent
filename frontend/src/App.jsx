@@ -8855,13 +8855,13 @@ function App() {
           })()}
           <label className="field checkbox-field form-terms">
             <span className="field-label">
-              Jag godkänner villkor{" "}
+              Jag godkänner {" "}
               <button
                 type="button"
                 className="link-button"
                 onClick={() => setShowTermsInfo(true)}
               >
-                Läs villkor
+                villkor och hantering.
               </button>
             </span>
             <input
@@ -9057,6 +9057,13 @@ function App() {
             </div>
             <div className="terms-toast-body">
               <p>Genom att skicka in min anmälan godkänner jag följande villkor:</p>
+
+              <h4>Betalning och serviceavgift</h4>
+              <p>
+                Vid köp av biljett online kan en serviceavgift tillkomma. Avgiften används för
+                att hantera de digitala tjänsterna kring anmälan och betalning (t.ex. plattform,
+                betalningsflöde och administrativ hantering).
+              </p>
 
               <h4>Ändamål med personuppgiftsbehandling</h4>
               <p>
