@@ -2016,6 +2016,10 @@ const AdminPage = () => {
       });
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
+        if (response.status === 401) {
+          clearAuth();
+          throw new Error("Sessionen har gått ut. Logga in igen.");
+        }
         throw new Error(data.error || "Kunde inte skapa eventet.");
       }
       const data = await response.json();

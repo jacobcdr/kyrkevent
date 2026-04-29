@@ -2108,12 +2108,17 @@ const requireAdmin = (req, res, next) => {
     req.userId = payload?.userId || null;
     req.username = payload?.username || null;
     if (!req.userId) {
+      console.error("[requireAdmin] Token verified but userId missing in payload");
       res.status(401).json({ ok: false, error: "Invalid token" });
       return;
     }
     next();
   } catch (error) {
-    res.status(401).json({ ok: false, error: "Invalid token" });
+    const isExpired = error?.name === "TokenExpiredError";
+    console.error(`[requireAdmin] JWT verification failed: ${error?.name} – ${error?.message}`);
+    res
+      .status(401)
+      .json({ ok: false, error: isExpired ? "Token expired" : "Invalid token" });
   }
 };
 
