@@ -1275,14 +1275,45 @@ const AdminPage = () => {
     localStorage.removeItem("adminToken");
   };
 
+  const refreshToken = async (currentToken) => {
+    try {
+      const response = await fetch(`${API_BASE}/refresh-token`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${currentToken}` }
+      });
+      if (!response.ok) return false;
+      const data = await response.json();
+      if (!data.token) return false;
+      setToken(data.token);
+      localStorage.setItem("adminToken", data.token);
+      return data.token;
+    } catch {
+      return false;
+    }
+  };
+
   const loadAdminEvents = async (authToken) => {
     const response = await fetch(`${API_BASE}/admin/events`, {
       headers: { Authorization: `Bearer ${authToken}` }
     });
     if (response.status === 401) {
-      clearAuth();
-      setError("Sessionen har gått ut. Logga in igen.");
-      throw new Error("Unauthorized");
+      const newToken = await refreshToken(authToken);
+      if (!newToken) {
+        clearAuth();
+        setError("Sessionen har gått ut. Logga in igen.");
+        throw new Error("Unauthorized");
+      }
+      const retryResponse = await fetch(`${API_BASE}/admin/events`, {
+        headers: { Authorization: `Bearer ${newToken}` }
+      });
+      if (!retryResponse.ok) {
+        clearAuth();
+        setError("Sessionen har gått ut. Logga in igen.");
+        throw new Error("Unauthorized");
+      }
+      const retryData = await retryResponse.json();
+      setEvents(retryData.events || []);
+      return;
     }
     if (!response.ok) {
       throw new Error("Events fetch failed");
@@ -2000,27 +2031,46 @@ const AdminPage = () => {
     }
     setError("");
     setEventLoading(true);
+    const requestBody = JSON.stringify({
+      name: eventForm.name.trim(),
+      sourceEventId: selectedEventId ? Number(selectedEventId) : null,
+      startDate: startDate.trim(),
+      endDate: isSingle ? startDate.trim() : endDate.trim()
+    });
     const createEvent = async () => {
-      const response = await fetch(`${API_BASE}/admin/events`, {
+      let activeToken = token;
+      let response = await fetch(`${API_BASE}/admin/events`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
+          Authorization: `Bearer ${activeToken}`
         },
-        body: JSON.stringify({
-          name: eventForm.name.trim(),
-          sourceEventId: selectedEventId ? Number(selectedEventId) : null,
-          startDate: startDate.trim(),
-          endDate: isSingle ? startDate.trim() : endDate.trim()
-        })
+        body: requestBody
       });
+      if (response.status === 401) {
+        const newToken = await refreshToken(activeToken);
+        if (!newToken) {
+          clearAuth();
+          setError("Sessionen har gått ut. Logga in igen.");
+          return;
+        }
+        activeToken = newToken;
+        response = await fetch(`${API_BASE}/admin/events`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${activeToken}`
+          },
+          body: requestBody
+        });
+      }
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
         throw new Error(data.error || "Kunde inte skapa eventet.");
       }
       const data = await response.json();
       setEventForm({ name: "", dateType: "single", singleDate: "", startDate: "", endDate: "" });
-      await loadAdminEvents(token);
+      await loadAdminEvents(activeToken);
       if (data?.event?.id) {
         setSelectedEventId(String(data.event.id));
       }

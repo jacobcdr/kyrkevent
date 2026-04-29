@@ -2113,7 +2113,12 @@ const requireAdmin = (req, res, next) => {
     }
     next();
   } catch (error) {
-    res.status(401).json({ ok: false, error: "Invalid token" });
+    console.error("[requireAdmin] JWT verification error:", error?.name, error?.message);
+    if (error?.name === "TokenExpiredError") {
+      res.status(401).json({ ok: false, error: "Token expired" });
+    } else {
+      res.status(401).json({ ok: false, error: "Invalid token" });
+    }
   }
 };
 
@@ -2460,6 +2465,36 @@ app.post("/admin/login", loginLimiter, async (req, res) => {
     res.json({ ok: true, token });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Login failed" });
+  }
+});
+
+app.post("/refresh-token", loginLimiter, async (req, res) => {
+  if (!JWT_SECRET) {
+    res.status(500).json({ ok: false, error: "JWT_SECRET is not set" });
+    return;
+  }
+  const authHeader = req.headers.authorization || "";
+  const oldToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+  if (!oldToken) {
+    res.status(401).json({ ok: false, error: "Missing token" });
+    return;
+  }
+  try {
+    const payload = jwt.verify(oldToken, JWT_SECRET, { ignoreExpiration: true });
+    const userId = payload?.userId || null;
+    if (!userId) {
+      res.status(401).json({ ok: false, error: "Invalid token" });
+      return;
+    }
+    const newToken = jwt.sign(
+      { role: "admin", userId: payload.userId, username: payload.username },
+      JWT_SECRET,
+      { expiresIn: "2h" }
+    );
+    res.json({ ok: true, token: newToken });
+  } catch (error) {
+    console.error("[refresh-token] JWT error:", error?.name, error?.message);
+    res.status(401).json({ ok: false, error: "Invalid token" });
   }
 });
 
