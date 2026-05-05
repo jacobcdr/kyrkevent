@@ -1347,16 +1347,6 @@ app.post("/payments/start", paymentLimiter, async (req, res) => {
     }
   }
 
-  if (!mollie) {
-    res.status(500).json({ ok: false, error: "MOLLIE_API_KEY is not set" });
-    return;
-  }
-  const origin = req.headers.origin || FRONTEND_URL;
-  if (!origin) {
-    res.status(500).json({ ok: false, error: "FRONTEND_URL is not set" });
-    return;
-  }
-
   try {
     const sectionsResult = await pool.query(
       `
@@ -1398,10 +1388,10 @@ app.post("/payments/start", paymentLimiter, async (req, res) => {
     }
     const discount = discountResult.discount;
     const percentOff = discount ? Number(discount.percent) : 0;
-    const discountedAmount = Math.max(
-      0.01,
-      parsed.payload.priceAmount * (1 - percentOff / 100)
-    );
+    const isFullDiscount = percentOff === 100;
+    const discountedAmount = isFullDiscount
+      ? 0
+      : Math.max(0.01, parsed.payload.priceAmount * (1 - percentOff / 100));
     const serviceFee = discountedAmount > 0 ? SERVICE_FEE_AMOUNT : 0;
     const chargeAmount = discountedAmount + serviceFee;
     const discountLabel = discount ? ` (${discount.code})` : "";
@@ -1421,6 +1411,89 @@ app.post("/payments/start", paymentLimiter, async (req, res) => {
       }
     }
     const orderNumber = formatOrderNumber(new Date());
+
+    // Om promokoden ger exakt 100% rabatt ska köpet behandlas som gratis:
+    // ingen serviceavgift och ingen Mollie-betalning.
+    if (isFullDiscount && chargeAmount === 0) {
+      const insertResult = await pool.query(
+        "INSERT INTO bookings (event_id, name, last_name, email, city, phone, organization, ticket, other_info, terms, payment_status, pris, custom_fields) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id, event_id, name, email, city, phone, organization, ticket, pris, created_at",
+        [
+          parsed.payload.eventId,
+          parsed.payload.name,
+          parsed.payload.lastName || "",
+          parsed.payload.email,
+          parsed.payload.city,
+          parsed.payload.phone,
+          parsed.payload.organization,
+          parsed.payload.priceName,
+          parsed.payload.otherInfo || "",
+          parsed.payload.terms,
+          "paid",
+          String(discountedAmount),
+          JSON.stringify(sanitizedFields)
+        ]
+      );
+      const booking = insertResult.rows[0];
+      await pool.query("UPDATE bookings SET order_number = $1 WHERE id = $2", [orderNumber, booking.id]);
+
+      if (parsed.payload.discountCode) {
+        await pool.query(
+          "UPDATE discount_codes SET used_count = used_count + 1 WHERE code = $1 AND event_id = $2 AND (max_uses IS NULL OR used_count < max_uses)",
+          [parsed.payload.discountCode, parsed.payload.eventId]
+        );
+      }
+
+      const sellerName = await getSellerNameForEvent(parsed.payload.eventId);
+      const eventMetaRow = await pool.query("SELECT name, confirmation_note FROM events WHERE id = $1", [
+        parsed.payload.eventId
+      ]);
+      const eventMeta = eventMetaRow.rows[0] || {};
+      const eventConfirmationNote =
+        eventMeta.confirmation_note && String(eventMeta.confirmation_note).trim()
+          ? String(eventMeta.confirmation_note).trim()
+          : "";
+
+      await sendReceiptEmail({
+        name: booking.name,
+        email: booking.email,
+        eventName: eventMeta.name || eventName,
+        priceName: parsed.payload.priceName,
+        priceAmount: parsed.payload.priceAmount,
+        discountedAmount,
+        discountPercent: percentOff,
+        serviceFee: 0,
+        createdAt: booking.created_at,
+        sellerName,
+        orderNumber,
+        eventConfirmationNote
+      });
+
+      return res.json({
+        ok: true,
+        direct: true,
+        booking: {
+          id: booking.id,
+          name: booking.name,
+          email: booking.email,
+          ticket: booking.ticket,
+          pris: booking.pris,
+          created_at: booking.created_at
+        },
+        eventName: eventMeta.name || eventName,
+        sellerName,
+        orderNumber
+      });
+    }
+
+    if (!mollie) {
+      res.status(500).json({ ok: false, error: "MOLLIE_API_KEY is not set" });
+      return;
+    }
+    const origin = req.headers.origin || FRONTEND_URL;
+    if (!origin) {
+      res.status(500).json({ ok: false, error: "FRONTEND_URL is not set" });
+      return;
+    }
     const payment = await mollie.payments.create({
       amount: {
         currency: MOLLIE_CURRENCY,
@@ -1624,16 +1697,6 @@ app.post("/payments/start-cart", paymentLimiter, async (req, res) => {
     }
   }
 
-  if (!mollie) {
-    res.status(500).json({ ok: false, error: "MOLLIE_API_KEY is not set" });
-    return;
-  }
-  const origin = req.headers.origin || FRONTEND_URL;
-  if (!origin) {
-    res.status(500).json({ ok: false, error: "FRONTEND_URL is not set" });
-    return;
-  }
-
   try {
     const sectionsResult = await pool.query(
       "SELECT show_name, show_email, show_phone, show_city, show_organization FROM event_sections WHERE event_id = $1",
@@ -1667,7 +1730,10 @@ app.post("/payments/start-cart", paymentLimiter, async (req, res) => {
         return;
       }
       const percentOff = discountResult.discount ? Number(discountResult.discount.percent) : 0;
-      const discountedAmount = Math.max(0.01, payload.priceAmount * (1 - percentOff / 100));
+      const isFullDiscount = percentOff === 100;
+      const discountedAmount = isFullDiscount
+        ? 0
+        : Math.max(0.01, payload.priceAmount * (1 - percentOff / 100));
       totalAmount += discountedAmount;
       processedItems.push({
         ...payload,
@@ -1677,11 +1743,7 @@ app.post("/payments/start-cart", paymentLimiter, async (req, res) => {
       });
     }
 
-    if (totalAmount < 0.01) {
-      res.status(400).json({ ok: false, error: "Total amount must be at least 0.01" });
-      return;
-    }
-
+    const allFullDiscount = processedItems.length > 0 && processedItems.every((p) => p.discountPercent === 100);
     const serviceFee = totalAmount > 0 ? SERVICE_FEE_AMOUNT : 0;
     const chargeAmount = totalAmount + serviceFee;
 
@@ -1702,6 +1764,93 @@ app.post("/payments/start-cart", paymentLimiter, async (req, res) => {
     }
     const orderNumber = formatOrderNumber(new Date());
     const description = `${profileId} ${eventName} ${orderNumber}`;
+
+    // Om alla varor har exakt 100% rabatt ska köpet behandlas som gratis:
+    // ingen serviceavgift och ingen Mollie-betalning.
+    if (allFullDiscount && chargeAmount === 0) {
+      const bookings = [];
+      const eventMetaRow = await pool.query("SELECT name, confirmation_note FROM events WHERE id = $1", [eventId]);
+      const eventMeta = eventMetaRow.rows[0] || {};
+      const resolvedEventName = eventMeta.name || eventName;
+      const eventConfirmationNote =
+        eventMeta.confirmation_note && String(eventMeta.confirmation_note).trim()
+          ? String(eventMeta.confirmation_note).trim()
+          : "";
+
+      for (const item of processedItems) {
+        const insertResult = await pool.query(
+          "INSERT INTO bookings (event_id, name, last_name, email, city, phone, organization, ticket, other_info, terms, payment_status, pris, custom_fields) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id, name, email, ticket, pris, created_at",
+          [
+            item.eventId,
+            item.name,
+            item.lastName || "",
+            item.email,
+            item.city,
+            item.phone,
+            item.organization,
+            item.priceName,
+            item.otherInfo || "",
+            item.terms,
+            "paid",
+            String(item.discountedAmount ?? 0),
+            JSON.stringify(item.customFields || [])
+          ]
+        );
+        const booking = insertResult.rows[0];
+        await pool.query("UPDATE bookings SET order_number = $1 WHERE id = $2", [orderNumber, booking.id]);
+        bookings.push(booking);
+
+        if (item.discountCode) {
+          await pool.query(
+            "UPDATE discount_codes SET used_count = used_count + 1 WHERE code = $1 AND event_id = $2 AND (max_uses IS NULL OR used_count < max_uses)",
+            [item.discountCode, item.eventId]
+          );
+        }
+
+        const itemSellerName = await getSellerNameForEvent(item.eventId);
+        await sendReceiptEmail({
+          name: booking.name,
+          email: booking.email,
+          eventName: resolvedEventName,
+          priceName: item.priceName,
+          priceAmount: item.priceAmount,
+          discountedAmount: item.discountedAmount ?? 0,
+          discountPercent: item.discountPercent,
+          serviceFee: 0,
+          createdAt: booking.created_at,
+          sellerName: itemSellerName,
+          orderNumber,
+          eventConfirmationNote
+        });
+      }
+
+      const sellerName = await getSellerNameForEvent(eventId);
+      return res.json({
+        ok: true,
+        direct: true,
+        cart: true,
+        bookings,
+        eventName: resolvedEventName,
+        sellerName,
+        orderNumber
+      });
+    }
+
+    if (totalAmount < 0.01) {
+      res.status(400).json({ ok: false, error: "Total amount must be at least 0.01" });
+      return;
+    }
+
+    if (!mollie) {
+      res.status(500).json({ ok: false, error: "MOLLIE_API_KEY is not set" });
+      return;
+    }
+    const origin = req.headers.origin || FRONTEND_URL;
+    if (!origin) {
+      res.status(500).json({ ok: false, error: "FRONTEND_URL is not set" });
+      return;
+    }
+
     const payment = await mollie.payments.create({
       amount: { currency: MOLLIE_CURRENCY, value: chargeAmount.toFixed(2) },
       description,

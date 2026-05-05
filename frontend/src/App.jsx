@@ -8909,9 +8909,12 @@ function App() {
                 {bookingCart.map((item, index) => {
                   const base = Number(item.priceAmount) || 0;
                   const percent = cartDiscountPercent || 0;
-                  const discounted = percent > 0
-                    ? Math.max(0.01, base * (1 - percent / 100))
-                    : base;
+                  const discounted =
+                    percent === 100
+                      ? 0
+                      : percent > 0
+                        ? Math.max(0.01, base * (1 - percent / 100))
+                        : base;
                   const rabatt = Math.max(0, base - discounted);
                   return (
                     <div key={index} className="booking-cart-item">
@@ -8951,7 +8954,9 @@ function App() {
                       );
                       const percent = cartDiscountPercent || 0;
                       const discountedTotal =
-                        percent > 0
+                        percent === 100
+                          ? 0
+                          : percent > 0
                           ? bookingCart.reduce((sum, item) => {
                               const base = Number(item.priceAmount) || 0;
                               const d = Math.max(0.01, base * (1 - percent / 100));
@@ -8959,7 +8964,7 @@ function App() {
                             }, 0)
                           : baseTotal;
                       const rabattTotal = Math.max(0, baseTotal - discountedTotal);
-                      const serviceFeeCart = discountedTotal > 0 ? 15 : 0;
+                      const serviceFeeCart = percent === 100 ? 0 : discountedTotal > 0 ? 15 : 0;
                       const payableTotal = discountedTotal + serviceFeeCart;
                       return (
                         <>
