@@ -565,18 +565,146 @@ const buildReceiptEmail = ({
   };
 };
 
+const escapeIcsText = (value) =>
+  String(value || "")
+    .replace(/\\/g, "\\\\")
+    .replace(/;/g, "\\;")
+    .replace(/,/g, "\\,")
+    .replace(/\r?\n/g, "\\n");
+
+const dateOnlyToIcs = (dateStr) => String(dateStr || "").replace(/-/g, "");
+
+const addDaysToDateOnly = (dateStr, days) => {
+  const match = String(dateStr || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const dt = new Date(Date.UTC(year, month - 1, day + days));
+  return toDateOnlyString(dt);
+};
+
+const buildEventIcs = ({
+  uid,
+  eventName,
+  startDate,
+  endDate,
+  location,
+  description
+}) => {
+  const dtStart = dateOnlyToIcs(startDate);
+  const dtEndExclusive = addDaysToDateOnly(endDate || startDate, 1);
+  if (!dtStart || !dtEndExclusive) {
+    return null;
+  }
+  const dtStamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+  const lines = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//Kyrkevent//Bokning//SV",
+    "CALSCALE:GREGORIAN",
+    "METHOD:PUBLISH",
+    "BEGIN:VEVENT",
+    `UID:${escapeIcsText(uid)}`,
+    `DTSTAMP:${dtStamp}`,
+    `DTSTART;VALUE=DATE:${dtStart}`,
+    `DTEND;VALUE=DATE:${dateOnlyToIcs(dtEndExclusive)}`,
+    `SUMMARY:${escapeIcsText(eventName || "Event")}`
+  ];
+  if (location) {
+    lines.push(`LOCATION:${escapeIcsText(location)}`);
+  }
+  if (description) {
+    lines.push(`DESCRIPTION:${escapeIcsText(description)}`);
+  }
+  lines.push("END:VEVENT", "END:VCALENDAR");
+  return `${lines.join("\r\n")}\r\n`;
+};
+
+const getEventCalendarData = async (eventId) => {
+  if (!eventId) {
+    return null;
+  }
+  try {
+    const result = await pool.query(
+      `
+        SELECT e.name, e.event_start_date, e.event_end_date, e.confirmation_note,
+               p.address AS place_address, p.description AS place_description
+        FROM events e
+        LEFT JOIN place_settings p ON p.event_id = e.id
+        WHERE e.id = $1
+      `,
+      [eventId]
+    );
+    const row = result.rows[0];
+    if (!row) {
+      return null;
+    }
+    const startDate = toDateOnlyString(row.event_start_date);
+    if (!startDate) {
+      return null;
+    }
+    const endDate = toDateOnlyString(row.event_end_date) || startDate;
+    const placeDescription =
+      row.place_description && String(row.place_description).trim()
+        ? String(row.place_description).trim()
+        : "";
+    return {
+      eventName: row.name || "Event",
+      startDate,
+      endDate,
+      location: String(row.place_address || "").trim(),
+      placeDescription
+    };
+  } catch {
+    return null;
+  }
+};
+
 const sendReceiptEmail = async (payload) => {
   if (!resend || !RESEND_FROM || !payload?.email) {
     return;
   }
   try {
     const message = buildReceiptEmail(payload);
+    const calendarData = await getEventCalendarData(payload.eventId);
+    let attachments;
+    if (calendarData) {
+      const orderNumber =
+        payload.orderNumber && String(payload.orderNumber).trim()
+          ? String(payload.orderNumber).trim()
+          : formatOrderNumber(payload.createdAt instanceof Date ? payload.createdAt : new Date());
+      const descriptionParts = [
+        payload.priceName ? `Biljett: ${payload.priceName}` : null,
+        `Ordernummer: ${orderNumber}`,
+        calendarData.placeDescription || null
+      ].filter(Boolean);
+      const icsContent = buildEventIcs({
+        uid: `kyrkevent-event-${payload.eventId}-${orderNumber}`,
+        eventName: payload.eventName || calendarData.eventName,
+        startDate: calendarData.startDate,
+        endDate: calendarData.endDate,
+        location: calendarData.location,
+        description: descriptionParts.join("\n")
+      });
+      if (icsContent) {
+        attachments = [
+          {
+            filename: "event.ics",
+            content: Buffer.from(icsContent, "utf-8")
+          }
+        ];
+        message.text += "\n\nEn kalenderfil (event.ics) är bifogad så att du enkelt kan lägga till eventet i din kalender.";
+        message.html += `<p style="margin-top:16px;">En kalenderfil (<strong>event.ics</strong>) är bifogad så att du enkelt kan lägga till eventet i din kalender.</p>`;
+      }
+    }
     await resend.emails.send({
       from: RESEND_FROM,
       to: payload.email,
       subject: message.subject,
       text: message.text,
-      html: message.html
+      html: message.html,
+      ...(attachments ? { attachments } : {})
     });
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -1206,6 +1334,7 @@ app.post("/bookings", async (req, res) => {
     await sendReceiptEmail({
       name: booking.name,
       email: booking.email,
+      eventId: parsed.payload.eventId,
       eventName,
       priceName: parsed.payload.priceName,
       priceAmount: parsed.payload.priceAmount,
@@ -1323,6 +1452,7 @@ app.post("/payments/start", paymentLimiter, async (req, res) => {
       await sendReceiptEmail({
         name: booking.name,
         email: booking.email,
+        eventId: parsed.payload.eventId,
         eventName,
         priceName: parsed.payload.priceName,
         priceAmount: parsed.payload.priceAmount,
@@ -1464,6 +1594,7 @@ app.post("/payments/start", paymentLimiter, async (req, res) => {
       await sendReceiptEmail({
         name: booking.name,
         email: booking.email,
+        eventId: parsed.payload.eventId,
         eventName: eventMeta.name || eventName,
         priceName: parsed.payload.priceName,
         priceAmount: parsed.payload.priceAmount,
@@ -1677,6 +1808,7 @@ app.post("/payments/start-cart", paymentLimiter, async (req, res) => {
         await sendReceiptEmail({
           name: booking.name,
           email: booking.email,
+          eventId: payload.eventId,
           eventName,
           priceName: payload.priceName,
           priceAmount: payload.priceAmount,
@@ -1819,6 +1951,7 @@ app.post("/payments/start-cart", paymentLimiter, async (req, res) => {
         await sendReceiptEmail({
           name: booking.name,
           email: booking.email,
+          eventId: item.eventId,
           eventName: resolvedEventName,
           priceName: item.priceName,
           priceAmount: item.priceAmount,
@@ -2153,6 +2286,7 @@ app.get("/payments/verify", async (req, res) => {
               await sendReceiptEmail({
                 name: item.name,
                 email: item.email,
+                eventId: item.eventId,
                 eventName: itemEventName,
                 priceName: pay.items.length > 1 ? `${pay.items.length} st` : (item.priceName || ""),
                 priceAmount: item.priceAmount,
@@ -2216,6 +2350,7 @@ app.get("/payments/verify", async (req, res) => {
             await sendReceiptEmail({
               name: pay.name,
               email: pay.email,
+              eventId: pay.eventId,
               eventName: payEventName,
               priceName: pay.priceName,
               priceAmount: pay.priceAmount,
