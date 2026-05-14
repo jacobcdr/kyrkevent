@@ -518,6 +518,42 @@ h2 {
   white-space: pre-line;
 }
 
+.speakers--list {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  align-items: stretch;
+  justify-items: stretch;
+}
+
+@media (min-width: 769px) {
+  .speakers--list .speaker-card {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 1.25rem;
+    text-align: left;
+    max-width: 42rem;
+    margin: 0 auto;
+    width: 100%;
+  }
+
+  .speakers--list .speaker-photo {
+    width: 7.5rem;
+    min-width: 7.5rem;
+    margin-top: 0;
+  }
+
+  .speakers--list .speaker-body {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .speakers--list .speaker-name {
+    margin-top: 0;
+  }
+}
+
 .partner-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));

@@ -898,6 +898,7 @@ const AdminPage = () => {
     faq: ""
   });
   const [adminFaqText, setAdminFaqText] = useState("");
+  const [adminSpeakersLayout, setAdminSpeakersLayout] = useState("grid");
   const DEFAULT_SECTION_ORDER = ["text", "program", "faq", "form", "speakers", "partners", "place"];
   const [adminSectionOrder, setAdminSectionOrder] = useState([...DEFAULT_SECTION_ORDER]);
   const [adminFormFieldOrder, setAdminFormFieldOrder] = useState([]);
@@ -1337,6 +1338,7 @@ const AdminPage = () => {
       faq: data.sections?.sectionLabelFaq ?? ""
     });
     setAdminFaqText(data.sections?.faqText || "");
+    setAdminSpeakersLayout(data.sections?.speakersLayout === "list" ? "list" : "grid");
     setAdminFormFieldOrder(Array.isArray(data.sections?.formFieldOrder) ? data.sections.formFieldOrder : []);
   };
 
@@ -2884,7 +2886,8 @@ const AdminPage = () => {
           sectionLabelSpeakers: adminSectionLabels.speakers,
           sectionLabelPartners: adminSectionLabels.partners,
           sectionLabelFaq: adminSectionLabels.faq,
-          faqText: adminFaqText
+          faqText: adminFaqText,
+          speakersLayout: adminSpeakersLayout
         })
       });
       if (!response.ok) {
@@ -2892,6 +2895,39 @@ const AdminPage = () => {
       }
     };
     saveSections().catch(() => setError("Kunde inte spara sektionerna."));
+  };
+
+  const handleSpeakersLayoutChange = (layout) => {
+    const next = layout === "list" ? "list" : "grid";
+    setAdminSpeakersLayout(next);
+    if (!token || !selectedEventId) {
+      return;
+    }
+    const saveSections = async () => {
+      const response = await fetch(`${API_BASE}/admin/sections`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          eventId: Number(selectedEventId),
+          ...adminSectionVisibility,
+          sectionOrder: adminSectionOrder,
+          formFieldOrder: adminMergedFormFieldOrder,
+          sectionLabelProgram: adminSectionLabels.program,
+          sectionLabelSpeakers: adminSectionLabels.speakers,
+          sectionLabelPartners: adminSectionLabels.partners,
+          sectionLabelFaq: adminSectionLabels.faq,
+          faqText: adminFaqText,
+          speakersLayout: next
+        })
+      });
+      if (!response.ok) {
+        throw new Error("Sections save failed");
+      }
+    };
+    saveSections().catch(() => setError("Kunde inte spara talarlayout."));
   };
 
   const saveAdminSectionLabels = () => {
@@ -2912,7 +2948,8 @@ const AdminPage = () => {
           sectionLabelSpeakers: adminSectionLabels.speakers,
           sectionLabelPartners: adminSectionLabels.partners,
           sectionLabelFaq: adminSectionLabels.faq,
-          faqText: adminFaqText
+          faqText: adminFaqText,
+          speakersLayout: adminSpeakersLayout
         })
       });
       if (!response.ok) throw new Error("Sections save failed");
@@ -2959,7 +2996,8 @@ const AdminPage = () => {
           sectionLabelSpeakers: adminSectionLabels.speakers,
           sectionLabelPartners: adminSectionLabels.partners,
           sectionLabelFaq: adminSectionLabels.faq,
-          faqText: adminFaqText
+          faqText: adminFaqText,
+          speakersLayout: adminSpeakersLayout
         })
       });
       if (!response.ok) throw new Error("Sections save failed");
@@ -6734,6 +6772,32 @@ const AdminPage = () => {
                     />
                   </label>
                 </div>
+                <div className="field">
+                  <span className="field-label">Layout på webbsidan</span>
+                  <p className="muted" style={{ marginTop: "0.25rem", marginBottom: "0.5rem" }}>
+                    På mobil visas alltid bild ovanför och text under. Valet gäller större skärmar.
+                  </p>
+                  <div className="field-row">
+                    <label className="checkbox-field">
+                      <input
+                        type="radio"
+                        name="speakersLayout"
+                        checked={adminSpeakersLayout === "grid"}
+                        onChange={() => handleSpeakersLayoutChange("grid")}
+                      />
+                      <span className="field-label">Bild ovanför, text under (rutnät)</span>
+                    </label>
+                    <label className="checkbox-field">
+                      <input
+                        type="radio"
+                        name="speakersLayout"
+                        checked={adminSpeakersLayout === "list"}
+                        onChange={() => handleSpeakersLayoutChange("list")}
+                      />
+                      <span className="field-label">Bild till vänster, text till höger (lista)</span>
+                    </label>
+                  </div>
+                </div>
                 <form className="admin-form" onSubmit={handleSpeakerSubmit}>
                   <label className="field">
                     <span className="field-label">Namn</span>
@@ -6780,7 +6844,11 @@ const AdminPage = () => {
                   </div>
                 </form>
                 {speakers.length > 0 ? (
-                  <div className="speakers admin-speakers">
+                  <div
+                    className={`speakers admin-speakers${
+                      adminSpeakersLayout === "list" ? " speakers--list" : ""
+                    }`}
+                  >
                     {speakers.map((speaker) => (
                       <div className="speaker-card" key={speaker.id}>
                         <img
@@ -6788,8 +6856,10 @@ const AdminPage = () => {
                           src={resolveAssetUrl(speaker.image_url)}
                           alt={speaker.name}
                         />
-                        <div className="speaker-name">{speaker.name}</div>
-                        <div className="speaker-bio">{speaker.bio}</div>
+                        <div className="speaker-body">
+                          <div className="speaker-name">{speaker.name}</div>
+                          <div className="speaker-bio">{speaker.bio}</div>
+                        </div>
                         <button
                           type="button"
                           className="icon-button edit"
@@ -7895,6 +7965,7 @@ function App() {
     partners: "",
     faq: ""
   });
+  const [speakersLayout, setSpeakersLayout] = useState("grid");
   const [faqText, setFaqText] = useState("");
   const [mapCoords, setMapCoords] = useState(null);
   const [mapError, setMapError] = useState("");
@@ -8104,6 +8175,7 @@ function App() {
       partners: data.sections?.sectionLabelPartners ?? "",
       faq: data.sections?.sectionLabelFaq ?? ""
     });
+    setSpeakersLayout(data.sections?.speakersLayout === "list" ? "list" : "grid");
     setFaqText(data.sections?.faqText || "");
     setFormFieldOrder(Array.isArray(data.sections?.formFieldOrder) ? data.sections.formFieldOrder : []);
   };
@@ -8575,7 +8647,7 @@ function App() {
             <div className="section" key="speakers">
               <h2>{sectionLabels.speakers.trim() || "Talare"}</h2>
               {speakers.length > 0 ? (
-                <div className="speakers">
+                <div className={`speakers${speakersLayout === "list" ? " speakers--list" : ""}`}>
                   {speakers.map((speaker) => (
                     <div className="speaker-card" key={speaker.id}>
                       <img
@@ -8583,8 +8655,10 @@ function App() {
                         src={resolveAssetUrl(speaker.image_url)}
                         alt={speaker.name}
                       />
-                      <div className="speaker-name">{speaker.name}</div>
-                      <div className="speaker-bio">{speaker.bio}</div>
+                      <div className="speaker-body">
+                        <div className="speaker-name">{speaker.name}</div>
+                        <div className="speaker-bio">{speaker.bio}</div>
+                      </div>
                     </div>
                   ))}
                 </div>

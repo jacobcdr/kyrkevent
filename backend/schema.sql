@@ -134,7 +134,8 @@ CREATE TABLE IF NOT EXISTS event_sections (
   section_label_speakers TEXT DEFAULT '',
   section_label_partners TEXT DEFAULT '',
   section_label_faq TEXT DEFAULT '',
-  faq_text TEXT DEFAULT ''
+  faq_text TEXT DEFAULT '',
+  speakers_layout TEXT NOT NULL DEFAULT 'grid'
 );
 
 ALTER TABLE event_sections
@@ -152,7 +153,8 @@ ALTER TABLE event_sections
   ADD COLUMN IF NOT EXISTS section_label_speakers TEXT DEFAULT '',
   ADD COLUMN IF NOT EXISTS section_label_partners TEXT DEFAULT '',
   ADD COLUMN IF NOT EXISTS section_label_faq TEXT DEFAULT '',
-  ADD COLUMN IF NOT EXISTS faq_text TEXT DEFAULT '';
+  ADD COLUMN IF NOT EXISTS faq_text TEXT DEFAULT '',
+  ADD COLUMN IF NOT EXISTS speakers_layout TEXT NOT NULL DEFAULT 'grid';
 
 CREATE TABLE IF NOT EXISTS event_custom_fields (
   id SERIAL PRIMARY KEY,

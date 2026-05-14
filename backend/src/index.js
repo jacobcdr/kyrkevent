@@ -268,6 +268,12 @@ const defaultSectionVisibility = {
 
 const DEFAULT_SECTION_ORDER = ["text", "program", "faq", "form", "speakers", "partners", "place"];
 const VALID_SECTION_ORDER_KEYS = new Set(DEFAULT_SECTION_ORDER);
+const VALID_SPEAKERS_LAYOUTS = new Set(["grid", "list"]);
+
+function parseSpeakersLayout(value) {
+  const normalized = String(value || "grid").toLowerCase();
+  return VALID_SPEAKERS_LAYOUTS.has(normalized) ? normalized : "grid";
+}
 
 function parseSectionOrder(raw) {
   if (!raw) return [...DEFAULT_SECTION_ORDER];
@@ -803,7 +809,7 @@ app.get("/sections", async (req, res) => {
                show_name, show_email, show_phone, show_city, show_organization, show_translate, show_discount_code,
                show_faq, section_order, form_field_order,
                section_label_program, section_label_speakers, section_label_partners, section_label_faq,
-               faq_text
+               faq_text, speakers_layout
         FROM event_sections
         WHERE event_id = $1
       `,
@@ -815,7 +821,8 @@ app.get("/sections", async (req, res) => {
         sections: {
           ...defaultSectionVisibility,
           sectionOrder: DEFAULT_SECTION_ORDER,
-          formFieldOrder: parseFormFieldOrder(null, customIds)
+          formFieldOrder: parseFormFieldOrder(null, customIds),
+          speakersLayout: "grid"
         }
       });
       return;
@@ -843,7 +850,8 @@ app.get("/sections", async (req, res) => {
         sectionLabelSpeakers: row.section_label_speakers ?? "",
         sectionLabelPartners: row.section_label_partners ?? "",
         sectionLabelFaq: row.section_label_faq ?? "",
-        faqText: row.faq_text ?? ""
+        faqText: row.faq_text ?? "",
+        speakersLayout: parseSpeakersLayout(row.speakers_layout)
       }
     });
   } catch (error) {
@@ -3859,7 +3867,7 @@ app.get("/admin/sections", requireAdmin, async (req, res) => {
                show_name, show_email, show_phone, show_city, show_organization, show_translate, show_discount_code,
                show_faq, section_order, form_field_order,
                section_label_program, section_label_speakers, section_label_partners, section_label_faq,
-               faq_text
+               faq_text, speakers_layout
         FROM event_sections
         WHERE event_id = $1
       `,
@@ -3871,7 +3879,8 @@ app.get("/admin/sections", requireAdmin, async (req, res) => {
         sections: {
           ...defaultSectionVisibility,
           sectionOrder: DEFAULT_SECTION_ORDER,
-          formFieldOrder: parseFormFieldOrder(null, customIds)
+          formFieldOrder: parseFormFieldOrder(null, customIds),
+          speakersLayout: "grid"
         }
       });
       return;
@@ -3899,7 +3908,8 @@ app.get("/admin/sections", requireAdmin, async (req, res) => {
         sectionLabelSpeakers: row.section_label_speakers ?? "",
         sectionLabelPartners: row.section_label_partners ?? "",
         sectionLabelFaq: row.section_label_faq ?? "",
-        faqText: row.faq_text ?? ""
+        faqText: row.faq_text ?? "",
+        speakersLayout: parseSpeakersLayout(row.speakers_layout)
       }
     });
   } catch (error) {
@@ -3929,7 +3939,8 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
     sectionLabelSpeakers,
     sectionLabelPartners,
     sectionLabelFaq,
-    faqText
+    faqText,
+    speakersLayout
   } = req.body || {};
   const parsedEventId = await ensureEventOwnership(eventId, req.userId, res);
   if (!parsedEventId) {
@@ -3949,15 +3960,16 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
   const labelPartners = typeof sectionLabelPartners === "string" ? sectionLabelPartners.trim() : "";
   const labelFaq = typeof sectionLabelFaq === "string" ? sectionLabelFaq.trim() : "";
   const faqTextNormalized = typeof faqText === "string" ? faqText : "";
+  const speakersLayoutNormalized = parseSpeakersLayout(speakersLayout);
   try {
     const result = await pool.query(
       `
         INSERT INTO event_sections
           (event_id, show_program, show_place, show_text, show_speakers, show_partners,
            show_name, show_email, show_phone, show_city, show_organization, show_translate, show_discount_code, show_faq,
-           section_order, form_field_order, section_label_program, section_label_speakers, section_label_partners, section_label_faq, faq_text)
+           section_order, form_field_order, section_label_program, section_label_speakers, section_label_partners, section_label_faq, faq_text, speakers_layout)
         VALUES
-          ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+          ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
         ON CONFLICT (event_id) DO UPDATE SET
           show_program = EXCLUDED.show_program,
           show_place = EXCLUDED.show_place,
@@ -3978,10 +3990,11 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
           section_label_speakers = EXCLUDED.section_label_speakers,
           section_label_partners = EXCLUDED.section_label_partners,
           section_label_faq = EXCLUDED.section_label_faq,
-          faq_text = EXCLUDED.faq_text
+          faq_text = EXCLUDED.faq_text,
+          speakers_layout = EXCLUDED.speakers_layout
         RETURNING show_program, show_place, show_text, show_speakers, show_partners,
                   show_name, show_email, show_phone, show_city, show_organization, show_translate, show_discount_code, show_faq,
-                  section_order, form_field_order, section_label_program, section_label_speakers, section_label_partners, section_label_faq, faq_text
+                  section_order, form_field_order, section_label_program, section_label_speakers, section_label_partners, section_label_faq, faq_text, speakers_layout
       `,
       [
         parsedEventId,
@@ -4004,7 +4017,8 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
         labelSpeakers,
         labelPartners,
         labelFaq,
-        faqTextNormalized
+        faqTextNormalized,
+        speakersLayoutNormalized
       ]
     );
     const row = result.rows[0];
@@ -4030,7 +4044,8 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
         sectionLabelSpeakers: row.section_label_speakers ?? "",
         sectionLabelPartners: row.section_label_partners ?? "",
         sectionLabelFaq: row.section_label_faq ?? "",
-        faqText: row.faq_text ?? ""
+        faqText: row.faq_text ?? "",
+        speakersLayout: parseSpeakersLayout(row.speakers_layout)
       }
     });
   } catch (error) {
@@ -5593,7 +5608,8 @@ const ensureBookingsTable = async () => {
       section_label_speakers TEXT DEFAULT '',
       section_label_partners TEXT DEFAULT '',
       section_label_faq TEXT DEFAULT '',
-      faq_text TEXT DEFAULT ''
+      faq_text TEXT DEFAULT '',
+      speakers_layout TEXT NOT NULL DEFAULT 'grid'
     )
   `);
   await pool.query(`
@@ -5612,7 +5628,8 @@ const ensureBookingsTable = async () => {
       ADD COLUMN IF NOT EXISTS section_label_speakers TEXT DEFAULT '',
       ADD COLUMN IF NOT EXISTS section_label_partners TEXT DEFAULT '',
       ADD COLUMN IF NOT EXISTS section_label_faq TEXT DEFAULT '',
-      ADD COLUMN IF NOT EXISTS faq_text TEXT DEFAULT ''
+      ADD COLUMN IF NOT EXISTS faq_text TEXT DEFAULT '',
+      ADD COLUMN IF NOT EXISTS speakers_layout TEXT NOT NULL DEFAULT 'grid'
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS event_custom_fields (
