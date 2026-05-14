@@ -513,7 +513,7 @@ h2 {
 
 .speaker-bio {
   margin-top: 0.35rem;
-  color: var(--muted);
+  color: #000;
   font-size: 0.9rem;
   white-space: pre-line;
 }
