@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { Html5Qrcode } from "html5-qrcode";
 import {
   BarChart,
   Bar,
@@ -766,6 +768,388 @@ const PaymentStatusPage = () => {
   );
 };
 
+function AdminCheckInPage() {
+  const params = new URLSearchParams(window.location.search);
+  const eventId = params.get("eventId");
+  const [token] = useState(() => localStorage.getItem("adminToken") || "");
+  const [eventName, setEventName] = useState("");
+  const [cameraError, setCameraError] = useState("");
+  const [toast, setToast] = useState("");
+  const [modalMatches, setModalMatches] = useState(null);
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [busy, setBusy] = useState(false);
+  const html5Ref = useRef(null);
+  /** Pausar avläsning (samma QR flera gånger / medan modal är öppen). Sätts true innan pause, false först efter lyckad resume. */
+  const decodeSuppressedRef = useRef(false);
+  const readerDomId = useMemo(
+    () => `admin-checkin-qr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 11)}`,
+    []
+  );
+
+  const showToast = (msg, ms = 2800) => {
+    setToast(msg);
+    window.setTimeout(() => setToast(""), ms);
+  };
+
+  useEffect(() => {
+    if (!token || !eventId) {
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`${API_BASE}/admin/events`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        const d = await r.json();
+        if (cancelled) {
+          return;
+        }
+        const ev = (d.events || []).find((e) => String(e.id) === String(eventId));
+        setEventName(ev?.name || "");
+      } catch {
+        if (!cancelled) {
+          setEventName("");
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token, eventId]);
+
+  useEffect(() => {
+    document.title = "QR-incheckning";
+    return () => {
+      document.title = "Kyrkevent";
+    };
+  }, []);
+
+  const resumeScanner = () => {
+    const scanner = html5Ref.current;
+    try {
+      if (scanner) {
+        scanner.resume();
+      }
+    } catch {
+      /* Inte pausad (t.ex. dubbel resume eller avbruten init) — ignoreras */
+    } finally {
+      decodeSuppressedRef.current = false;
+    }
+  };
+
+  useEffect(() => {
+    if (!token || !eventId) {
+      return;
+    }
+    let cancelled = false;
+    const html5 = new Html5Qrcode(readerDomId);
+    html5Ref.current = html5;
+    setCameraError("");
+    const cfg = { fps: 8, qrbox: { width: 260, height: 260 } };
+
+    html5.start(
+      { facingMode: "environment" },
+      cfg,
+      async (decodedText) => {
+        if (decodeSuppressedRef.current) {
+          return;
+        }
+        decodeSuppressedRef.current = true;
+        const scannerInst = html5Ref.current;
+        if (!scannerInst) {
+          decodeSuppressedRef.current = false;
+          return;
+        }
+        try {
+          scannerInst.pause(true);
+        } catch {
+          decodeSuppressedRef.current = false;
+          return;
+        }
+
+        try {
+          const res = await fetch(`${API_BASE}/admin/events/${eventId}/check-in/scan`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`
+            },
+            body: JSON.stringify({ raw: decodedText })
+          });
+          let data = null;
+          try {
+            data = await res.json();
+          } catch {
+            data = null;
+          }
+          if (cancelled) {
+            resumeScanner();
+            return;
+          }
+          if (!data?.ok) {
+            const msg =
+              data?.error === "biljett finns ej" ? "Biljett finns ej" : data?.error || "Okänt fel";
+            showToast(msg);
+            resumeScanner();
+            return;
+          }
+          const matches = data.matches || [];
+          setModalMatches(matches);
+        } catch {
+          if (!cancelled) {
+            showToast("Nätverksfel");
+          }
+          resumeScanner();
+        }
+      },
+      () => {}
+    ).catch(() => {
+      if (!cancelled) {
+        setCameraError(
+          "Kunde inte starta kameran. Tillåt kamera i webbläsaren och använd säker anslutning (HTTPS)."
+        );
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      html5Ref.current = null;
+      void (async () => {
+        try {
+          await html5.stop();
+        } catch {
+          /* Inte startad / redan stoppad – vanligt i React Strict Mode och vid snabb navigering */
+        }
+        try {
+          html5.clear();
+        } catch {
+          /* ignore */
+        }
+      })();
+    };
+  }, [token, eventId, readerDomId]);
+
+  useEffect(() => {
+    if (modalMatches) {
+      setSelectedIds(new Set());
+    }
+  }, [modalMatches]);
+
+  const toggleSelectId = (id) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    if (!modalMatches) {
+      return;
+    }
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [modalMatches]);
+
+  const closeModal = () => {
+    setModalMatches(null);
+    setSelectedIds(new Set());
+    resumeScanner();
+  };
+
+  const handleConfirmCheckIn = async () => {
+    const todo = (modalMatches || []).filter((m) => !m.checkedIn);
+    const bookingIds = todo.filter((m) => selectedIds.has(m.id)).map((m) => m.id);
+    if (bookingIds.length === 0) {
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await fetch(`${API_BASE}/admin/events/${eventId}/check-in/confirm`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ bookingIds })
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        showToast(data.error || "Kunde inte checka in");
+      } else {
+        const n = data.count ?? bookingIds.length;
+        showToast(n > 1 ? `Incheckade (${n})` : "Incheckad", 1600);
+      }
+    } catch {
+      showToast("Nätverksfel");
+    } finally {
+      setBusy(false);
+      closeModal();
+    }
+  };
+
+  if (!eventId) {
+    return (
+      <div className="page admin-checkin-page">
+        <p className="admin-error">Saknar event. Öppna sidan från admin via knappen QR-incheckning.</p>
+        <a href="/admin" className="button">
+          Till admin
+        </a>
+      </div>
+    );
+  }
+
+  if (!token) {
+    return (
+      <div className="page admin-checkin-page">
+        <p className="admin-error">Du måste vara inloggad.</p>
+        <a href="/admin" className="button">
+          Logga in
+        </a>
+      </div>
+    );
+  }
+
+  const orderLabel = modalMatches?.[0]?.orderNumber ?? "";
+  const todoMatches = modalMatches ? modalMatches.filter((m) => !m.checkedIn) : [];
+  const doneMatches = modalMatches ? modalMatches.filter((m) => m.checkedIn) : [];
+  const selectedTodoCount = todoMatches.filter((m) => selectedIds.has(m.id)).length;
+  const hasOpenToCheckIn = todoMatches.length > 0;
+
+  return (
+    <div className="page admin-checkin-page">
+      <header className="admin-checkin-header">
+        <h1>Incheckning</h1>
+        {eventName ? <p className="admin-checkin-event-name">{eventName}</p> : null}
+        <p className="muted admin-checkin-hint">
+          Håll biljettens QR-kod i kameran. Den gäller endast för detta event.
+        </p>
+      </header>
+
+      {cameraError ? <p className="admin-error">{cameraError}</p> : null}
+
+      <div id={readerDomId} className="admin-checkin-viewport" />
+
+      {toast ? (
+        <div className="admin-checkin-toast" role="status">
+          {toast}
+        </div>
+      ) : null}
+
+      {modalMatches
+        ? createPortal(
+            <div className="admin-checkin-modal-overlay admin-checkin-modal-fullpage" role="presentation">
+              <div
+                className="admin-checkin-modal admin-checkin-modal-fullpage"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="admin-checkin-dialog-title"
+              >
+                <div className="admin-checkin-modal-bar">
+                  <button
+                    type="button"
+                    className="button button-outline admin-checkin-modal-close"
+                    onClick={closeModal}
+                  >
+                    Stäng
+                  </button>
+                </div>
+                <div className="admin-checkin-modal-scroll">
+                  <h2 id="admin-checkin-dialog-title">Bekräfta incheckning</h2>
+                  <p className="admin-checkin-modal-order">
+                    Ordernummer: <strong>{orderLabel}</strong>
+                  </p>
+                  {doneMatches.length > 0 ? (
+                    <>
+                      <p className="muted admin-checkin-modal-sub">Redan incheckade:</p>
+                      <ul className="admin-checkin-name-stack admin-checkin-name-stack-muted">
+                        {doneMatches.map((m) => (
+                          <li key={m.id} className="admin-checkin-name-row">
+                            <span className="admin-checkin-line-name">
+                              <span aria-hidden className="admin-checkin-mini-check">
+                                ✓
+                              </span>{" "}
+                              {m.name}
+                            </span>
+                            {m.ticket ? <span className="admin-checkin-line-ticket">{m.ticket}</span> : null}
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  ) : null}
+                  {hasOpenToCheckIn ? (
+                    <>
+                      <p className="muted admin-checkin-modal-sub admin-checkin-modal-sub-spaced">
+                        Markera vilka som har kommit och tryck sedan Checka in.
+                      </p>
+                      <ul className="admin-checkin-name-stack">
+                        {todoMatches.map((m) => (
+                          <li key={m.id}>
+                            <label className="admin-checkin-name-row admin-checkin-checkbox-row">
+                              <input
+                                type="checkbox"
+                                checked={selectedIds.has(m.id)}
+                                onChange={() => toggleSelectId(m.id)}
+                              />
+                              <span className="admin-checkin-checkbox-label">
+                                <span className="admin-checkin-line-name">{m.name}</span>
+                                {m.ticket ? <span className="admin-checkin-line-ticket">{m.ticket}</span> : null}
+                              </span>
+                            </label>
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  ) : (
+                    <p className="muted admin-checkin-modal-all-done">
+                      Alla biljetter för detta ordernummer är redan incheckade.
+                    </p>
+                  )}
+                </div>
+                <div className="admin-checkin-modal-actions">
+                  {hasOpenToCheckIn ? (
+                    <>
+                      <button type="button" className="button button-outline" onClick={closeModal} disabled={busy}>
+                        Avbryt
+                      </button>
+                      <button
+                        type="button"
+                        className="button"
+                        onClick={handleConfirmCheckIn}
+                        disabled={busy || selectedTodoCount === 0}
+                      >
+                        {busy ? "…" : selectedTodoCount > 1 ? `Checka in (${selectedTodoCount})` : "Checka in"}
+                      </button>
+                    </>
+                  ) : (
+                    <button type="button" className="button" onClick={closeModal}>
+                      Stäng
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
+
+      <footer className="admin-checkin-footer">
+        <a href="/admin" className="link-button admin-checkin-footer-link">
+          Tillbaka till admin
+        </a>
+      </footer>
+    </div>
+  );
+}
+
 const AdminPage = () => {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -831,6 +1215,7 @@ const AdminPage = () => {
   const [discountEditingId, setDiscountEditingId] = useState(null);
   const [testEmail, setTestEmail] = useState("");
   const [bookingsPage, setBookingsPage] = useState(1);
+  const [bookingsRefreshLoading, setBookingsRefreshLoading] = useState(false);
   const [sort, setSort] = useState({ key: "created_at", dir: "desc" });
   const [error, setError] = useState("");
   const [toastMessage, setToastMessage] = useState("");
@@ -872,6 +1257,7 @@ const AdminPage = () => {
     payment_status: true,
     pris: true,
     order_number: true,
+    checked_in: true,
     created_at: true
   });
   const [bookingColumnModalOpen, setBookingColumnModalOpen] = useState(false);
@@ -1177,6 +1563,16 @@ const AdminPage = () => {
     }
     const data = await response.json();
     setBookings(data.bookings || []);
+  };
+
+  const handleRefreshBookingsList = () => {
+    if (!token || !selectedEventId) {
+      return;
+    }
+    setBookingsRefreshLoading(true);
+    loadAdminBookings(token, selectedEventId)
+      .catch(() => setBookings([]))
+      .finally(() => setBookingsRefreshLoading(false));
   };
 
   const [adminEventViews, setAdminEventViews] = useState(0);
@@ -5723,14 +6119,24 @@ const AdminPage = () => {
               ← Tillbaka till eventlistan
             </button>
             {selectedEvent ? (
-              <a
-                className="button button-outline"
-                href={`/e/${selectedEvent.slug}`}
-                target="_blank"
-                rel="noreferrer"
-              >
-                👁 Förhandsgranska event
-              </a>
+              <>
+                <a
+                  className="button button-outline"
+                  href={`/e/${selectedEvent.slug}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  👁 Förhandsgranska event
+                </a>
+                <a
+                  className="button button-outline"
+                  href={`/admin/check-in?eventId=${encodeURIComponent(selectedEvent.id)}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  QR-incheckning
+                </a>
+              </>
             ) : null}
           </div>
         ) : null}
@@ -5979,6 +6385,14 @@ const AdminPage = () => {
                 </div>
               </div>
               <div className="admin-actions">
+                <button
+                  className="button button-outline"
+                  type="button"
+                  onClick={handleRefreshBookingsList}
+                  disabled={bookingsRefreshLoading}
+                >
+                  {bookingsRefreshLoading ? "Uppdaterar…" : "Uppdatera lista"}
+                </button>
                 <button className="button button-outline" type="button" onClick={handleExportBookings}>
                   Exportera Excel
                 </button>
@@ -6124,6 +6538,7 @@ const AdminPage = () => {
                       {bookingColumnVisibility.order_number ? (
                         <th>Ordernummer</th>
                       ) : null}
+                      {bookingColumnVisibility.checked_in ? <th>Incheckad</th> : null}
                       {customFieldsAdmin
                         .filter((field) => field.field_type !== "paragraph" && field.field_type !== "linebreak")
                         .map((field) =>
@@ -6191,6 +6606,15 @@ const AdminPage = () => {
                           ) : null}
                           {bookingColumnVisibility.order_number ? (
                             <td>{booking.order_number || "–"}</td>
+                          ) : null}
+                          {bookingColumnVisibility.checked_in ? (
+                            <td className="admin-booking-checkin-cell">
+                              {booking.checked_in_at ? (
+                                <span className="admin-booking-checked" title={new Date(booking.checked_in_at).toLocaleString("sv-SE")}>
+                                  ✓
+                                </span>
+                              ) : null}
+                            </td>
                           ) : null}
                           {customFieldsAdmin
                             .filter((field) => field.field_type !== "paragraph" && field.field_type !== "linebreak")
@@ -6271,6 +6695,7 @@ const AdminPage = () => {
                         { key: "payment_status", label: "Betalning" },
                         { key: "pris", label: "Pris" },
                         { key: "order_number", label: "Ordernummer" },
+                        { key: "checked_in", label: "Incheckad" },
                         { key: "created_at", label: "Skapad" }
                       ].map((col) => (
                         <label key={col.key} className="field checkbox-field">
@@ -7921,6 +8346,8 @@ function App() {
   const [cartDiscountPercent, setCartDiscountPercent] = useState(0);
   const [isEventInPast, setIsEventInPast] = useState(false);
 
+  const pathNorm = window.location.pathname.replace(/\/+$/, "") || "/";
+  const isCheckInRoute = pathNorm === "/admin/check-in";
   const isAdminRoute = window.location.pathname.startsWith("/admin");
   const isPaymentStatusRoute = window.location.pathname.startsWith("/payment-status");
   const isVerifyEmailRoute =
@@ -8562,6 +8989,10 @@ function App() {
 
   if (isVerifyEmailRoute) {
     return <VerifyEmailPage />;
+  }
+
+  if (isCheckInRoute) {
+    return <AdminCheckInPage />;
   }
 
   if (isAdminRoute) {

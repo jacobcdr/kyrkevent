@@ -2519,3 +2519,285 @@ h2 {
     min-width: auto;
   }
 }
+
+/* QR-incheckning (mobilläge) — egen vy */
+.admin-checkin-page {
+  min-height: 100vh;
+  box-sizing: border-box;
+  max-width: 28rem;
+  margin: 0 auto;
+  padding: 1rem 1rem 2rem;
+  background: var(--bg, #fbf3d6);
+  color: var(--text, #3b2611);
+}
+
+.admin-checkin-header {
+  text-align: center;
+  margin-bottom: 1rem;
+}
+
+.admin-checkin-header h1 {
+  margin: 0 0 0.25rem;
+  font-size: 1.35rem;
+}
+
+.admin-checkin-event-name {
+  font-weight: 600;
+  margin: 0 0 0.5rem;
+}
+
+.admin-checkin-hint {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.35;
+}
+
+.admin-checkin-viewport {
+  width: 100%;
+  min-height: 220px;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 2px solid var(--border, #f0d89d);
+  background: #1a1208;
+  margin-bottom: 1rem;
+}
+
+.admin-checkin-viewport video,
+.admin-checkin-viewport canvas {
+  border-radius: 12px;
+}
+
+.admin-checkin-toast {
+  position: fixed;
+  left: 50%;
+  bottom: max(1.25rem, env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  z-index: 99900;
+  padding: 0.65rem 1.1rem;
+  border-radius: 999px;
+  background: var(--text, #3b2611);
+  color: #fffdf6;
+  font-size: 0.95rem;
+  font-weight: 600;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+  max-width: calc(100vw - 2rem);
+  text-align: center;
+}
+
+.admin-checkin-modal-overlay.admin-checkin-modal-fullpage {
+  align-items: stretch;
+  justify-content: stretch;
+  padding: 0;
+  background: var(--bg, #fbf3d6);
+}
+
+.admin-checkin-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100000;
+  pointer-events: auto;
+  background: rgba(22, 14, 6, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  box-sizing: border-box;
+}
+
+.admin-checkin-modal.admin-checkin-modal-fullpage {
+  max-width: none;
+  width: 100%;
+  min-height: 100vh;
+  min-height: 100dvh;
+  border-radius: 0;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  pointer-events: auto;
+}
+
+.admin-checkin-modal-bar {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding: calc(0.35rem + env(safe-area-inset-top, 0px)) 1rem 0.5rem;
+  border-bottom: 1px solid var(--border, #f0d89d);
+  background: var(--card, #fffdf6);
+}
+
+.admin-checkin-modal-close {
+  padding: 0.45rem 1rem;
+  font-size: 0.9rem;
+}
+
+.admin-checkin-modal-fullpage .admin-checkin-modal-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 1rem 1.25rem 0.75rem;
+  background: var(--card, #fffdf6);
+}
+
+.admin-checkin-modal-fullpage .admin-checkin-modal-scroll h2 {
+  margin-top: 0;
+}
+
+.admin-checkin-modal-all-done {
+  margin: 0.5rem 0 0;
+  line-height: 1.45;
+}
+
+.admin-checkin-checkbox-row {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin: 0;
+  cursor: pointer;
+}
+
+.admin-checkin-checkbox-row input[type="checkbox"] {
+  width: 1.35rem;
+  height: 1.35rem;
+  margin-top: 0.15rem;
+  flex-shrink: 0;
+  accent-color: var(--accent, #c95a1a);
+  cursor: pointer;
+}
+
+.admin-checkin-checkbox-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.admin-checkin-modal-fullpage .admin-checkin-modal-actions {
+  flex-shrink: 0;
+  margin-top: 0;
+  padding: 0.85rem 1.25rem calc(0.85rem + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--border, #f0d89d);
+  background: var(--card, #fffdf6);
+}
+
+.admin-checkin-modal-fullpage .admin-checkin-modal-actions .button {
+  flex: 1 1 8rem;
+  justify-content: center;
+  min-height: 3rem;
+}
+
+.admin-checkin-modal {
+  width: 100%;
+  max-width: 22rem;
+  background: var(--card, #fffdf6);
+  border: 1px solid var(--border, #f0d89d);
+  border-radius: 16px;
+  padding: 1.25rem 1.2rem 1.1rem;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+}
+
+.admin-checkin-modal h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1.1rem;
+}
+
+.admin-checkin-modal-order,
+.admin-checkin-modal-name {
+  margin: 0 0 0.75rem;
+  font-size: 0.95rem;
+}
+
+.admin-checkin-modal-sub {
+  margin: 0 0 0.4rem;
+  font-size: 0.88rem;
+}
+
+.admin-checkin-modal-sub-spaced {
+  margin-top: 0.85rem;
+}
+
+.admin-checkin-name-stack {
+  list-style: none;
+  margin: 0 0 0.5rem;
+  padding: 0;
+}
+
+.admin-checkin-name-stack-muted .admin-checkin-line-name {
+  color: var(--muted, #7b5a2b);
+}
+
+.admin-checkin-name-stack .admin-checkin-name-row + .admin-checkin-name-row {
+  margin-top: 0.55rem;
+}
+
+.admin-checkin-name-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.45rem 0.55rem;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid var(--border, #f0d89d);
+}
+
+.admin-checkin-name-stack-muted .admin-checkin-name-row {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.admin-checkin-line-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  line-height: 1.35;
+}
+
+.admin-checkin-mini-check {
+  color: #2e7d32;
+  font-weight: 700;
+}
+
+.admin-checkin-line-ticket {
+  font-size: 0.82rem;
+  color: var(--muted, #7b5a2b);
+}
+
+.admin-checkin-modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  justify-content: flex-end;
+  margin-top: 0.5rem;
+}
+
+.admin-checkin-footer {
+  text-align: center;
+  margin-top: 1.5rem;
+}
+
+.admin-checkin-footer-link {
+  font-size: 0.9rem;
+}
+
+.admin-booking-checkin-cell {
+  text-align: center;
+  vertical-align: middle;
+  width: 3rem;
+}
+
+.admin-booking-checked {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 50%;
+  background: #e8f5e9;
+  color: #2e7d32;
+  font-weight: 700;
+  font-size: 1rem;
+  line-height: 1;
+}

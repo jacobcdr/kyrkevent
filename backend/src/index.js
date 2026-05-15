@@ -21,6 +21,7 @@ import rateLimit from "express-rate-limit";
 import * as xlsx from "xlsx";
 import { Resend } from "resend";
 import PDFDocument from "pdfkit";
+import QRCode from "qrcode";
 
 dotenv.config();
 
@@ -40,6 +41,7 @@ const RESEND_FROM = process.env.RESEND_FROM || "";
 const RECEIPT_SELLER = process.env.RECEIPT_SELLER || "Lonetec AB";
 const RECEIPT_ISSUER = process.env.RECEIPT_ISSUER || "Lonetec AB";
 const RECEIPT_PAYMENT_METHOD = process.env.RECEIPT_PAYMENT_METHOD || "Online";
+const ORDER_NUMBER_QR_CONTENT_ID = "order-number-qr";
 const BOLAGSAPI_KEY = process.env.BOLAGSAPI_KEY || "";
 const PAYOUT_EMAIL = process.env.PAYOUT_EMAIL || "";
 const PAYOUT_DAYS_AFTER_EVENT = Math.max(0, parseInt(process.env.PAYOUT_DAYS_AFTER_EVENT || "1", 10) || 0);
@@ -227,6 +229,14 @@ const normalizeUsername = (value) => String(value || "").trim().toLowerCase();
 
 const generateEventSuffix = () =>
   Math.random().toString(36).slice(2, 12) + Math.random().toString(36).slice(2, 12);
+
+const normalizeQrOrderNumber = (raw) => {
+  const digits = String(raw || "").replace(/\D/g, "");
+  if (digits.length < 12) {
+    return null;
+  }
+  return digits;
+};
 
 const ensureEventOwnership = async (eventId, userId, res) => {
   const resolvedEventId = normalizeEventId(eventId);
@@ -508,9 +518,7 @@ const buildReceiptEmail = ({
     `Moms (25%): ${formatSek(vatAmount)}`,
     `Totalbelopp: ${formatSek(totalAmount)}`,
     "",
-    ...(organizerName
-      ? ["Vänliga hälsningar,", organizerName]
-      : ["Vänliga hälsningar"])
+    ...(organizerName ? ["Vänliga hälsningar,", organizerName] : ["Vänliga hälsningar"])
   ].filter(Boolean);
 
   const htmlRows = [
@@ -666,21 +674,53 @@ const sendReceiptEmail = async (payload) => {
     return;
   }
   try {
-    const message = buildReceiptEmail(payload);
+    const createdAtFallback =
+      payload.createdAt instanceof Date ? payload.createdAt : new Date();
+    const resolvedOrderNumber =
+      payload.orderNumber && String(payload.orderNumber).trim()
+        ? String(payload.orderNumber).trim()
+        : formatOrderNumber(createdAtFallback);
+
+    /** @type {Array<{filename: string; content: string; contentType?: string; contentId?: string}>} */
+    const attachments = [];
+
+    let orderQrBuffer = null;
+    try {
+      orderQrBuffer = await QRCode.toBuffer(String(resolvedOrderNumber), {
+        type: "png",
+        width: 220,
+        margin: 2,
+        errorCorrectionLevel: "M"
+      });
+    } catch (qrErr) {
+      orderQrBuffer = null;
+      // eslint-disable-next-line no-console
+      console.error("Failed to generate order QR code", qrErr);
+    }
+
+    const message = buildReceiptEmail({
+      ...payload,
+      orderNumber: resolvedOrderNumber
+    });
+
+    if (orderQrBuffer) {
+      attachments.push({
+        filename: "order-qr.png",
+        content: orderQrBuffer.toString("base64"),
+        contentType: "image/png",
+        contentId: ORDER_NUMBER_QR_CONTENT_ID
+      });
+    }
+
     const calendarData = await getEventCalendarData(payload.eventId);
-    let attachments;
     if (calendarData) {
-      const orderNumber =
-        payload.orderNumber && String(payload.orderNumber).trim()
-          ? String(payload.orderNumber).trim()
-          : formatOrderNumber(payload.createdAt instanceof Date ? payload.createdAt : new Date());
       const descriptionParts = [
         payload.priceName ? `Biljett: ${payload.priceName}` : null,
-        `Ordernummer: ${orderNumber}`,
+        `Ordernummer: ${resolvedOrderNumber}`,
         calendarData.placeDescription || null
       ].filter(Boolean);
       const icsContent = buildEventIcs({
-        uid: `kyrkevent-event-${payload.eventId}-${orderNumber}`,
+        uid: `kyrkevent-event-${payload.eventId}-${resolvedOrderNumber}`,
         eventName: payload.eventName || calendarData.eventName,
         startDate: calendarData.startDate,
         endDate: calendarData.endDate,
@@ -688,23 +728,41 @@ const sendReceiptEmail = async (payload) => {
         description: descriptionParts.join("\n")
       });
       if (icsContent) {
-        attachments = [
-          {
-            filename: "event.ics",
-            content: Buffer.from(icsContent, "utf-8")
-          }
-        ];
-        message.text += "\n\nEn kalenderfil (event.ics) är bifogad så att du enkelt kan lägga till eventet i din kalender.";
+        attachments.push({
+          filename: "event.ics",
+          content: Buffer.from(icsContent, "utf-8").toString("base64"),
+          contentType: "text/calendar; charset=UTF-8"
+        });
+        message.text +=
+          "\n\nEn kalenderfil (event.ics) är bifogad så att du enkelt kan lägga till eventet i din kalender.";
         message.html += `<p style="margin-top:16px;">En kalenderfil (<strong>event.ics</strong>) är bifogad så att du enkelt kan lägga till eventet i din kalender.</p>`;
       }
     }
+
+    const ticketNoteText = orderQrBuffer
+      ? "Detta e-postmeddelande och den bifogade QR-koden gäller som biljett och ska visas vid eventuell incheckning."
+      : "Detta e-postmeddelande gäller som biljett och ska visas vid eventuell incheckning.";
+
+    message.text += `\n\n${ticketNoteText}`;
+
+    const ticketBlockHtml = orderQrBuffer
+      ? `<div style="margin-top:28px;padding-top:20px;border-top:1px solid #e5e7eb;text-align:left;">
+      <p style="margin:0 0 12px;font-size:14px;color:#374151;line-height:1.5;">Detta e-postmeddelande och QR-koden nedan gäller som biljett och ska visas vid eventuell incheckning.</p>
+      <img src="cid:${ORDER_NUMBER_QR_CONTENT_ID}" width="200" height="200" alt="" role="presentation" style="display:block;max-width:100%;height:auto;border:0;outline:none;" />
+    </div>`
+      : `<div style="margin-top:28px;padding-top:20px;border-top:1px solid #e5e7eb;text-align:left;">
+      <p style="margin:0;font-size:14px;color:#374151;line-height:1.5;">Detta e-postmeddelande gäller som biljett och ska visas vid eventuell incheckning.</p>
+    </div>`;
+
+    message.html += ticketBlockHtml;
+
     await resend.emails.send({
       from: RESEND_FROM,
       to: payload.email,
       subject: message.subject,
       text: message.text,
       html: message.html,
-      ...(attachments ? { attachments } : {})
+      ...(attachments.length > 0 ? { attachments } : {})
     });
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -5406,7 +5464,7 @@ app.get("/admin/bookings", requireAdmin, async (req, res) => {
       return;
     }
     const result = await pool.query(
-      `SELECT b.id, b.event_id, b.name, b.email, b.city, b.phone, b.organization, b.ticket, b.terms, b.payment_status, b.pris, b.custom_fields, b.created_at,
+      `SELECT b.id, b.event_id, b.name, b.email, b.city, b.phone, b.organization, b.ticket, b.terms, b.payment_status, b.pris, b.custom_fields, b.created_at, b.checked_in_at,
         COALESCE(b.order_number,
           (SELECT po.payload->>'orderNumber' FROM payment_orders po
            WHERE po.booking_id = b.id OR b.id = ANY(COALESCE(po.booking_ids, ARRAY[]::integer[]))
@@ -5417,6 +5475,93 @@ app.get("/admin/bookings", requireAdmin, async (req, res) => {
     res.json({ ok: true, bookings: result.rows });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to load bookings" });
+  }
+});
+
+app.post("/admin/events/:eventId/check-in/scan", requireAdmin, async (req, res) => {
+  try {
+    const eventId = await ensureEventOwnership(req.params.eventId, req.userId, res);
+    if (!eventId) {
+      return;
+    }
+    const normalized = normalizeQrOrderNumber(req.body?.raw ?? req.body?.text ?? "");
+    if (!normalized) {
+      res.status(400).json({ ok: false, error: "Ogiltig QR-kod." });
+      return;
+    }
+    const result = await pool.query(
+      `
+        SELECT b.id, b.name, b.ticket, b.checked_in_at,
+               TRIM(COALESCE(b.order_number,
+                 (SELECT po.payload->>'orderNumber' FROM payment_orders po
+                  WHERE po.booking_id = b.id OR b.id = ANY(COALESCE(po.booking_ids, ARRAY[]::integer[]))
+                  LIMIT 1), '')) AS resolved_order
+        FROM bookings b
+        WHERE b.event_id = $1
+          AND TRIM(COALESCE(b.order_number,
+                 (SELECT po.payload->>'orderNumber' FROM payment_orders po
+                  WHERE po.booking_id = b.id OR b.id = ANY(COALESCE(po.booking_ids, ARRAY[]::integer[]))
+                  LIMIT 1), '')) = $2
+        ORDER BY b.name ASC NULLS LAST, b.id ASC
+      `,
+      [eventId, normalized]
+    );
+    if (result.rowCount === 0) {
+      res.json({ ok: false, error: "biljett finns ej" });
+      return;
+    }
+    const matches = result.rows.map((row) => ({
+      id: row.id,
+      name: String(row.name || "").trim() || "–",
+      ticket: row.ticket != null && String(row.ticket).trim() ? String(row.ticket).trim() : null,
+      orderNumber: normalized,
+      checkedIn: !!row.checked_in_at
+    }));
+    res.json({ ok: true, matches });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Incheckning misslyckades." });
+  }
+});
+
+app.post("/admin/events/:eventId/check-in/confirm", requireAdmin, async (req, res) => {
+  try {
+    const eventId = await ensureEventOwnership(req.params.eventId, req.userId, res);
+    if (!eventId) {
+      return;
+    }
+    const bodyIds = req.body?.bookingIds;
+    const singleId = req.body?.bookingId;
+    let bookingIds =
+      Array.isArray(bodyIds) && bodyIds.length > 0
+        ? bodyIds.map((id) => Number(id)).filter((n) => Number.isFinite(n) && n > 0)
+        : Number.isFinite(Number(singleId)) && Number(singleId) > 0
+          ? [Number(singleId)]
+          : [];
+    bookingIds = [...new Set(bookingIds)];
+    if (bookingIds.length === 0) {
+      res.status(400).json({ ok: false, error: "Saknar bokning(ar)." });
+      return;
+    }
+    const result = await pool.query(
+      `
+        UPDATE bookings
+        SET checked_in_at = COALESCE(checked_in_at, NOW())
+        WHERE event_id = $1 AND id = ANY($2::int[])
+        RETURNING id, checked_in_at
+      `,
+      [eventId, bookingIds]
+    );
+    if (result.rowCount !== bookingIds.length) {
+      res.status(404).json({ ok: false, error: "En eller fler bokningar hittades inte för detta event." });
+      return;
+    }
+    res.json({
+      ok: true,
+      count: result.rowCount,
+      rows: result.rows.map((row) => ({ id: row.id, checkedInAt: row.checked_in_at }))
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Kunde inte checka in." });
   }
 });
 
@@ -5794,7 +5939,8 @@ const ensureBookingsTable = async () => {
       ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT 'pending',
       ADD COLUMN IF NOT EXISTS pris TEXT NOT NULL DEFAULT '',
       ADD COLUMN IF NOT EXISTS custom_fields JSONB NOT NULL DEFAULT '[]',
-      ADD COLUMN IF NOT EXISTS order_number TEXT
+      ADD COLUMN IF NOT EXISTS order_number TEXT,
+      ADD COLUMN IF NOT EXISTS checked_in_at TIMESTAMPTZ
   `);
 
   await pool.query(`
