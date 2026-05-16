@@ -17,6 +17,82 @@ import "./App.css";
 const API_BASE = import.meta.env.VITE_API_URL || "";
 const API_BASE_NORMALIZED = API_BASE.replace(/\/+$/, "");
 
+const EVENT_VAT_RATE_OPTIONS = [
+  {
+    percent: 6,
+    label: "6 % – Kultur, idrott och nöje",
+    helpTitle: "6 % moms – Kultur, idrott och nöje",
+    helpBody:
+      "Används för: Event där fokus är kultur, sport eller underhållning.\n\nExempel: Konserter, festivaler, teaterföreställningar, idrottstävlingar, träningsläger, utställningar, bio eller guidade turer. Gäller även allmänna föreläsningar (som inte är yrkesutbildningar)."
+  },
+  {
+    percent: 12,
+    label: "12 % – Mat, dryck och logi",
+    helpTitle: "12 % moms – Mat, dryck och logi",
+    helpBody:
+      "Används för: Event som i huvudsak kretsar kring matservering eller övernattning.\n\nExempel: Matfestivaler, restaurang-event, vin-/ölprovningar där mat ingår, eller om du säljer ren hotell-/stugövernattning och campingbiljetter i anslutning till ett event."
+  },
+  {
+    percent: 25,
+    label: "25 % – Kurser, mässor och företagsevent (standard)",
+    helpTitle: "25 % moms – Kurser, mässor och företagsevent (Standard)",
+    helpBody:
+      "Används för: Kommersiella event, yrkesutbildningar och renodlade företagsevenemang (B2B).\n\nExempel: Yrkeskurser (där deltagaren får ett intyg/diplom), näringslivsdagar, renodlade affärsnätverk, produktmässor, konferenser eller konsulttjänster."
+  }
+];
+
+const EVENT_VAT_RATE_HINT =
+  "Välj vilken momssats som gäller för biljetter till detta event. Standard är 25 %.";
+
+function EventVatRateField({ value, onChange, onOpenHelp, showHeading = true }) {
+  const selected = EVENT_VAT_RATE_OPTIONS.some((o) => o.percent === value) ? value : 25;
+  return (
+    <div className="admin-vat-rate-wrap">
+      {showHeading ? (
+        <p className="admin-vat-rate-heading">
+          <span className="field-label">Momssats för eventet</span>{" "}
+          <span className="muted admin-vat-rate-heading-hint">({EVENT_VAT_RATE_HINT})</span>
+        </p>
+      ) : null}
+      <div className="subscription-plan-box admin-vat-rate-box">
+        <div className="admin-vat-rate-choices-row">
+        <fieldset className="subscription-plan-options admin-vat-rate-options" aria-label="Momssats">
+            {EVENT_VAT_RATE_OPTIONS.map((opt) => (
+              <label
+                key={opt.percent}
+                className={`subscription-plan-option admin-vat-rate-option${selected === opt.percent ? " is-selected" : ""}`}
+              >
+                <input
+                  type="radio"
+                  name="eventVatRatePercent"
+                  value={opt.percent}
+                  checked={selected === opt.percent}
+                  onChange={() => onChange(opt.percent)}
+                />
+                <span>{opt.label}</span>
+              </label>
+            ))}
+        </fieldset>
+        <aside className="admin-vat-rate-aside" aria-label="Hjälp om momssatser">
+          <div className="admin-vat-rate-help-card">
+            <span className="admin-vat-rate-help-icon" aria-hidden="true">
+              ?
+            </span>
+            <p className="admin-vat-rate-help-lead">Osäker vilken sats som gäller?</p>
+            <p className="muted admin-vat-rate-help-text">
+              Se exempel och förklaringar för 6 %, 12 % och 25 % moms.
+            </p>
+            <button type="button" className="button button-outline admin-vat-rate-help-btn" onClick={onOpenHelp}>
+              Visa hjälp
+            </button>
+          </div>
+        </aside>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const THEMES = {
   default: {
     "--bg": "#fbf3d6",
@@ -576,13 +652,21 @@ const PaymentStatusPage = () => {
       : ticketTotal != null
         ? ticketTotal + serviceFee
         : null;
+  const vatExempt = summary?.vatExempt === true;
+  const vatRatePercent =
+    typeof summary?.vatRatePercent === "number" && summary.vatRatePercent > 0
+      ? summary.vatRatePercent
+      : 25;
+  const vatRate = vatRatePercent / 100;
   const vatAmount =
-    typeof totalAmount === "number"
-      ? Math.round((totalAmount * 0.25 / 1.25) * 100) / 100
+    !vatExempt && typeof totalAmount === "number"
+      ? Math.round(((totalAmount * vatRate) / (1 + vatRate)) * 100) / 100
       : null;
   const netAmount =
     typeof totalAmount === "number"
-      ? Math.round((totalAmount - (vatAmount || 0)) * 100) / 100
+      ? vatExempt
+        ? totalAmount
+        : Math.round((totalAmount - (vatAmount || 0)) * 100) / 100
       : null;
   const orderNumber =
     summary?.orderNumber ||
@@ -711,14 +795,23 @@ const PaymentStatusPage = () => {
                       <span>Biljett såld genom</span>
                       <strong>Lonetec AB</strong>
                     </div>
-                    <div className="receipt-row">
-                      <span>Pris (exkl. moms)</span>
-                      <strong>{formatSek(netAmount)}</strong>
-                    </div>
-                    <div className="receipt-row">
-                      <span>Moms (25%)</span>
-                      <strong>{formatSek(vatAmount)}</strong>
-                    </div>
+                    {vatExempt ? (
+                      <div className="receipt-row">
+                        <span>Moms</span>
+                        <strong>Ingen moms utgår (momsbefriad verksamhet)</strong>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="receipt-row">
+                          <span>Pris (exkl. moms)</span>
+                          <strong>{formatSek(netAmount)}</strong>
+                        </div>
+                        <div className="receipt-row">
+                          <span>Moms ({vatRatePercent}%)</span>
+                          <strong>{formatSek(vatAmount)}</strong>
+                        </div>
+                      </>
+                    )}
                     <div className="receipt-total">
                       <span>Totalbelopp</span>
                       <strong>{formatSek(totalAmount)}</strong>
@@ -1170,8 +1263,11 @@ const AdminPage = () => {
     dateType: "single",
     singleDate: "",
     startDate: "",
-    endDate: ""
+    endDate: "",
+    vatRatePercent: 25
   });
+  const [eventVatRateInput, setEventVatRateInput] = useState(25);
+  const [eventVatRateSaving, setEventVatRateSaving] = useState(false);
   const [eventLoading, setEventLoading] = useState(false);
   const [bookings, setBookings] = useState([]);
   const [programItems, setProgramItems] = useState([]);
@@ -1220,14 +1316,15 @@ const AdminPage = () => {
   const [error, setError] = useState("");
   const [toastMessage, setToastMessage] = useState("");
   const toastTimeoutRef = useRef(null);
-  const showToast = (message) => {
+  const showToast = (message, ms = 5000) => {
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
     setToastMessage(message);
     toastTimeoutRef.current = setTimeout(() => {
       setToastMessage("");
       toastTimeoutRef.current = null;
-    }, 5000);
+    }, ms);
   };
+  const [vatRateHelpOpen, setVatRateHelpOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [backendStatus, setBackendStatus] = useState("checking");
   const [dbStatus, setDbStatus] = useState("checking");
@@ -1315,6 +1412,14 @@ const AdminPage = () => {
     const rawNote = selectedEvent?.confirmation_note;
     setEventConfirmationNoteInput(rawNote != null ? String(rawNote) : "");
   }, [selectedEvent?.confirmation_note, selectedEventId]);
+  useEffect(() => {
+    if (!selectedEvent) {
+      setEventVatRateInput(25);
+      return;
+    }
+    const n = Number(selectedEvent.vat_rate_percent);
+    setEventVatRateInput([6, 12, 25].includes(n) ? n : 25);
+  }, [selectedEventId, selectedEvent?.vat_rate_percent]);
   useEffect(() => {
     if (!token || !selectedEventId || adminSection !== "settings") {
       setParticipantCount(null);
@@ -1426,8 +1531,10 @@ const AdminPage = () => {
     city: "",
     email: "",
     phone: "",
-    bgNumber: ""
+    bgNumber: "",
+    vatExempt: false
   });
+  const profileShowsVatRate = profileForm.vatExempt !== true;
   const [activeSubscriptionPlan, setActiveSubscriptionPlan] = useState("gratis");
   const [showPremiumConfirm, setShowPremiumConfirm] = useState(false);
   const [showPremiumAvslutaInfo, setShowPremiumAvslutaInfo] = useState(false);
@@ -1775,6 +1882,7 @@ const AdminPage = () => {
       email: profile.email || "",
       phone: profile.phone || "",
       bgNumber: profile.bg_number || "",
+      vatExempt: profile.vat_exempt === true,
       bas_event_credits: profile.bas_event_credits ?? 0,
       premium_activated_at: profile.premium_activated_at || null,
       premium_ends_at: profile.premium_ends_at || null
@@ -2409,7 +2517,8 @@ const AdminPage = () => {
           name: eventForm.name.trim(),
           sourceEventId: selectedEventId ? Number(selectedEventId) : null,
           startDate: startDate.trim(),
-          endDate: isSingle ? startDate.trim() : endDate.trim()
+          endDate: isSingle ? startDate.trim() : endDate.trim(),
+          ...(profileShowsVatRate ? { vatRatePercent: eventForm.vatRatePercent } : {})
         })
       });
       if (!response.ok) {
@@ -2417,7 +2526,14 @@ const AdminPage = () => {
         throw new Error(data.error || "Kunde inte skapa eventet.");
       }
       const data = await response.json();
-      setEventForm({ name: "", dateType: "single", singleDate: "", startDate: "", endDate: "" });
+      setEventForm({
+        name: "",
+        dateType: "single",
+        singleDate: "",
+        startDate: "",
+        endDate: "",
+        vatRatePercent: 25
+      });
       await loadAdminEvents(token);
       if (data?.event?.id) {
         setSelectedEventId(String(data.event.id));
@@ -2487,7 +2603,8 @@ const AdminPage = () => {
         city: profileForm.city,
         email: profileForm.email,
         phone: profileForm.phone,
-        bgNumber: profileForm.bgNumber
+        bgNumber: profileForm.bgNumber,
+        vatExempt: profileForm.vatExempt === true
       })
     });
     if (!response.ok) {
@@ -3942,6 +4059,12 @@ const AdminPage = () => {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
   });
+  const bookingsVatRateLabel = profileShowsVatRate
+    ? (() => {
+        const n = Number(selectedEvent?.vat_rate_percent);
+        return [6, 12, 25].includes(n) ? `${n} %` : "25 %";
+      })()
+    : "Momsbefriad";
 
   if (!token) {
     const showSignup = authView === "signup";
@@ -4263,6 +4386,33 @@ const AdminPage = () => {
               </button>
               <button type="button" className="button button-danger" onClick={confirmEventDelete} disabled={eventDeleteLoading}>
                 {eventDeleteLoading ? "Tar bort…" : "Ta bort"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {vatRateHelpOpen ? (
+        <div className="toaster-overlay" onClick={() => setVatRateHelpOpen(false)} aria-hidden="false">
+          <div
+            className="toaster admin-vat-help-toaster"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-labelledby="vat-rate-help-title"
+            aria-modal="true"
+          >
+            <h3 id="vat-rate-help-title" className="toaster-title">
+              Momssatser
+            </h3>
+            {EVENT_VAT_RATE_OPTIONS.map((opt) => (
+              <div key={opt.percent} className="admin-vat-help-block">
+                <h4 className="admin-vat-help-block-title">{opt.helpTitle}</h4>
+                <p className="admin-vat-help-block-body">{opt.helpBody}</p>
+              </div>
+            ))}
+            <div className="toaster-actions">
+              <button type="button" className="button" onClick={() => setVatRateHelpOpen(false)}>
+                Stäng
               </button>
             </div>
           </div>
@@ -5638,6 +5788,34 @@ const AdminPage = () => {
                   ) : null}
                 </label>
               </div>
+              <div className="subscription-plan-box admin-profile-moms-box">
+                <p className="admin-profile-moms-heading">
+                  <span className="field-label">Moms</span>{" "}
+                  <span className="muted admin-vat-rate-heading-hint">
+                    Välj vad som gäller för din verksamhet. Det påverkar hur moms redovisas på kvitton till deltagare och utbetalningar till organisationen.
+                  </span>
+                </p>
+                <fieldset className="subscription-plan-options" aria-label="Momsstatus för verksamheten">
+                  <label className="subscription-plan-option">
+                    <input
+                      type="radio"
+                      name="vatExempt"
+                      checked={profileForm.vatExempt !== true}
+                      onChange={() => setProfileForm((prev) => ({ ...prev, vatExempt: false }))}
+                    />
+                    <span>Verksamhet med moms (ej momsbefriad)</span>
+                  </label>
+                  <label className="subscription-plan-option">
+                    <input
+                      type="radio"
+                      name="vatExempt"
+                      checked={profileForm.vatExempt === true}
+                      onChange={() => setProfileForm((prev) => ({ ...prev, vatExempt: true }))}
+                    />
+                    <span>Momsbefriad verksamhet</span>
+                  </label>
+                </fieldset>
+              </div>
               <label className="field">
                 <span className="field-label">Adress</span>
                 <input
@@ -6286,6 +6464,13 @@ const AdminPage = () => {
                       </div>
                     )}
                   </div>
+                  {profileShowsVatRate ? (
+                    <EventVatRateField
+                      value={eventForm.vatRatePercent}
+                      onChange={(percent) => setEventForm((prev) => ({ ...prev, vatRatePercent: percent }))}
+                      onOpenHelp={() => setVatRateHelpOpen(true)}
+                    />
+                  ) : null}
                   <div className="admin-actions">
                     <button className="button" type="submit" disabled={eventLoading}>
                       Skapa event
@@ -6378,6 +6563,10 @@ const AdminPage = () => {
                 <div className="summary-item">
                   <span>Totala intäkter</span>
                   <strong>{paidTotalText} SEK</strong>
+                </div>
+                <div className="summary-item">
+                  <span>Momssats</span>
+                  <strong>{bookingsVatRateLabel}</strong>
                 </div>
                 <div className="summary-item">
                   <span>Besök på eventsidan</span>
@@ -7583,6 +7772,63 @@ const AdminPage = () => {
                   </div>
                 );
               })()}
+              {profileShowsVatRate ? (
+                <div className="section">
+                  <h2 className="admin-vat-rate-section-title">
+                    Momssats för eventet{" "}
+                    <span className="muted admin-vat-rate-heading-hint">({EVENT_VAT_RATE_HINT})</span>
+                  </h2>
+                  <p className="field-hint" style={{ marginBottom: "0.75rem" }}>
+                    Påverkar kvitton och bekräftelsemail.
+                  </p>
+                  <EventVatRateField
+                    showHeading={false}
+                    value={eventVatRateInput}
+                    onChange={setEventVatRateInput}
+                    onOpenHelp={() => setVatRateHelpOpen(true)}
+                  />
+                  <button
+                    type="button"
+                    className="button"
+                    style={{ marginTop: "0.5rem" }}
+                    disabled={eventVatRateSaving || !token || !selectedEventId}
+                    onClick={async () => {
+                      if (!token || !selectedEventId) return;
+                      setEventVatRateSaving(true);
+                      try {
+                        const response = await fetch(`${API_BASE}/admin/events/${selectedEventId}`, {
+                          method: "PUT",
+                          headers: {
+                            "Content-Type": "application/json",
+                            Authorization: `Bearer ${token}`
+                          },
+                          body: JSON.stringify({
+                            theme: selectedEvent?.theme || "default",
+                            vatRatePercent: eventVatRateInput
+                          })
+                        });
+                        if (!response.ok) {
+                          const data = await response.json().catch(() => ({}));
+                          throw new Error(data.error || "Kunde inte spara momssats.");
+                        }
+                        const data = await response.json();
+                        if (data?.event) {
+                          setEvents((prev) =>
+                            prev.map((ev) => (String(ev.id) === String(data.event.id) ? data.event : ev))
+                          );
+                        }
+                        setStatusMessage("Momssats sparad.");
+                      } catch (err) {
+                        setStatusMessage(err?.message || "Kunde inte spara momssats.");
+                      } finally {
+                        setEventVatRateSaving(false);
+                      }
+                    }}
+                  >
+                    {eventVatRateSaving ? "Sparar..." : "Spara momssats"}
+                  </button>
+                </div>
+              ) : null}
               <div className="section">
                 <h2>Text i bekräftelsemail</h2>
                 <p className="field-hint" style={{ marginBottom: "0.5rem" }}>

@@ -28,7 +28,8 @@ ALTER TABLE events
   ADD COLUMN IF NOT EXISTS registration_deadline DATE,
   ADD COLUMN IF NOT EXISTS bas_credit_used BOOLEAN NOT NULL DEFAULT FALSE,
   ADD COLUMN IF NOT EXISTS max_participants INTEGER,
-  ADD COLUMN IF NOT EXISTS confirmation_note TEXT NOT NULL DEFAULT '';
+  ADD COLUMN IF NOT EXISTS confirmation_note TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS vat_rate_percent INTEGER NOT NULL DEFAULT 25;
 
 CREATE TABLE IF NOT EXISTS admin_users (
   id SERIAL PRIMARY KEY,
@@ -71,7 +72,8 @@ ALTER TABLE admin_user_profiles
   ADD COLUMN IF NOT EXISTS bas_event_credits INTEGER NOT NULL DEFAULT 0,
   ADD COLUMN IF NOT EXISTS premium_activated_at TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS premium_ends_at TIMESTAMPTZ,
-  ADD COLUMN IF NOT EXISTS premium_avslut_requested_at TIMESTAMPTZ;
+  ADD COLUMN IF NOT EXISTS premium_avslut_requested_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS vat_exempt BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- En e-postadress får bara kopplas till ett konto (case-insensitive, tom e-post undantagen)
 CREATE UNIQUE INDEX IF NOT EXISTS admin_user_profiles_email_lower_unique

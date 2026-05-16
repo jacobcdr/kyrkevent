@@ -238,6 +238,13 @@ const normalizeQrOrderNumber = (raw) => {
   return digits;
 };
 
+const ALLOWED_EVENT_VAT_RATES = [6, 12, 25];
+
+const normalizeEventVatRatePercent = (value) => {
+  const n = Math.round(Number(value));
+  return ALLOWED_EVENT_VAT_RATES.includes(n) ? n : 25;
+};
+
 const ensureEventOwnership = async (eventId, userId, res) => {
   const resolvedEventId = normalizeEventId(eventId);
   if (!resolvedEventId) {
@@ -383,6 +390,39 @@ const getSellerNameForEvent = async (eventId) => {
   return "";
 };
 
+const getVatExemptForEvent = async (eventId) => {
+  const ctx = await getEventVatContext(eventId);
+  return ctx.vatExempt;
+};
+
+const getEventVatContext = async (eventId) => {
+  if (!eventId) {
+    return { vatExempt: false, vatRatePercent: 25 };
+  }
+  try {
+    const result = await pool.query(
+      `
+        SELECT COALESCE(p.vat_exempt, false) AS vat_exempt,
+               COALESCE(e.vat_rate_percent, 25) AS vat_rate_percent
+        FROM events e
+        JOIN admin_user_profiles p ON p.user_id = e.user_id
+        WHERE e.id = $1
+      `,
+      [eventId]
+    );
+    const row = result.rows[0];
+    if (!row) {
+      return { vatExempt: false, vatRatePercent: 25 };
+    }
+    return {
+      vatExempt: row.vat_exempt === true,
+      vatRatePercent: normalizeEventVatRatePercent(row.vat_rate_percent)
+    };
+  } catch {
+    return { vatExempt: false, vatRatePercent: 25 };
+  }
+};
+
 const buildReceiptEmail = ({
   name,
   email,
@@ -396,8 +436,12 @@ const buildReceiptEmail = ({
   sellerName: sellerNamePayload,
   orderNumber: orderNumberPayload,
   eventHasPrices: eventHasPricesPayload,
-  eventConfirmationNote
+  eventConfirmationNote,
+  vatExempt: vatExemptPayload,
+  vatRatePercent: vatRatePercentPayload
 }) => {
+  const vatExempt = vatExemptPayload === true;
+  const vatRatePercent = normalizeEventVatRatePercent(vatRatePercentPayload);
   const organizerName =
     sellerNamePayload && String(sellerNamePayload).trim()
       ? String(sellerNamePayload).trim()
@@ -486,13 +530,16 @@ const buildReceiptEmail = ({
     typeof unitPrice === "number" && typeof ticketAmount === "number"
       ? Math.max(0, unitPrice - ticketAmount)
       : null;
+  const vatRate = vatRatePercent / 100;
   const vatAmount =
-    typeof totalAmount === "number"
-      ? Math.round((totalAmount * 0.25 / 1.25) * 100) / 100
+    !vatExempt && typeof totalAmount === "number"
+      ? Math.round(((totalAmount * vatRate) / (1 + vatRate)) * 100) / 100
       : null;
   const netAmount =
     typeof totalAmount === "number"
-      ? Math.round((totalAmount - (vatAmount || 0)) * 100) / 100
+      ? vatExempt
+        ? totalAmount
+        : Math.round((totalAmount - (vatAmount || 0)) * 100) / 100
       : null;
   const discountLabel =
     typeof discountPercent === "number" && discountPercent > 0 ? ` (${discountPercent}%)` : "";
@@ -514,9 +561,13 @@ const buildReceiptEmail = ({
     typeof ticketAmount === "number" ? `Summa (exkl. serviceavgift): ${formatSek(ticketAmount)}` : null,
     serviceFee > 0 ? `Serviceavgift: ${formatSek(serviceFee)}` : null,
     discountAmount ? `Rabatt${discountLabel}: -${formatSek(discountAmount)}` : null,
-    `Styckpris (exkl. moms): ${formatSek(netAmount)}`,
-    `Moms (25%): ${formatSek(vatAmount)}`,
-    `Totalbelopp: ${formatSek(totalAmount)}`,
+    ...(vatExempt
+      ? [`Totalbelopp: ${formatSek(totalAmount)}`, "Moms: Ingen moms utgår (momsbefriad verksamhet)."]
+      : [
+          `Styckpris (exkl. moms): ${formatSek(netAmount)}`,
+          `Moms (${vatRatePercent}%): ${formatSek(vatAmount)}`,
+          `Totalbelopp: ${formatSek(totalAmount)}`
+        ]),
     "",
     ...(organizerName ? ["Vänliga hälsningar,", organizerName] : ["Vänliga hälsningar"])
   ].filter(Boolean);
@@ -534,16 +585,23 @@ const buildReceiptEmail = ({
     ...(discountAmount
       ? [[`Rabatt${discountLabel}`, `-${formatSek(discountAmount)}`]]
       : []),
-    ["Styckpris (exkl. moms)", formatSek(netAmount)],
-    ["Moms (25%)", formatSek(vatAmount)],
-    ["Totalbelopp", formatSek(totalAmount)]
+    ...(vatExempt
+      ? [
+          ["Totalbelopp", formatSek(totalAmount)],
+          ["Moms", "Ingen moms utgår (momsbefriad verksamhet)"]
+        ]
+      : [
+          ["Styckpris (exkl. moms)", formatSek(netAmount)],
+          [`Moms (${vatRatePercent}%)`, formatSek(vatAmount)],
+          ["Totalbelopp", formatSek(totalAmount)]
+        ])
   ];
 
   const html = `
     <div style="font-family: Arial, sans-serif; color:#111827;">
       <p>Hej ${name || ""}!</p>
       ${confirmationNoteHtml ? `<p>${confirmationNoteHtml}</p>` : ""}
-      <p>Tack för din bokning. Här är ditt kvitto:</p>
+      <p>Tack för din bokning. Här är ditt kvitto för hela bokningen (har du flera biljetter, är de inkluderade i kvittot nedan):</p>
       <table style="border-collapse: collapse; width: 100%; max-width: 520px;">
         <tbody>
           ${htmlRows
@@ -698,9 +756,19 @@ const sendReceiptEmail = async (payload) => {
       console.error("Failed to generate order QR code", qrErr);
     }
 
+    let vatExempt = payload.vatExempt === true;
+    let vatRatePercent = normalizeEventVatRatePercent(payload.vatRatePercent);
+    if (payload.eventId) {
+      const vatCtx = await getEventVatContext(payload.eventId);
+      vatExempt = vatCtx.vatExempt;
+      vatRatePercent = vatCtx.vatRatePercent;
+    }
+
     const message = buildReceiptEmail({
       ...payload,
-      orderNumber: resolvedOrderNumber
+      orderNumber: resolvedOrderNumber,
+      vatExempt,
+      vatRatePercent
     });
 
     if (orderQrBuffer) {
@@ -2131,11 +2199,16 @@ app.get("/payments/verify", async (req, res) => {
     }
 
     let eventNameForSummary = "";
+    let vatExempt = false;
+    let vatRatePercent = 25;
     if (payload.type !== "bas") {
       const eventId = firstItem?.eventId || (isCart && payload.items?.[0]?.eventId);
       if (eventId) {
         const eventRow = await pool.query("SELECT name FROM events WHERE id = $1", [eventId]);
         eventNameForSummary = eventRow.rows[0]?.name || "";
+        const vatCtx = await getEventVatContext(eventId);
+        vatExempt = vatCtx.vatExempt;
+        vatRatePercent = vatCtx.vatRatePercent;
       }
     }
 
@@ -2155,7 +2228,9 @@ app.get("/payments/verify", async (req, res) => {
       total: totalPaid,
       serviceFee,
       sellerName,
-      orderNumber: payload.orderNumber || null
+      orderNumber: payload.orderNumber || null,
+      vatExempt,
+      vatRatePercent
     };
     if (payload.type === "bas") {
       summary.orderType = "bas";
@@ -2855,7 +2930,7 @@ app.get("/admin/profile", requireAdmin, async (req, res) => {
   try {
     const result = await pool.query(
       `
-        SELECT profile_id, first_name, last_name, organization, org_number, address, postal_code, city, email, phone, bg_number, subscription_plan, bas_event_credits, premium_activated_at, premium_ends_at, premium_avslut_requested_at
+        SELECT profile_id, first_name, last_name, organization, org_number, address, postal_code, city, email, phone, bg_number, subscription_plan, bas_event_credits, premium_activated_at, premium_ends_at, premium_avslut_requested_at, COALESCE(vat_exempt, false) AS vat_exempt
         FROM admin_user_profiles
         WHERE user_id = $1
       `,
@@ -2907,9 +2982,11 @@ app.get("/admin/profile", requireAdmin, async (req, res) => {
       bas_event_credits: 0,
       premium_activated_at: null,
       premium_ends_at: null,
-      premium_avslut_requested_at: null
+      premium_avslut_requested_at: null,
+      vat_exempt: false
     };
     if (!out.subscription_plan) out.subscription_plan = "gratis";
+    if (out.vat_exempt == null) out.vat_exempt = false;
     if (out.bas_event_credits == null) out.bas_event_credits = 0;
     res.json({ ok: true, profile: out });
   } catch (error) {
@@ -2979,8 +3056,10 @@ app.put("/admin/profile", requireAdmin, async (req, res) => {
     email,
     phone,
     bgNumber,
-    subscriptionPlan
+    subscriptionPlan,
+    vatExempt
   } = req.body || {};
+  const vatExemptBool = vatExempt === true || vatExempt === "true" || vatExempt === 1 || vatExempt === "1";
   const plan = ["gratis", "bas", "premium"].includes(String(subscriptionPlan || "").toLowerCase())
     ? String(subscriptionPlan).toLowerCase()
     : "gratis";
@@ -3003,9 +3082,9 @@ app.put("/admin/profile", requireAdmin, async (req, res) => {
         const result = await pool.query(
           `
         INSERT INTO admin_user_profiles
-          (user_id, profile_id, first_name, last_name, organization, org_number, address, postal_code, city, email, phone, bg_number, subscription_plan)
+          (user_id, profile_id, first_name, last_name, organization, org_number, address, postal_code, city, email, phone, bg_number, subscription_plan, vat_exempt)
         VALUES
-          ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+          ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         ON CONFLICT (user_id) DO UPDATE SET
           profile_id = COALESCE(admin_user_profiles.profile_id, EXCLUDED.profile_id),
           first_name = EXCLUDED.first_name,
@@ -3019,8 +3098,9 @@ app.put("/admin/profile", requireAdmin, async (req, res) => {
           phone = EXCLUDED.phone,
           bg_number = EXCLUDED.bg_number,
           subscription_plan = EXCLUDED.subscription_plan,
+          vat_exempt = EXCLUDED.vat_exempt,
           updated_at = NOW()
-        RETURNING profile_id, first_name, last_name, organization, org_number, address, postal_code, city, email, phone, bg_number, subscription_plan
+        RETURNING profile_id, first_name, last_name, organization, org_number, address, postal_code, city, email, phone, bg_number, subscription_plan, vat_exempt
       `,
           [
             req.userId,
@@ -3035,7 +3115,8 @@ app.put("/admin/profile", requireAdmin, async (req, res) => {
             String(email || "").trim(),
             String(phone || "").trim(),
             String(bgNumber || "").trim(),
-            effectivePlan
+            effectivePlan,
+            vatExemptBool
           ]
         );
         if (effectivePlan === "premium" && (!wasPremium || !hadPremiumDates)) {
@@ -3047,7 +3128,7 @@ app.put("/admin/profile", requireAdmin, async (req, res) => {
           );
         }
         const profileRow = await pool.query(
-          "SELECT profile_id, first_name, last_name, organization, org_number, address, postal_code, city, email, phone, bg_number, subscription_plan, premium_activated_at, premium_ends_at FROM admin_user_profiles WHERE user_id = $1",
+          "SELECT profile_id, first_name, last_name, organization, org_number, address, postal_code, city, email, phone, bg_number, subscription_plan, premium_activated_at, premium_ends_at, COALESCE(vat_exempt, false) AS vat_exempt FROM admin_user_profiles WHERE user_id = $1",
           [req.userId]
         );
         res.json({ ok: true, profile: profileRow.rows[0] || result.rows[0] });
@@ -3118,7 +3199,7 @@ app.put("/admin/profile/password", requireAdmin, async (req, res) => {
 app.get("/admin/events", requireAdmin, async (_req, res) => {
   try {
     const result = await pool.query(
-      "SELECT id, slug, name, theme, event_start_date, event_end_date, registration_deadline, max_participants, confirmation_note, created_at FROM events WHERE user_id = $1 ORDER BY created_at DESC, id DESC",
+      "SELECT id, slug, name, theme, event_start_date, event_end_date, registration_deadline, max_participants, confirmation_note, COALESCE(vat_rate_percent, 25) AS vat_rate_percent, created_at FROM events WHERE user_id = $1 ORDER BY created_at DESC, id DESC",
       [_req.userId]
     );
     res.json({ ok: true, events: (result.rows || []).map(formatEventDates) });
@@ -3966,7 +4047,7 @@ app.get("/admin/payout-requests/:id/receipt.pdf", requireAdmin, async (req, res)
     const eventIds = Array.isArray(row.event_ids) ? row.event_ids : [];
     const [profileResult, bookingCountResult, eventDatesResult] = await Promise.all([
       pool.query(
-        "SELECT organization, org_number FROM admin_user_profiles WHERE user_id = $1",
+        "SELECT organization, org_number, COALESCE(vat_exempt, false) AS vat_exempt FROM admin_user_profiles WHERE user_id = $1",
         [ownerId]
       ),
       eventIds.length > 0
@@ -3990,8 +4071,9 @@ app.get("/admin/payout-requests/:id/receipt.pdf", requireAdmin, async (req, res)
       return end && end !== start ? `${e.name || "Event"}: ${start} – ${end}` : `${e.name || "Event"}: ${start}`;
     });
     const totalAmount = row.net_amount != null ? Number(row.net_amount) : Number(row.amount || 0);
+    const vatExempt = profile.vat_exempt === true;
     const vatRate = 0.25;
-    const vatAmount = totalAmount / (1 + vatRate) * vatRate; // moms 25% inkl. i totalbeloppet
+    const vatAmount = !vatExempt ? (totalAmount / (1 + vatRate)) * vatRate : 0;
     const filename = `utbetalningskvitto-${id}.pdf`;
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
@@ -4030,7 +4112,11 @@ app.get("/admin/payout-requests/:id/receipt.pdf", requireAdmin, async (req, res)
     );
     doc.moveDown(0.5);
     doc.text(`Totalbelopp: ${totalAmount.toFixed(2)} SEK`);
-    doc.text(`Moms 25%: ${vatAmount.toFixed(2)} SEK`);
+    if (vatExempt) {
+      doc.text("Moms: Ingen moms utgår (momsbefriad verksamhet)");
+    } else {
+      doc.text(`Moms 25%: ${vatAmount.toFixed(2)} SEK`);
+    }
     doc.moveDown();
     doc.fontSize(9).fillColor("#666");
     doc.text("Kontakt: kontakt@lonetec.se", { continued: false });
@@ -4439,7 +4525,7 @@ const parseDate = (v) => {
 };
 
 app.post("/admin/events", requireAdmin, async (req, res) => {
-  const { name, slug, sourceEventId, startDate, endDate } = req.body || {};
+  const { name, slug, sourceEventId, startDate, endDate, vatRatePercent: vatRatePercentBody } = req.body || {};
   if (!name || !String(name).trim()) {
     res.status(400).json({ ok: false, error: "Missing name" });
     return;
@@ -4463,10 +4549,12 @@ app.post("/admin/events", requireAdmin, async (req, res) => {
   }
 
   const planRow = await pool.query(
-    "SELECT subscription_plan FROM admin_user_profiles WHERE user_id = $1",
+    "SELECT subscription_plan, COALESCE(vat_exempt, false) AS vat_exempt FROM admin_user_profiles WHERE user_id = $1",
     [req.userId]
   );
   const plan = (planRow.rows[0]?.subscription_plan || "gratis").toLowerCase();
+  const profileVatExempt = planRow.rows[0]?.vat_exempt === true;
+  const vatRatePercent = profileVatExempt ? 25 : normalizeEventVatRatePercent(vatRatePercentBody);
   if (plan === "gratis") {
     const countResult = await pool.query(
       `SELECT COUNT(*)::int AS count FROM events
@@ -4505,8 +4593,8 @@ app.post("/admin/events", requireAdmin, async (req, res) => {
     }
 
     const eventResult = await client.query(
-      "INSERT INTO events (slug, name, user_id, event_start_date, event_end_date) VALUES ($1, $2, $3, $4, $5) RETURNING id, slug, name, theme, event_start_date, event_end_date, registration_deadline, max_participants, confirmation_note, created_at",
-      [finalSlug, String(name).trim(), req.userId, eventStartDate, eventEndDate]
+      "INSERT INTO events (slug, name, user_id, event_start_date, event_end_date, vat_rate_percent) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, slug, name, theme, event_start_date, event_end_date, registration_deadline, max_participants, confirmation_note, vat_rate_percent, created_at",
+      [finalSlug, String(name).trim(), req.userId, eventStartDate, eventEndDate, vatRatePercent]
     );
     const newEvent = eventResult.rows[0];
 
@@ -4588,7 +4676,15 @@ app.delete("/admin/events/:id", requireAdmin, async (req, res) => {
 
 app.put("/admin/events/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { theme, startDate, endDate, registrationDeadline, maxParticipants, confirmationNote } = req.body || {};
+  const {
+    theme,
+    startDate,
+    endDate,
+    registrationDeadline,
+    maxParticipants,
+    confirmationNote,
+    vatRatePercent: vatRatePercentBody
+  } = req.body || {};
   const eventId = await ensureEventOwnership(id, req.userId, res);
   if (!eventId) {
     return;
@@ -4643,6 +4739,16 @@ app.put("/admin/events/:id", requireAdmin, async (req, res) => {
   }
   const confirmationNoteValue =
     confirmationNote === undefined ? null : String(confirmationNote || "").trim();
+  let vatRatePercentValue = null;
+  if (vatRatePercentBody !== undefined) {
+    const profileVat = await pool.query(
+      "SELECT COALESCE(vat_exempt, false) AS vat_exempt FROM admin_user_profiles WHERE user_id = $1",
+      [req.userId]
+    );
+    if (profileVat.rows[0]?.vat_exempt !== true) {
+      vatRatePercentValue = normalizeEventVatRatePercent(vatRatePercentBody);
+    }
+  }
   try {
     let result;
     if (eventStartDate != null) {
@@ -4653,35 +4759,53 @@ app.put("/admin/events/:id", requireAdmin, async (req, res) => {
               event_start_date = $2,
               event_end_date = $3,
               max_participants = COALESCE($4, max_participants),
-              confirmation_note = COALESCE($5, confirmation_note)
-          WHERE id = $6
-          RETURNING id, slug, name, theme, event_start_date, event_end_date, registration_deadline, max_participants, confirmation_note, created_at
+              confirmation_note = COALESCE($5, confirmation_note),
+              vat_rate_percent = COALESCE($6, vat_rate_percent)
+          WHERE id = $7
+          RETURNING id, slug, name, theme, event_start_date, event_end_date, registration_deadline, max_participants, confirmation_note, vat_rate_percent, created_at
         `,
-        [normalizedTheme, eventStartDate, eventEndDate, maxParticipantsValue, confirmationNoteValue, eventId]
+        [
+          normalizedTheme,
+          eventStartDate,
+          eventEndDate,
+          maxParticipantsValue,
+          confirmationNoteValue,
+          vatRatePercentValue,
+          eventId
+        ]
       );
-    } else if (registrationDeadline !== undefined || maxParticipants !== undefined) {
+    } else if (registrationDeadline !== undefined || maxParticipants !== undefined || vatRatePercentValue != null) {
       result = await pool.query(
         `
           UPDATE events
           SET theme = COALESCE($1, theme),
               registration_deadline = COALESCE($2, registration_deadline),
               max_participants = COALESCE($3, max_participants),
-              confirmation_note = COALESCE($4, confirmation_note)
-          WHERE id = $5
-          RETURNING id, slug, name, theme, event_start_date, event_end_date, registration_deadline, max_participants, confirmation_note, created_at
+              confirmation_note = COALESCE($4, confirmation_note),
+              vat_rate_percent = COALESCE($5, vat_rate_percent)
+          WHERE id = $6
+          RETURNING id, slug, name, theme, event_start_date, event_end_date, registration_deadline, max_participants, confirmation_note, vat_rate_percent, created_at
         `,
-        [normalizedTheme, deadlineValue, maxParticipantsValue, confirmationNoteValue, eventId]
+        [
+          normalizedTheme,
+          deadlineValue,
+          maxParticipantsValue,
+          confirmationNoteValue,
+          vatRatePercentValue,
+          eventId
+        ]
       );
     } else {
       result = await pool.query(
         `
           UPDATE events
           SET theme = COALESCE($1, theme),
-              confirmation_note = COALESCE($2, confirmation_note)
-          WHERE id = $3
-          RETURNING id, slug, name, theme, event_start_date, event_end_date, registration_deadline, max_participants, confirmation_note, created_at
+              confirmation_note = COALESCE($2, confirmation_note),
+              vat_rate_percent = COALESCE($3, vat_rate_percent)
+          WHERE id = $4
+          RETURNING id, slug, name, theme, event_start_date, event_end_date, registration_deadline, max_participants, confirmation_note, vat_rate_percent, created_at
         `,
-        [normalizedTheme, confirmationNoteValue, eventId]
+        [normalizedTheme, confirmationNoteValue, vatRatePercentValue, eventId]
       );
     }
     if (result.rowCount === 0) {
@@ -5781,7 +5905,8 @@ const ensureBookingsTable = async () => {
       ADD COLUMN IF NOT EXISTS bas_event_credits INTEGER NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS premium_activated_at TIMESTAMPTZ,
       ADD COLUMN IF NOT EXISTS premium_ends_at TIMESTAMPTZ,
-      ADD COLUMN IF NOT EXISTS premium_avslut_requested_at TIMESTAMPTZ
+      ADD COLUMN IF NOT EXISTS premium_avslut_requested_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS vat_exempt BOOLEAN NOT NULL DEFAULT FALSE
   `);
   try {
     await pool.query(`
@@ -5837,7 +5962,8 @@ const ensureBookingsTable = async () => {
       ADD COLUMN IF NOT EXISTS event_end_date DATE,
       ADD COLUMN IF NOT EXISTS registration_deadline DATE,
       ADD COLUMN IF NOT EXISTS bas_credit_used BOOLEAN NOT NULL DEFAULT FALSE,
-      ADD COLUMN IF NOT EXISTS max_participants INTEGER
+      ADD COLUMN IF NOT EXISTS max_participants INTEGER,
+      ADD COLUMN IF NOT EXISTS vat_rate_percent INTEGER NOT NULL DEFAULT 25
   `);
   const defaultEventResult = await pool.query(
     `
