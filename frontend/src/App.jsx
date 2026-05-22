@@ -613,7 +613,16 @@ const PaymentStatusPage = () => {
         if (data.summary?.orderType === "bas") {
           setMessage(`Bas-köp genomfört. ${data.summary.quantity || 0} eventkredit(er) är tillagda. Du kan nu lägga till priser på biljetter under Dina event.`);
         } else {
-          setMessage("Betalningen är genomförd. Din anmälan är registrerad.");
+          const attendeeCount = Array.isArray(data.summary?.names)
+            ? data.summary.names.filter(Boolean).length
+            : data.summary?.name
+              ? 1
+              : 0;
+          setMessage(
+            attendeeCount > 1
+              ? "Betalningen är genomförd. Dina anmälningar är registrerade."
+              : "Betalningen är genomförd. Din anmälan är registrerad."
+          );
         }
       } else {
         setStatus(data.status || "pending");
@@ -682,6 +691,14 @@ const PaymentStatusPage = () => {
       })
       .replace(/\D/g, "");
   const hasPriceInfo = typeof totalAmount === "number" && totalAmount > 0;
+  const attendeeNames = (() => {
+    if (!summary) return [];
+    if (Array.isArray(summary.names) && summary.names.length > 0) {
+      return summary.names.map((n) => String(n || "").trim()).filter(Boolean);
+    }
+    if (summary.name) return [String(summary.name).trim()];
+    return [];
+  })();
 
   return (
     <div className="page">
@@ -715,9 +732,17 @@ const PaymentStatusPage = () => {
                     </div>
                   </>
                 ) : (
-                  <div className="summary-row">
+                  <div className="summary-row summary-row-names">
                     <span>Namn</span>
-                    <strong>{summary.name || "-"}</strong>
+                    <div className="summary-names-list">
+                      {attendeeNames.length > 0 ? (
+                        attendeeNames.map((personName, index) => (
+                          <strong key={`${index}-${personName}`}>{personName}</strong>
+                        ))
+                      ) : (
+                        <strong>-</strong>
+                      )}
+                    </div>
                   </div>
                 )}
                 <div className="summary-row">
@@ -1312,6 +1337,8 @@ const AdminPage = () => {
   const [testEmail, setTestEmail] = useState("");
   const [bookingsPage, setBookingsPage] = useState(1);
   const [bookingsRefreshLoading, setBookingsRefreshLoading] = useState(false);
+  const [refundModal, setRefundModal] = useState(null);
+  const [refundSubmitting, setRefundSubmitting] = useState(false);
   const [sort, setSort] = useState({ key: "created_at", dir: "desc" });
   const [error, setError] = useState("");
   const [toastMessage, setToastMessage] = useState("");
@@ -1612,6 +1639,11 @@ const AdminPage = () => {
       ),
     [myPayoutRequests]
   );
+  const selectedEventRefundLockedByPayout = useMemo(() => {
+    const eventId = Number(selectedEventId);
+    if (!Number.isFinite(eventId)) return false;
+    return payoutEventIdsWithOngoingRequest.has(eventId) || payoutEventIdsWithPaidRequest.has(eventId);
+  }, [selectedEventId, payoutEventIdsWithOngoingRequest, payoutEventIdsWithPaidRequest]);
 
   const adminPaymentsDistinctValues = useMemo(() => {
     const rows = adminPaymentsRows || [];
@@ -2223,6 +2255,7 @@ const AdminPage = () => {
       return;
     }
     loadAdminBookings(token, selectedEventId).catch(() => setBookings([]));
+    loadMyPayoutRequests(token);
     loadAdminEventViews(token, selectedEventId).catch(() => setAdminEventViews(0));
     loadAdminPrices(token, selectedEventId).catch(() => setPricesAdmin([]));
     loadAdminDiscounts(token, selectedEventId).catch(() => setDiscounts([]));
@@ -4026,35 +4059,127 @@ const AdminPage = () => {
     return String(match.value ?? "");
   };
 
-  const getPaymentStatusVariant = (status) => {
+  const getPaymentStatusVariant = (status, booking) => {
     const s = String(status || "").toLowerCase();
+    if (s === "paid" && booking && Number(booking.refund_amount) > 0) return "partial";
     if (s === "paid") return "ok";
+    if (s === "refunded") return "pending";
     if (s === "pending" || s === "open") return "pending";
     if (s === "canceled" || s === "cancelled" || s === "expired" || s === "failed") return "error";
     return "unknown";
   };
-  const getPaymentStatusLabel = (status) => {
+  const getBookingNetTicketRevenue = (booking) => {
+    const status = String(booking?.payment_status || "").toLowerCase();
+    if (status !== "paid" && status !== "refunded") return 0;
+    const ticket = parsePriceFromText(booking?.pris);
+    if (ticket == null || ticket < 0.01) return 0;
+    const refunded = Number(booking?.refund_amount) || 0;
+    return Math.max(0, Math.round((ticket - refunded) * 100) / 100);
+  };
+  const canRefundBooking = (booking) => {
+    const status = String(booking?.payment_status || "").toLowerCase();
+    if (status !== "paid") return false;
+    if (Number(booking?.refund_amount) > 0.001) return false;
+    const ticket = parsePriceFromText(booking?.pris);
+    return ticket != null && ticket > 0.001;
+  };
+
+  const getPaymentStatusLabel = (status, booking) => {
     const s = String(status || "").toLowerCase();
+    if (s === "paid" && booking && Number(booking.refund_amount) > 0) {
+      return "Delåterbetald";
+    }
     const labels = {
       paid: "Betald",
+      refunded: "Återbetald",
       pending: "Väntar",
       open: "Öppen",
       canceled: "Avbruten",
       cancelled: "Avbruten",
       expired: "Utgången",
-      failed: "Misslyckad"
+      failed: "Misslyckad",
+      manual: "Gratis/manuell"
     };
     return labels[s] || (status || "–");
   };
 
-  const paidBookings = bookings.filter(
-    (booking) => String(booking.payment_status || "").toLowerCase() === "paid"
+  const openRefundModal = async (booking) => {
+    if (!token || !booking?.id) return;
+    setRefundModal({ booking, loading: true, amount: "", eligibility: null, error: "" });
+    try {
+      const response = await fetch(`${API_BASE}/admin/bookings/${booking.id}/refund-eligibility`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error || "Kunde inte förbereda återbetalning.");
+      }
+      setRefundModal({
+        booking,
+        loading: false,
+        amount: String(data.maxRefundAmount ?? ""),
+        eligibility: data,
+        error: ""
+      });
+    } catch (err) {
+      setRefundModal({
+        booking,
+        loading: false,
+        amount: "",
+        eligibility: null,
+        error: err?.message || "Kunde inte förbereda återbetalning."
+      });
+    }
+  };
+
+  const submitRefund = async () => {
+    if (!token || !refundModal?.booking?.id || !refundModal.eligibility) return;
+    const max = Number(refundModal.eligibility.maxRefundAmount);
+    const amount = Number(String(refundModal.amount || "").replace(",", "."));
+    if (!Number.isFinite(amount) || amount < 0.01) {
+      setRefundModal((prev) => ({ ...prev, error: "Ange ett giltigt belopp." }));
+      return;
+    }
+    if (amount > max + 0.001) {
+      setRefundModal((prev) => ({
+        ...prev,
+        error: `Beloppet får högst vara ${max.toLocaleString("sv-SE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} SEK (biljettpris).`
+      }));
+      return;
+    }
+    setRefundSubmitting(true);
+    setRefundModal((prev) => ({ ...prev, error: "" }));
+    try {
+      const response = await fetch(`${API_BASE}/admin/bookings/${refundModal.booking.id}/refund`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ amount })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error || "Återbetalning misslyckades.");
+      }
+      setRefundModal(null);
+      showToast(data.message || "Återbetalning skickad till Mollie.");
+      if (selectedEventId) {
+        await loadAdminBookings(token, selectedEventId);
+      }
+    } catch (err) {
+      setRefundModal((prev) => ({ ...prev, error: err?.message || "Återbetalning misslyckades." }));
+    } finally {
+      setRefundSubmitting(false);
+    }
+  };
+
+  const bookingsWithRevenue = bookings.filter((booking) => getBookingNetTicketRevenue(booking) > 0.001);
+  const paidCount = bookingsWithRevenue.length;
+  const paidTotal = bookingsWithRevenue.reduce(
+    (sum, booking) => sum + getBookingNetTicketRevenue(booking),
+    0
   );
-  const paidCount = paidBookings.length;
-  const paidTotal = paidBookings.reduce((sum, booking) => {
-    const amount = parsePriceFromText(booking.pris);
-    return sum + (amount || 0);
-  }, 0);
   const paidTotalText = paidTotal.toLocaleString("sv-SE", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
@@ -6728,6 +6853,7 @@ const AdminPage = () => {
                         <th>Ordernummer</th>
                       ) : null}
                       {bookingColumnVisibility.checked_in ? <th>Incheckad</th> : null}
+                      <th>Åtgärd</th>
                       {customFieldsAdmin
                         .filter((field) => field.field_type !== "paragraph" && field.field_type !== "linebreak")
                         .map((field) =>
@@ -6762,7 +6888,7 @@ const AdminPage = () => {
                                 field.field_type !== "paragraph" &&
                                 field.field_type !== "linebreak" &&
                                 bookingCustomFieldVisibility[String(field.id)] !== false
-                            ).length
+                            ).length + 1
                           }
                           className="muted"
                         >
@@ -6780,13 +6906,22 @@ const AdminPage = () => {
                           {bookingColumnVisibility.ticket ? <td>{booking.ticket || "-"}</td> : null}
                           {bookingColumnVisibility.terms ? <td>{booking.terms ? "Ja" : "Nej"}</td> : null}
                           {bookingColumnVisibility.payment_status ? (
-                            <td>
+                            <td className="admin-booking-payment-cell">
                               <span
-                                className={`status-pill status-payment-${getPaymentStatusVariant(
-                                  booking.payment_status
+                                className={`status-pill admin-booking-payment-pill status-payment-${getPaymentStatusVariant(
+                                  booking.payment_status,
+                                  booking
                                 )}`}
+                                title={
+                                  Number(booking.refund_amount) > 0
+                                    ? `${Number(booking.refund_amount).toLocaleString("sv-SE", {
+                                        minimumFractionDigits: 2,
+                                        maximumFractionDigits: 2
+                                      })} SEK återbetalt`
+                                    : undefined
+                                }
                               >
-                                {getPaymentStatusLabel(booking.payment_status)}
+                                {getPaymentStatusLabel(booking.payment_status, booking)}
                               </span>
                             </td>
                           ) : null}
@@ -6814,6 +6949,29 @@ const AdminPage = () => {
                               </td>
                             ) : null
                           )}
+                          <td className="admin-booking-actions-cell">
+                            {canRefundBooking(booking) && selectedEventRefundLockedByPayout ? (
+                              <span className="muted" style={{ fontSize: "0.82rem" }} title="Utbetalning är begärd eller genomförd för eventet">
+                                Låst
+                              </span>
+                            ) : canRefundBooking(booking) ? (
+                              <button
+                                type="button"
+                                className="button button-outline button-small"
+                                onClick={() => openRefundModal(booking)}
+                              >
+                                Återbetala
+                              </button>
+                            ) : Number(booking.refund_amount) > 0 ? (
+                              <span className="muted" style={{ fontSize: "0.82rem" }}>
+                                {Number(booking.refund_amount).toLocaleString("sv-SE", {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2
+                                })}{" "}
+                                SEK återbetalt
+                              </span>
+                            ) : null}
+                          </td>
                           {bookingColumnVisibility.created_at ? (
                             <td>
                               {booking.created_at
@@ -6827,6 +6985,96 @@ const AdminPage = () => {
                   </tbody>
                 </table>
               </div>
+            {refundModal ? (
+              <div className="toaster-overlay" onClick={() => !refundSubmitting && setRefundModal(null)}>
+                <div
+                  className="toaster admin-refund-toaster"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="refund-dialog-title"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <h3 id="refund-dialog-title" className="toaster-title">
+                    Återbetala biljett
+                  </h3>
+                  {refundModal.loading ? (
+                    <p className="muted">Kontrollerar betalning…</p>
+                  ) : refundModal.error && !refundModal.eligibility ? (
+                    <p className="field-hint field-hint-error">{refundModal.error}</p>
+                  ) : refundModal.eligibility ? (
+                    <>
+                      <p className="toaster-message">
+                        <strong>{refundModal.booking.name}</strong>
+                        {refundModal.booking.email ? ` (${refundModal.booking.email})` : ""}
+                        <br />
+                        Biljett: {refundModal.booking.ticket || "–"}
+                        <br />
+                        Biljettpris:{" "}
+                        {Number(refundModal.eligibility.ticketPrice).toLocaleString("sv-SE", {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2
+                        })}{" "}
+                        SEK
+                      </p>
+                      {refundModal.eligibility.cartNote ? (
+                        <p className="field-hint admin-refund-cart-note">{refundModal.eligibility.cartNote}</p>
+                      ) : null}
+                      <p className="field-hint">
+                        Max för denna biljett:{" "}
+                        <strong>
+                          {Number(refundModal.eligibility.maxRefundAmount).toLocaleString("sv-SE", {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2
+                          })}{" "}
+                          SEK
+                        </strong>
+                        . Serviceavgift återbetalas inte automatiskt.
+                      </p>
+                      <label className="field">
+                        <span className="field-label">Belopp att återbetala (SEK)</span>
+                        <input
+                          type="number"
+                          min="0.01"
+                          step="0.01"
+                          max={refundModal.eligibility.maxRefundAmount}
+                          value={refundModal.amount}
+                          onChange={(e) =>
+                            setRefundModal((prev) => ({ ...prev, amount: e.target.value, error: "" }))
+                          }
+                        />
+                      </label>
+                      {refundModal.error ? (
+                        <p className="field-hint field-hint-error">{refundModal.error}</p>
+                      ) : null}
+                      <p className="field-hint">
+                        Pengarna går tillbaka via Mollie till kundens betalsätt. Detta kan inte ångras i
+                        systemet.
+                      </p>
+                    </>
+                  ) : null}
+                  <div className="toaster-actions">
+                    <button
+                      type="button"
+                      className="button button-outline"
+                      disabled={refundSubmitting}
+                      onClick={() => setRefundModal(null)}
+                    >
+                      Avbryt
+                    </button>
+                    <button
+                      type="button"
+                      className="button button-danger"
+                      disabled={
+                        refundSubmitting || refundModal.loading || !refundModal.eligibility
+                      }
+                      onClick={submitRefund}
+                    >
+                      {refundSubmitting ? "Skickar…" : "Bekräfta återbetalning"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
             {sortedBookings.length > 0 ? (
               <div className="admin-actions">
                 <button

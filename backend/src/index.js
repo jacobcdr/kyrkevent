@@ -145,11 +145,25 @@ const paymentLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false
 });
+const bookingLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: "För många anmälningar. Försök igen om en stund." }
+});
 const adminEmailLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
   max: 6,
   standardHeaders: true,
   legacyHeaders: false
+});
+const refundLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: "För många återbetalningsförsök. Försök igen om en stund." }
 });
 
 if (!fs.existsSync(UPLOAD_DIR)) {
@@ -980,17 +994,6 @@ app.post("/events/:slug/view", async (req, res) => {
   }
 });
 
-app.get("/bookings", async (req, res) => {
-  try {
-    const result = await pool.query(
-      "SELECT id, name, email, city, phone, organization, ticket, terms, payment_status, pris, created_at FROM bookings ORDER BY created_at DESC"
-    );
-    res.json({ ok: true, bookings: result.rows });
-  } catch (error) {
-    res.status(500).json({ ok: false, error: "Failed to load bookings" });
-  }
-});
-
 app.get("/program", async (req, res) => {
   try {
     const eventId = resolveEventId(req.query.eventId);
@@ -1369,7 +1372,7 @@ const getDiscountForCode = async (code, eventId) => {
   return { ok: true, discount };
 };
 
-app.post("/bookings", async (req, res) => {
+app.post("/bookings", bookingLimiter, async (req, res) => {
   const parsed = parseBookingPayload(req.body);
   if (!parsed.ok) {
     res.status(400).json({ ok: false, error: parsed.error });
@@ -2185,9 +2188,14 @@ app.get("/payments/verify", async (req, res) => {
         ? ticketTotal + serviceFee
         : null;
 
-    const names = isCart
-      ? (payload.items || []).map((p) => p.name).filter((n) => !!n)
-      : [firstItem?.name].filter((n) => !!n);
+    const nameFromPayloadItem = (p) => {
+      const full = String(p?.name || "").trim();
+      if (full) return full;
+      return [p?.firstName, p?.lastName].filter(Boolean).join(" ").trim();
+    };
+    let names = isCart
+      ? (payload.items || []).map(nameFromPayloadItem).filter((n) => !!n)
+      : [nameFromPayloadItem(firstItem)].filter((n) => !!n);
 
     // Särskild hantering för köp av Bas-eventkrediter där payload.type === "bas"
     if (payload.type === "bas" && payload.quantity) {
@@ -2509,6 +2517,43 @@ app.get("/payments/verify", async (req, res) => {
         "UPDATE payment_orders SET status = $1 WHERE payment_id = $2",
         [status, paymentId]
       );
+    }
+
+    const linkedOrder = await pool.query(
+      "SELECT booking_id, booking_ids FROM payment_orders WHERE payment_id = $1",
+      [paymentId]
+    );
+    const linked = linkedOrder.rows[0];
+    const linkedIds = Array.isArray(linked?.booking_ids)
+      ? linked.booking_ids.map((id) => Number(id)).filter((id) => id > 0)
+      : linked?.booking_id && Number(linked.booking_id) > 0
+        ? [Number(linked.booking_id)]
+        : [];
+    if (linkedIds.length > 0) {
+      const bookingNamesResult = await pool.query(
+        `
+          SELECT id, name, last_name
+          FROM bookings
+          WHERE id = ANY($1::int[])
+          ORDER BY array_position($1::int[], id)
+        `,
+        [linkedIds]
+      );
+      const fromBookings = (bookingNamesResult.rows || [])
+        .map((row) => {
+          const name = String(row.name || "").trim();
+          const lastName = String(row.last_name || "").trim();
+          if (lastName && name && !name.toLowerCase().includes(lastName.toLowerCase())) {
+            return `${name} ${lastName}`.trim();
+          }
+          return name || lastName;
+        })
+        .filter(Boolean);
+      if (fromBookings.length > 0) {
+        names = fromBookings;
+        summary.names = names;
+        summary.name = names[0] || summary.name;
+      }
     }
 
     res.json({ ok: true, status, summary });
@@ -3217,6 +3262,233 @@ const parsePrisToNumber = (v) => {
   return Number.isFinite(n) ? n : 0;
 };
 
+/** Kvarvarande biljettintäkt efter delåterbetalning (serviceavgift ingår inte). */
+function getBookingNetTicketRevenue(booking) {
+  const status = String(booking?.payment_status || "").toLowerCase();
+  if (status !== "paid" && status !== "refunded") return 0;
+  const ticket = Math.round(parsePrisToNumber(booking?.pris) * 100) / 100;
+  if (ticket < 0.01) return 0;
+  const refunded = Math.round(parsePrisToNumber(booking?.refund_amount) * 100) / 100;
+  return Math.max(0, Math.round((ticket - refunded) * 100) / 100);
+}
+
+function getBookingRemainingTicketRefund(booking) {
+  const ticket = Math.round(parsePrisToNumber(booking?.pris) * 100) / 100;
+  const refunded = Math.round(parsePrisToNumber(booking?.refund_amount) * 100) / 100;
+  return Math.max(0, Math.round((ticket - refunded) * 100) / 100);
+}
+
+function bookingHasPriorRefund(booking) {
+  return Math.round(parsePrisToNumber(booking?.refund_amount) * 100) / 100 > 0.001;
+}
+
+const formatMollieAmount = (amountSek) => {
+  const n = Math.round(Number(amountSek) * 100) / 100;
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n.toFixed(2);
+};
+
+const isNonTicketMolliePaymentPayload = (payload) => {
+  if (!payload || typeof payload !== "object") return true;
+  if (payload.type === "bas") return true;
+  if (payload.quantity != null && payload.profile_id && !payload.eventId && !payload.items) return true;
+  return false;
+};
+
+const payloadMatchesEventTicketBooking = (payload, booking) => {
+  if (isNonTicketMolliePaymentPayload(payload)) return false;
+  const eventId = Number(booking.event_id);
+  if (!Number.isFinite(eventId)) return false;
+  if (Array.isArray(payload.items) && payload.items.length > 0) {
+    return payload.items.some((item) => Number(item.eventId) === eventId);
+  }
+  return Number(payload.eventId) === eventId;
+};
+
+async function findPaymentOrderForBooking(bookingId) {
+  const result = await pool.query(
+    `
+      SELECT payment_id, payload, status, booking_id, booking_ids, created_at
+      FROM payment_orders
+      WHERE booking_id = $1 OR $1 = ANY(COALESCE(booking_ids, ARRAY[]::integer[]))
+      ORDER BY created_at DESC
+      LIMIT 1
+    `,
+    [bookingId]
+  );
+  return result.rows[0] || null;
+}
+
+async function getMolliePaymentRefundBalance(paymentId) {
+  const payment = await mollie.payments.get(paymentId);
+  const status = String(payment.status || "").toLowerCase();
+  if (status !== "paid") {
+    return { ok: false, error: "Betalningen är inte slutförd hos Mollie och kan inte återbetalas." };
+  }
+  const paid = Number(payment.amount?.value || 0);
+  const refunded = Number(payment.amountRefunded?.value || 0);
+  const remaining = Math.round((paid - refunded) * 100) / 100;
+  if (remaining < 0.01) {
+    return { ok: false, error: "Hela betalningen är redan återbetalad hos Mollie." };
+  }
+  return {
+    ok: true,
+    paid,
+    refunded,
+    remaining,
+    currency: payment.amount?.currency || MOLLIE_CURRENCY
+  };
+}
+
+async function createMollieRefund(paymentId, amountSek, description, metadata) {
+  const value = formatMollieAmount(amountSek);
+  if (!value) {
+    throw new Error("Ogiltigt belopp för återbetalning.");
+  }
+  const amount = { currency: MOLLIE_CURRENCY, value };
+  if (mollie.paymentRefunds?.create) {
+    return mollie.paymentRefunds.create({
+      paymentId,
+      amount,
+      description,
+      metadata: metadata || {}
+    });
+  }
+  const res = await fetch(`https://api.mollie.com/v2/payments/${encodeURIComponent(paymentId)}/refunds`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${MOLLIE_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ amount, description, metadata: metadata || {} })
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    const msg = data?.detail || data?.title || data?.message || "Mollie återbetalning misslyckades.";
+    throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+  }
+  return data;
+}
+
+const PAYOUT_REFUND_LOCK_STATUSES = ["pågår", "betald"];
+
+async function getEventPayoutRefundLockStatus(eventId, queryable = pool) {
+  const result = await queryable.query(
+    `
+      SELECT status FROM payout_requests
+      WHERE $1 = ANY(event_ids) AND status = ANY($2::text[])
+      ORDER BY requested_at DESC
+      LIMIT 1
+    `,
+    [eventId, PAYOUT_REFUND_LOCK_STATUSES]
+  );
+  return result.rowCount > 0 ? result.rows[0].status : null;
+}
+
+function payoutRefundLockErrorMessage(payoutStatus) {
+  if (payoutStatus === "betald") {
+    return "Återbetalning är stängd eftersom utbetalning för detta event redan är genomförd.";
+  }
+  return "Återbetalning är stängd eftersom utbetalning redan har begärts för detta event.";
+}
+
+async function buildBookingRefundContext(bookingId, userId) {
+  const bookingResult = await pool.query(
+    `
+      SELECT b.id, b.event_id, b.name, b.email, b.pris, b.payment_status, b.refunded_at, b.refund_amount
+      FROM bookings b
+      INNER JOIN events e ON e.id = b.event_id AND e.user_id = $2
+      WHERE b.id = $1
+    `,
+    [bookingId, userId]
+  );
+  if (bookingResult.rowCount === 0) {
+    return { ok: false, status: 404, error: "Bokning hittades inte." };
+  }
+  const booking = bookingResult.rows[0];
+  const paymentStatus = String(booking.payment_status || "").toLowerCase();
+  if (paymentStatus !== "paid") {
+    return { ok: false, status: 400, error: "Endast betalda biljetter kan återbetalas." };
+  }
+  if (bookingHasPriorRefund(booking)) {
+    return {
+      ok: false,
+      status: 400,
+      error: "Återbetalning har redan gjorts för denna biljett. Endast en återbetalning per biljett är tillåten."
+    };
+  }
+  const priorRefundRow = await pool.query(
+    "SELECT 1 FROM payment_refunds WHERE booking_id = $1 LIMIT 1",
+    [bookingId]
+  );
+  if (priorRefundRow.rowCount > 0) {
+    return {
+      ok: false,
+      status: 400,
+      error: "Återbetalning har redan gjorts för denna biljett. Endast en återbetalning per biljett är tillåten."
+    };
+  }
+  const payoutLockStatus = await getEventPayoutRefundLockStatus(booking.event_id);
+  if (payoutLockStatus) {
+    return {
+      ok: false,
+      status: 403,
+      error: payoutRefundLockErrorMessage(payoutLockStatus),
+      payoutLocked: true,
+      payoutStatus: payoutLockStatus
+    };
+  }
+  const ticketPrice = Math.round(parsePrisToNumber(booking.pris) * 100) / 100;
+  if (ticketPrice < 0.01) {
+    return { ok: false, status: 400, error: "Biljettpris saknas eller är ogiltigt." };
+  }
+  const paymentOrder = await findPaymentOrderForBooking(bookingId);
+  if (!paymentOrder?.payment_id) {
+    return {
+      ok: false,
+      status: 400,
+      error: "Ingen Mollie-betalning kopplad till denna biljett (t.ex. gratis anmälan)."
+    };
+  }
+  if (Number(paymentOrder.booking_id) === -1) {
+    return { ok: false, status: 400, error: "Denna betalning gäller inte en eventbiljett." };
+  }
+  const payload = paymentOrder.payload || {};
+  if (!payloadMatchesEventTicketBooking(payload, booking)) {
+    return {
+      ok: false,
+      status: 403,
+      error:
+        "Återbetalning är endast tillåten för eventbiljetter. Abonnemang (Bas) och andra betalningstyper kan inte återbetalas här."
+    };
+  }
+  if (!mollie) {
+    return { ok: false, status: 500, error: "MOLLIE_API_KEY is not set" };
+  }
+  const balance = await getMolliePaymentRefundBalance(paymentOrder.payment_id);
+  if (!balance.ok) {
+    return { ok: false, status: 400, error: balance.error };
+  }
+  const maxRefundAmount = Math.min(ticketPrice, balance.remaining);
+  const cartBookingCount = Array.isArray(paymentOrder.booking_ids)
+    ? paymentOrder.booking_ids.filter((id) => Number(id) > 0).length
+    : paymentOrder.booking_id && Number(paymentOrder.booking_id) > 0
+      ? 1
+      : 0;
+  return {
+    ok: true,
+    booking,
+    paymentId: paymentOrder.payment_id,
+    ticketPrice,
+    maxRefundAmount,
+    paymentPaidTotal: balance.paid,
+    paymentRefundedTotal: balance.refunded,
+    paymentRemaining: balance.remaining,
+    sharedCartPayment: cartBookingCount > 1,
+    cartBookingCount
+  };
+}
+
 function addDaysToDateStr(dateStr, days) {
   if (!dateStr || typeof dateStr !== "string") return null;
   const m = dateStr.trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
@@ -3258,8 +3530,8 @@ app.get("/admin/payout-summary", requireAdmin, async (req, res) => {
       return res.json({ ok: true, events: [], grandTotal: 0, payoutDaysAfterEvent: PAYOUT_DAYS_AFTER_EVENT });
     }
     const bookingsResult = await pool.query(
-      "SELECT event_id, pris FROM bookings WHERE payment_status = $1 AND event_id = ANY($2::int[])",
-      ["paid", eventIds]
+      "SELECT event_id, pris, refund_amount, payment_status FROM bookings WHERE payment_status IN ('paid', 'refunded') AND event_id = ANY($1::int[])",
+      [eventIds]
     );
     const byEvent = {};
     events.forEach((e) => {
@@ -3274,8 +3546,8 @@ app.get("/admin/payout-summary", requireAdmin, async (req, res) => {
       };
     });
     (bookingsResult.rows || []).forEach((row) => {
-      const rev = parsePrisToNumber(row.pris);
-      if (byEvent[row.event_id]) {
+      const rev = getBookingNetTicketRevenue(row);
+      if (rev > 0 && byEvent[row.event_id]) {
         byEvent[row.event_id].totalRevenue += rev;
         byEvent[row.event_id].paidCount += 1;
       }
@@ -3306,6 +3578,56 @@ function computePayoutFee(grossAmount) {
   const fee = grossAmount > PAYOUT_FEE_THRESHOLD ? PAYOUT_FEE_AMOUNT : 0;
   const net = Math.round((grossAmount - fee) * 100) / 100;
   return { fee, net };
+}
+
+/** Serialiserar utbetalning/återbetalning per event respektive per bokning. */
+const ADVISORY_LOCK_NAMESPACE_REFUND_BOOKING = 71001;
+const ADVISORY_LOCK_NAMESPACE_PAYOUT_EVENT = 71002;
+
+async function acquirePayoutEventAdvisoryLocks(client, eventIds) {
+  const sorted = [...new Set(eventIds.map((id) => Number(id)).filter(Number.isFinite))].sort((a, b) => a - b);
+  for (const eventId of sorted) {
+    await client.query("SELECT pg_advisory_xact_lock($1, $2)", [
+      ADVISORY_LOCK_NAMESPACE_PAYOUT_EVENT,
+      eventId
+    ]);
+  }
+}
+
+async function computePayoutRevenueSnapshot(client, eventIds, eventsList) {
+  const bookingsResult = await client.query(
+    `
+      SELECT event_id, pris, refund_amount, payment_status FROM bookings
+      WHERE payment_status IN ('paid', 'refunded') AND event_id = ANY($1::int[])
+      FOR UPDATE
+    `,
+    [eventIds]
+  );
+  const byEvent = {};
+  eventsList.filter((e) => eventIds.includes(e.id)).forEach((e) => {
+    byEvent[e.id] = { name: e.name, totalRevenue: 0, paidCount: 0 };
+  });
+  (bookingsResult.rows || []).forEach((row) => {
+    const rev = getBookingNetTicketRevenue(row);
+    if (rev > 0 && byEvent[row.event_id]) {
+      byEvent[row.event_id].totalRevenue += rev;
+      byEvent[row.event_id].paidCount += 1;
+    }
+  });
+  const eventsWithRevenue = eventIds
+    .map((id) => {
+      const e = byEvent[id];
+      return e
+        ? {
+            name: e.name,
+            totalRevenue: Math.round(e.totalRevenue * 100) / 100,
+            paidCount: e.paidCount
+          }
+        : null;
+    })
+    .filter(Boolean);
+  const grandTotal = Math.round(eventsWithRevenue.reduce((s, e) => s + e.totalRevenue, 0) * 100) / 100;
+  return { eventsWithRevenue, grandTotal };
 }
 
 app.post("/admin/payout-request", requireAdmin, async (req, res) => {
@@ -3378,42 +3700,70 @@ app.post("/admin/payout-request", requireAdmin, async (req, res) => {
         return;
       }
     }
+    const profile = profileResult.rows[0] || {};
+    const client = await pool.connect();
     let eventsWithRevenue = [];
     let grandTotal = 0;
-    if (eventIds.length > 0) {
-      const bookingsResult = await pool.query(
-        "SELECT event_id, pris FROM bookings WHERE payment_status = $1 AND event_id = ANY($2::int[])",
-        ["paid", eventIds]
+    let payoutFee = 0;
+    let netAmount = 0;
+    let eventNamesStr = "";
+    try {
+      await client.query("BEGIN");
+      await acquirePayoutEventAdvisoryLocks(client, eventIds);
+      const overlapInTxn = await client.query(
+        `
+          SELECT 1 FROM payout_requests
+          WHERE user_id = $1 AND status = $2 AND event_ids && $3::int[]
+          LIMIT 1
+        `,
+        [req.userId, "pågår", eventIds]
       );
-      const byEvent = {};
-      events.filter((e) => eventIds.includes(e.id)).forEach((e) => {
-        byEvent[e.id] = { name: e.name, totalRevenue: 0, paidCount: 0 };
-      });
-      (bookingsResult.rows || []).forEach((row) => {
-        const rev = parsePrisToNumber(row.pris);
-        if (byEvent[row.event_id]) {
-          byEvent[row.event_id].totalRevenue += rev;
-          byEvent[row.event_id].paidCount += 1;
-        }
-      });
-      eventsWithRevenue = eventIds
-        .map((id) => {
-          const e = byEvent[id];
-          return e ? { name: e.name, totalRevenue: Math.round(e.totalRevenue * 100) / 100, paidCount: e.paidCount } : null;
-        })
-        .filter(Boolean);
-      grandTotal = eventsWithRevenue.reduce((s, e) => s + e.totalRevenue, 0);
-    }
-    if (grandTotal <= 0) {
-      res.status(400).json({
-        ok: false,
-        error: "Beloppet är 0 SEK. Utbetalning kan inte begäras när det inte finns några intäkter att utbetala."
-      });
+      if (overlapInTxn.rowCount > 0) {
+        await client.query("ROLLBACK");
+        res.status(400).json({
+          ok: false,
+          error: "En eller flera av de valda eventen har redan en pågående utbetalningsbegäran."
+        });
+        return;
+      }
+      const revenue = await computePayoutRevenueSnapshot(client, eventIds, events);
+      eventsWithRevenue = revenue.eventsWithRevenue;
+      grandTotal = revenue.grandTotal;
+      if (grandTotal <= 0) {
+        await client.query("ROLLBACK");
+        res.status(400).json({
+          ok: false,
+          error: "Beloppet är 0 SEK. Utbetalning kan inte begäras när det inte finns några intäkter att utbetala."
+        });
+        return;
+      }
+      ({ fee: payoutFee, net: netAmount } = computePayoutFee(grandTotal));
+      eventNamesStr = eventsWithRevenue.map((e) => e.name).join(", ");
+      await client.query(
+        "INSERT INTO payout_requests (user_id, profile_id, organization, org_number, status, event_ids, event_names, amount, payout_fee, net_amount) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+        [
+          req.userId,
+          profile.profile_id || "",
+          profile.organization || "",
+          profile.org_number || "",
+          "pågår",
+          eventIds,
+          eventNamesStr,
+          grandTotal,
+          payoutFee,
+          netAmount
+        ]
+      );
+      await client.query("COMMIT");
+    } catch (txnError) {
+      await client.query("ROLLBACK").catch(() => {});
+      console.error("POST payout-request transaction error:", txnError);
+      res.status(500).json({ ok: false, error: "Kunde inte skicka begäran." });
       return;
+    } finally {
+      client.release();
     }
-    const { fee: payoutFee, net: netAmount } = computePayoutFee(grandTotal);
-    const profile = profileResult.rows[0] || {};
-    const eventNamesStr = eventsWithRevenue.map((e) => e.name).join(", ");
+
     const lines = eventsWithRevenue.map(
       (e) =>
         `  ${e.name}: ${e.totalRevenue.toFixed(2)} SEK (${e.paidCount} betalda anmälningar)`
@@ -3437,19 +3787,26 @@ app.post("/admin/payout-request", requireAdmin, async (req, res) => {
       `Summa intäkter: ${grandTotal.toFixed(2)} SEK`,
       ...(feeLine ? [feeLine, `Utbetalning (netto): ${netAmount.toFixed(2)} SEK`] : [])
     ].join("\n");
-    await resend.emails.send({
-      from: RESEND_FROM,
-      to: PAYOUT_EMAIL,
-      subject: "Begäran om utbetalning – Kyrkevent.se",
-      text: body,
-      html: body.replace(/\n/g, "<br>")
-    });
-    await pool.query(
-      "INSERT INTO payout_requests (user_id, profile_id, organization, org_number, status, event_ids, event_names, amount, payout_fee, net_amount) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
-      [req.userId, profile.profile_id || "", profile.organization || "", profile.org_number || "", "pågår", eventIds, eventNamesStr, grandTotal, payoutFee, netAmount]
-    );
+    try {
+      await resend.emails.send({
+        from: RESEND_FROM,
+        to: PAYOUT_EMAIL,
+        subject: "Begäran om utbetalning – Kyrkevent.se",
+        text: body,
+        html: body.replace(/\n/g, "<br>")
+      });
+    } catch (emailError) {
+      console.error("Payout request saved but email failed:", emailError);
+      res.json({
+        ok: true,
+        message:
+          "Begäran är registrerad men e-post till ekonomi kunde inte skickas. Kontakta support om du inte får bekräftelse."
+      });
+      return;
+    }
     res.json({ ok: true, message: "Begäran skickad. Ekonomiavdelningen kommer att återkomma." });
   } catch (error) {
+    console.error("POST payout-request error:", error);
     res.status(500).json({ ok: false, error: "Kunde inte skicka begäran." });
   }
 });
@@ -3473,8 +3830,8 @@ app.get("/admin/admin-payments", requireAdmin, requireSuperAdmin, async (req, re
   const toDate = (req.query.toDate || "").toString().trim() || null;
   try {
     let query =
-      "SELECT b.id, b.created_at, b.pris, b.event_id, e.name AS event_name, p.profile_id, p.organization AS profile_organization FROM bookings b LEFT JOIN events e ON e.id = b.event_id LEFT JOIN admin_user_profiles p ON p.user_id = e.user_id WHERE b.payment_status = $1";
-    const params = ["paid"];
+      "SELECT b.id, b.created_at, b.pris, b.refund_amount, b.payment_status, b.event_id, e.name AS event_name, p.profile_id, p.organization AS profile_organization FROM bookings b LEFT JOIN events e ON e.id = b.event_id LEFT JOIN admin_user_profiles p ON p.user_id = e.user_id WHERE b.payment_status IN ('paid', 'refunded')";
+    const params = [];
     if (fromDate) {
       params.push(fromDate);
       query += ` AND b.created_at::date >= $${params.length}`;
@@ -3487,22 +3844,25 @@ app.get("/admin/admin-payments", requireAdmin, requireSuperAdmin, async (req, re
     const result = await pool.query(query, params);
     const byDate = {};
     let grandTotal = 0;
-    const rows = (result.rows || []).map((row) => {
-      const amount = parsePrisToNumber(row.pris);
-      const d = row.created_at ? row.created_at.toISOString().slice(0, 10) : "";
-      if (!byDate[d]) byDate[d] = { date: d, total: 0, count: 0 };
-      byDate[d].total += amount;
-      byDate[d].count += 1;
-      grandTotal += amount;
-      return {
-        id: row.id,
-        profileId: row.profile_id || "",
-        organization: row.profile_organization || "",
-        eventName: row.event_name || "",
-        amount: Math.round(amount * 100) / 100,
-        created_at: row.created_at
-      };
-    });
+    const rows = (result.rows || [])
+      .map((row) => {
+        const amount = getBookingNetTicketRevenue(row);
+        if (amount < 0.01) return null;
+        const d = row.created_at ? row.created_at.toISOString().slice(0, 10) : "";
+        if (!byDate[d]) byDate[d] = { date: d, total: 0, count: 0 };
+        byDate[d].total += amount;
+        byDate[d].count += 1;
+        grandTotal += amount;
+        return {
+          id: row.id,
+          profileId: row.profile_id || "",
+          organization: row.profile_organization || "",
+          eventName: row.event_name || "",
+          amount: Math.round(amount * 100) / 100,
+          created_at: row.created_at
+        };
+      })
+      .filter(Boolean);
     const series = Object.keys(byDate)
       .sort()
       .map((d) => ({
@@ -4052,10 +4412,10 @@ app.get("/admin/payout-requests/:id/receipt.pdf", requireAdmin, async (req, res)
       ),
       eventIds.length > 0
         ? pool.query(
-            "SELECT COUNT(*) AS cnt FROM bookings WHERE event_id = ANY($1::int[]) AND payment_status = $2",
-            [eventIds, "paid"]
+            "SELECT id, pris, refund_amount, payment_status FROM bookings WHERE event_id = ANY($1::int[]) AND payment_status IN ('paid', 'refunded')",
+            [eventIds]
           )
-        : { rows: [{ cnt: "0" }] },
+        : { rows: [] },
       eventIds.length > 0
         ? pool.query(
             "SELECT name, event_start_date, event_end_date FROM events WHERE id = ANY($1::int[]) ORDER BY event_start_date",
@@ -4064,7 +4424,7 @@ app.get("/admin/payout-requests/:id/receipt.pdf", requireAdmin, async (req, res)
         : { rows: [] }
     ]);
     const profile = profileResult.rows[0] || {};
-    const bookingCount = parseInt(bookingCountResult.rows[0]?.cnt || "0", 10);
+    const bookingCount = (bookingCountResult.rows || []).filter((r) => getBookingNetTicketRevenue(r) > 0).length;
     const eventDates = (eventDatesResult.rows || []).map((e) => {
       const start = e.event_start_date ? new Date(e.event_start_date).toLocaleDateString("sv-SE") : "–";
       const end = e.event_end_date ? new Date(e.event_end_date).toLocaleDateString("sv-SE") : null;
@@ -5589,6 +5949,7 @@ app.get("/admin/bookings", requireAdmin, async (req, res) => {
     }
     const result = await pool.query(
       `SELECT b.id, b.event_id, b.name, b.email, b.city, b.phone, b.organization, b.ticket, b.terms, b.payment_status, b.pris, b.custom_fields, b.created_at, b.checked_in_at,
+        b.refunded_at, b.refund_amount, b.mollie_refund_id,
         COALESCE(b.order_number,
           (SELECT po.payload->>'orderNumber' FROM payment_orders po
            WHERE po.booking_id = b.id OR b.id = ANY(COALESCE(po.booking_ids, ARRAY[]::integer[]))
@@ -5599,6 +5960,180 @@ app.get("/admin/bookings", requireAdmin, async (req, res) => {
     res.json({ ok: true, bookings: result.rows });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to load bookings" });
+  }
+});
+
+app.get("/admin/bookings/:bookingId/refund-eligibility", requireAdmin, async (req, res) => {
+  const bookingId = Number(req.params.bookingId);
+  if (!Number.isFinite(bookingId) || bookingId <= 0) {
+    res.status(400).json({ ok: false, error: "Ogiltigt boknings-id." });
+    return;
+  }
+  try {
+    const ctx = await buildBookingRefundContext(bookingId, req.userId);
+    if (!ctx.ok) {
+      res.status(ctx.status || 400).json({ ok: false, error: ctx.error });
+      return;
+    }
+    res.json({
+      ok: true,
+      canRefund: true,
+      bookingId: ctx.booking.id,
+      name: ctx.booking.name,
+      email: ctx.booking.email,
+      ticket: ctx.booking.ticket,
+      ticketPrice: ctx.ticketPrice,
+      maxRefundAmount: ctx.maxRefundAmount,
+      paymentPaidTotal: ctx.paymentPaidTotal,
+      paymentRefundedTotal: ctx.paymentRefundedTotal,
+      paymentRemaining: ctx.paymentRemaining,
+      sharedCartPayment: ctx.sharedCartPayment,
+      cartBookingCount: ctx.cartBookingCount,
+      cartNote: ctx.sharedCartPayment
+        ? `Kunden betalade ${ctx.cartBookingCount} biljetter i samma Mollie-betalning. Du återbetalar nu bara den här biljettens belopp (max ${ctx.ticketPrice.toFixed(2)} SEK). Övriga biljetter i samma betalning påverkas inte.`
+        : null
+    });
+  } catch (error) {
+    console.error("GET refund-eligibility error:", error);
+    res.status(500).json({ ok: false, error: "Kunde inte kontrollera återbetalning." });
+  }
+});
+
+app.post("/admin/bookings/:bookingId/refund", requireAdmin, refundLimiter, async (req, res) => {
+  const bookingId = Number(req.params.bookingId);
+  if (!Number.isFinite(bookingId) || bookingId <= 0) {
+    res.status(400).json({ ok: false, error: "Ogiltigt boknings-id." });
+    return;
+  }
+  const requestedAmount = parsePrisToNumber(req.body?.amount);
+  if (requestedAmount < 0.01) {
+    res.status(400).json({ ok: false, error: "Ange ett belopp större än 0." });
+    return;
+  }
+
+  try {
+    const ctx = await buildBookingRefundContext(bookingId, req.userId);
+    if (!ctx.ok) {
+      res.status(ctx.status || 400).json({ ok: false, error: ctx.error });
+      return;
+    }
+    const amountSek = Math.round(requestedAmount * 100) / 100;
+    if (amountSek > ctx.maxRefundAmount + 0.001) {
+      res.status(400).json({
+        ok: false,
+        error: `Beloppet får högst vara biljettpriset (${ctx.ticketPrice.toFixed(2)} SEK) och får inte överstiga återstående betalning (${ctx.maxRefundAmount.toFixed(2)} SEK).`
+      });
+      return;
+    }
+
+    const client = await pool.connect();
+    let mollieRefundId = null;
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock($1, $2)", [
+        ADVISORY_LOCK_NAMESPACE_PAYOUT_EVENT,
+        ctx.booking.event_id
+      ]);
+      await client.query("SELECT pg_advisory_xact_lock($1, $2)", [
+        ADVISORY_LOCK_NAMESPACE_REFUND_BOOKING,
+        bookingId
+      ]);
+      const locked = await client.query(
+        `
+          SELECT id, pris, refund_amount, refunded_at, payment_status
+          FROM bookings
+          WHERE id = $1 AND payment_status = 'paid' AND COALESCE(refund_amount, 0) < 0.01
+          FOR UPDATE
+        `,
+        [bookingId]
+      );
+      if (locked.rowCount === 0) {
+        await client.query("ROLLBACK");
+        res.status(400).json({
+          ok: false,
+          error: "Återbetalning har redan gjorts eller bokningen kan inte återbetalas."
+        });
+        return;
+      }
+      const lockedBooking = locked.rows[0];
+      const ticketPriceLocked = Math.round(parsePrisToNumber(lockedBooking.pris) * 100) / 100;
+      if (amountSek > ticketPriceLocked + 0.001) {
+        await client.query("ROLLBACK");
+        res.status(400).json({
+          ok: false,
+          error: `Beloppet får högst vara biljettpriset (${ticketPriceLocked.toFixed(2)} SEK).`
+        });
+        return;
+      }
+      const priorRefundInTxn = await client.query(
+        "SELECT 1 FROM payment_refunds WHERE booking_id = $1 LIMIT 1",
+        [bookingId]
+      );
+      if (priorRefundInTxn.rowCount > 0) {
+        await client.query("ROLLBACK");
+        res.status(400).json({
+          ok: false,
+          error: "Återbetalning har redan gjorts för denna biljett. Endast en återbetalning per biljett är tillåten."
+        });
+        return;
+      }
+
+      const payoutLockStatus = await getEventPayoutRefundLockStatus(ctx.booking.event_id, client);
+      if (payoutLockStatus) {
+        await client.query("ROLLBACK");
+        res.status(403).json({ ok: false, error: payoutRefundLockErrorMessage(payoutLockStatus) });
+        return;
+      }
+
+      const refundRecord = await createMollieRefund(
+        ctx.paymentId,
+        amountSek,
+        `Återbetalning biljett ${bookingId} (${ctx.booking.name || ""})`.trim(),
+        { bookingId: String(bookingId), eventId: String(ctx.booking.event_id), userId: String(req.userId) }
+      );
+      mollieRefundId = refundRecord?.id || refundRecord?.resource || null;
+      const fullyRefunded = amountSek >= ticketPriceLocked - 0.001;
+      await client.query(
+        `
+          UPDATE bookings
+          SET payment_status = $1,
+              refunded_at = CASE WHEN $2 THEN NOW() ELSE NULL END,
+              refund_amount = $3,
+              mollie_refund_id = $4
+          WHERE id = $5
+        `,
+        [fullyRefunded ? "refunded" : "paid", fullyRefunded, amountSek, mollieRefundId, bookingId]
+      );
+      await client.query(
+        `
+          INSERT INTO payment_refunds (booking_id, payment_id, mollie_refund_id, amount_value, currency, created_by_user_id)
+          VALUES ($1, $2, $3, $4, $5, $6)
+        `,
+        [bookingId, ctx.paymentId, mollieRefundId, amountSek, MOLLIE_CURRENCY, req.userId]
+      );
+      await client.query("COMMIT");
+      res.json({
+        ok: true,
+        refundAmount: amountSek,
+        mollieRefundId,
+        message: `Återbetalning på ${amountSek.toFixed(2)} SEK har skickats till Mollie.`
+      });
+    } catch (dbErr) {
+      await client.query("ROLLBACK").catch(() => {});
+      console.error("POST refund error:", dbErr);
+      res.status(500).json({
+        ok: false,
+        error: dbErr?.message || "Återbetalning misslyckades."
+      });
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error("POST refund error:", error);
+    res.status(500).json({
+      ok: false,
+      error: error?.message || "Återbetalning misslyckades."
+    });
   }
 });
 
@@ -6066,8 +6601,45 @@ const ensureBookingsTable = async () => {
       ADD COLUMN IF NOT EXISTS pris TEXT NOT NULL DEFAULT '',
       ADD COLUMN IF NOT EXISTS custom_fields JSONB NOT NULL DEFAULT '[]',
       ADD COLUMN IF NOT EXISTS order_number TEXT,
-      ADD COLUMN IF NOT EXISTS checked_in_at TIMESTAMPTZ
+      ADD COLUMN IF NOT EXISTS checked_in_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS refunded_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS refund_amount NUMERIC(10, 2),
+      ADD COLUMN IF NOT EXISTS mollie_refund_id TEXT
   `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS payment_refunds (
+      id SERIAL PRIMARY KEY,
+      booking_id INTEGER NOT NULL,
+      payment_id TEXT NOT NULL,
+      mollie_refund_id TEXT,
+      amount_value NUMERIC(10, 2) NOT NULL,
+      currency TEXT NOT NULL DEFAULT 'SEK',
+      created_by_user_id INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS payment_refunds_booking_id_unique
+    ON payment_refunds (booking_id)
+  `);
+
+  const partialRefundFix = await pool.query(`
+    SELECT id, pris, refund_amount, payment_status
+    FROM bookings
+    WHERE payment_status = 'refunded'
+      AND COALESCE(refund_amount, 0) > 0
+  `);
+  for (const row of partialRefundFix.rows || []) {
+    const ticket = Math.round(parsePrisToNumber(row.pris) * 100) / 100;
+    const refunded = Math.round(parsePrisToNumber(row.refund_amount) * 100) / 100;
+    if (ticket > 0.01 && refunded > 0 && refunded < ticket - 0.001) {
+      await pool.query(
+        `UPDATE bookings SET payment_status = 'paid', refunded_at = NULL WHERE id = $1`,
+        [row.id]
+      );
+    }
+  }
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS program_items (
