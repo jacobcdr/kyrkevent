@@ -22,6 +22,7 @@ import * as xlsx from "xlsx";
 import { Resend } from "resend";
 import PDFDocument from "pdfkit";
 import QRCode from "qrcode";
+import { startDbMonitor, sendDbMonitorAlert } from "./dbMonitor.js";
 
 dotenv.config();
 
@@ -6870,13 +6871,19 @@ const ensureBookingsTable = async () => {
 
 ensureBookingsTable()
   .then(() => {
+    startDbMonitor(pool);
     app.listen(PORT, () => {
       // eslint-disable-next-line no-console
       console.log(`Backend listening on http://localhost:${PORT}`);
     });
   })
-  .catch((error) => {
+  .catch(async (error) => {
     // eslint-disable-next-line no-console
     console.error("Failed to ensure bookings table", error);
+    await sendDbMonitorAlert({
+      title: "Kyrkevent Bokning: databas vid uppstart",
+      message: `Kunde inte initiera databasen vid start.\n${error.message}`,
+      priority: 2
+    });
     process.exit(1);
   });
