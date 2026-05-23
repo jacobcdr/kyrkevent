@@ -1,6 +1,6 @@
+import "./loadEnv.js";
 import express from "express";
 import cors from "cors";
-import dotenv from "dotenv";
 import pg from "pg";
 
 const { Pool } = pg;
@@ -23,8 +23,6 @@ import { Resend } from "resend";
 import PDFDocument from "pdfkit";
 import QRCode from "qrcode";
 import { startDbMonitor, sendDbMonitorAlert } from "./dbMonitor.js";
-
-dotenv.config();
 
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || "";

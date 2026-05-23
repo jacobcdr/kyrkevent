@@ -1,32 +1,40 @@
 import { Resend } from "resend";
 
-const PUSHOVER_USER_KEY = (process.env.PUSHOVER_USER_KEY || "").trim();
-/** Pushover Application API Token (30 tecken) eller e-postalias för @pwp.route.pushover.net */
-const PUSHOVER_EMAIL_ALIAS = (process.env.PUSHOVER_EMAIL_ALIAS || "").trim();
-const DB_MONITOR_ENABLED = String(process.env.DB_MONITOR_ENABLED ?? "true").toLowerCase() !== "false";
-const DB_MONITOR_INTERVAL_MS =
-  Math.max(1, Number(process.env.DB_MONITOR_INTERVAL_MINUTES || 15) || 15) * 60 * 1000;
-const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
-const RESEND_FROM = process.env.RESEND_FROM || "";
-const APP_NAME = process.env.APP_NAME || "Kyrkevent Bokning";
-
 let dbWasHealthy = true;
+
+function getMonitorConfig() {
+  const pushoverUserKey = (process.env.PUSHOVER_USER_KEY || "").trim();
+  /** Application API Token (30 tecken) eller @pomail.net / @pwp.route.pushover.net-adress */
+  const pushoverEmailAlias = (process.env.PUSHOVER_EMAIL_ALIAS || "").trim();
+  const enabled = String(process.env.DB_MONITOR_ENABLED ?? "true").toLowerCase() !== "false";
+  const intervalMs =
+    Math.max(1, Number(process.env.DB_MONITOR_INTERVAL_MINUTES || 15) || 15) * 60 * 1000;
+  return {
+    pushoverUserKey,
+    pushoverEmailAlias,
+    enabled,
+    intervalMs,
+    resendApiKey: process.env.RESEND_API_KEY || "",
+    resendFrom: process.env.RESEND_FROM || "",
+    appName: process.env.APP_NAME || "Kyrkevent Bokning"
+  };
+}
 
 function isPushoverApiToken(value) {
   return /^[A-Za-z0-9]{30}$/.test(value);
 }
 
-function pushoverConfigured() {
-  return Boolean(PUSHOVER_USER_KEY || PUSHOVER_EMAIL_ALIAS);
+function pushoverConfigured(cfg) {
+  return Boolean(cfg.pushoverUserKey || cfg.pushoverEmailAlias);
 }
 
-async function sendViaPushoverApi({ title, message, priority = 0 }) {
-  if (!PUSHOVER_USER_KEY || !PUSHOVER_EMAIL_ALIAS) {
+async function sendViaPushoverApi(cfg, { title, message, priority = 0 }) {
+  if (!cfg.pushoverUserKey || !cfg.pushoverEmailAlias) {
     throw new Error("PUSHOVER_USER_KEY och PUSHOVER_EMAIL_ALIAS (API-token) krävs för Pushover API.");
   }
   const body = new URLSearchParams({
-    token: PUSHOVER_EMAIL_ALIAS,
-    user: PUSHOVER_USER_KEY,
+    token: cfg.pushoverEmailAlias,
+    user: cfg.pushoverUserKey,
     title: title.slice(0, 250),
     message: message.slice(0, 1024),
     priority: String(priority)
@@ -43,23 +51,23 @@ async function sendViaPushoverApi({ title, message, priority = 0 }) {
   }
 }
 
-async function sendViaPushoverEmail({ title, message }) {
-  if (!RESEND_API_KEY || !RESEND_FROM) {
+async function sendViaPushoverEmail(cfg, { title, message }) {
+  if (!cfg.resendApiKey || !cfg.resendFrom) {
     throw new Error("RESEND_API_KEY och RESEND_FROM krävs för Pushover via e-post.");
   }
   let to;
-  if (PUSHOVER_EMAIL_ALIAS.includes("@")) {
-    to = PUSHOVER_EMAIL_ALIAS;
-  } else if (PUSHOVER_EMAIL_ALIAS) {
-    to = `${PUSHOVER_EMAIL_ALIAS}@pwp.route.pushover.net`;
-  } else if (PUSHOVER_USER_KEY) {
-    to = `${PUSHOVER_USER_KEY}@pwp.route.pushover.net`;
+  if (cfg.pushoverEmailAlias.includes("@")) {
+    to = cfg.pushoverEmailAlias;
+  } else if (cfg.pushoverEmailAlias) {
+    to = `${cfg.pushoverEmailAlias}@pwp.route.pushover.net`;
+  } else if (cfg.pushoverUserKey) {
+    to = `${cfg.pushoverUserKey}@pwp.route.pushover.net`;
   } else {
     throw new Error("Saknar Pushover-måladress.");
   }
-  const resend = new Resend(RESEND_API_KEY);
+  const resend = new Resend(cfg.resendApiKey);
   const result = await resend.emails.send({
-    from: RESEND_FROM,
+    from: cfg.resendFrom,
     to,
     subject: title.slice(0, 250),
     text: message
@@ -70,15 +78,20 @@ async function sendViaPushoverEmail({ title, message }) {
 }
 
 export async function sendDbMonitorAlert({ title, message, priority = 1 }) {
-  if (!pushoverConfigured()) {
+  const cfg = getMonitorConfig();
+  if (!pushoverConfigured(cfg)) {
     console.warn("[db-monitor] Pushover ej konfigurerad, hoppar över:", title);
     return false;
   }
   try {
-    if (PUSHOVER_USER_KEY && PUSHOVER_EMAIL_ALIAS && isPushoverApiToken(PUSHOVER_EMAIL_ALIAS)) {
-      await sendViaPushoverApi({ title, message, priority });
+    if (
+      cfg.pushoverUserKey &&
+      cfg.pushoverEmailAlias &&
+      isPushoverApiToken(cfg.pushoverEmailAlias)
+    ) {
+      await sendViaPushoverApi(cfg, { title, message, priority });
     } else {
-      await sendViaPushoverEmail({ title, message });
+      await sendViaPushoverEmail(cfg, { title, message });
     }
     console.log("[db-monitor] Pushover skickad:", title);
     return true;
@@ -89,11 +102,12 @@ export async function sendDbMonitorAlert({ title, message, priority = 1 }) {
 }
 
 export function startDbMonitor(pool) {
-  if (!DB_MONITOR_ENABLED) {
+  const cfg = getMonitorConfig();
+  if (!cfg.enabled) {
     console.log("[db-monitor] Avstängd (DB_MONITOR_ENABLED=false)");
     return;
   }
-  if (!pushoverConfigured()) {
+  if (!pushoverConfigured(cfg)) {
     console.warn("[db-monitor] Aktiverad men PUSHOVER_USER_KEY / PUSHOVER_EMAIL_ALIAS saknas");
     return;
   }
@@ -102,7 +116,7 @@ export function startDbMonitor(pool) {
     if (!dbWasHealthy) return;
     dbWasHealthy = false;
     await sendDbMonitorAlert({
-      title: `${APP_NAME}: databas nere`,
+      title: `${cfg.appName}: databas nere`,
       message: `${reason}\nTid: ${new Date().toLocaleString("sv-SE", { timeZone: "Europe/Stockholm" })}`,
       priority: 1
     });
@@ -112,7 +126,7 @@ export function startDbMonitor(pool) {
     if (dbWasHealthy) return;
     dbWasHealthy = true;
     await sendDbMonitorAlert({
-      title: `${APP_NAME}: databas OK igen`,
+      title: `${cfg.appName}: databas OK igen`,
       message: `PostgreSQL svarar igen.\nTid: ${new Date().toLocaleString("sv-SE", { timeZone: "Europe/Stockholm" })}`,
       priority: 0
     });
@@ -134,14 +148,14 @@ export function startDbMonitor(pool) {
   runCheck().catch(() => {});
   const timer = setInterval(() => {
     runCheck().catch(() => {});
-  }, DB_MONITOR_INTERVAL_MS);
+  }, cfg.intervalMs);
   if (typeof timer.unref === "function") {
     timer.unref();
   }
 
   const mode =
-    PUSHOVER_USER_KEY && isPushoverApiToken(PUSHOVER_EMAIL_ALIAS) ? "API" : "e-post";
+    cfg.pushoverUserKey && isPushoverApiToken(cfg.pushoverEmailAlias) ? "API" : "e-post";
   console.log(
-    `[db-monitor] Startad (${DB_MONITOR_INTERVAL_MS / 60000} min intervall, Pushover via ${mode})`
+    `[db-monitor] Startad (${cfg.intervalMs / 60000} min intervall, Pushover via ${mode})`
   );
 }
