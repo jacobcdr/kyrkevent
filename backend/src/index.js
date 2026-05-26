@@ -4438,7 +4438,7 @@ app.get("/admin/payout-requests/:id/receipt.pdf", requireAdmin, async (req, res)
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     const doc = new PDFDocument({ margin: 50 });
     doc.pipe(res);
-    const logoPath = path.resolve(__dirname, "..", "..", "frontend", "public", "kyrkevent-logo.png");
+    const logoPath = path.resolve(__dirname, "..", "..", "frontend", "public", "kyrkevent2.png");
     if (fs.existsSync(logoPath)) {
       doc.image(logoPath, 50, 50, { width: 120 });
       doc.y = 50 + 55;

@@ -443,7 +443,7 @@ const LandingPage = () => {
       <div className="landing-hero-block">
         <div className="landing-logo-wrap">
           <img
-            src="/kyrkevent-logo.png"
+            src="/kyrkevent2.png"
             alt="Kyrkevent.se"
             className="landing-logo"
           />
@@ -466,10 +466,10 @@ const LandingPage = () => {
       </p>
       <p className="landing-intro">Logga in eller skapa konto för att hantera dina event.</p>
       <div className="landing-actions">
-        <a href="/admin?view=login" className="button landing-btn">
+        <a href="/admin?view=login" className="landing-pricing-btn landing-btn">
           Logga in
         </a>
-        <a href="/admin?view=signup" className="button button-outline landing-btn">
+        <a href="/admin?view=signup" className="landing-btn landing-btn-outline">
           Skapa konto
         </a>
       </div>
@@ -4382,7 +4382,7 @@ const AdminPage = () => {
           ☰
         </button>
         <a href="/" className="admin-topbar-logo" aria-label="Kyrkevent.se">
-          <img src="/kyrkevent-logo.png" alt="" className="admin-topbar-logo-img" />
+          <img src="/kyrkevent2.png" alt="" className="admin-topbar-logo-img" />
         </a>
         {adminMenuOpen ? (
           <div
@@ -10031,7 +10031,7 @@ function App() {
           aria-label="Öppna kyrkevent.se"
         >
           <img
-            src="/kyrkevent-logo.png"
+            src="/kyrkevent2.png"
             alt="Kyrkevent.se"
             className="public-host-footer-logo"
             loading="lazy"
