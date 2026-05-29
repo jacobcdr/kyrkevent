@@ -45,6 +45,46 @@ function formatAdminEventUpdatedAt(iso) {
   });
 }
 
+function adminEventLinksSortKey(row, key) {
+  if (key === "eventName") return String(row.eventName || "");
+  if (key === "eventDate") {
+    const d = row.eventStartDate || row.eventEndDate || "";
+    return d ? String(d).slice(0, 10) : "";
+  }
+  if (key === "updatedAt") return row.updatedAt || "";
+  return String(row.customer || "");
+}
+
+function compareAdminEventLinks(a, b, key, dir) {
+  const va = adminEventLinksSortKey(a, key);
+  const vb = adminEventLinksSortKey(b, key);
+  const asc = dir === "asc";
+  if (key === "eventDate" || key === "updatedAt") {
+    const emptyA = !va;
+    const emptyB = !vb;
+    if (emptyA && emptyB) return 0;
+    if (emptyA) return 1;
+    if (emptyB) return -1;
+    const ta = key === "eventDate" ? new Date(`${va}T12:00:00`).getTime() : new Date(va).getTime();
+    const tb = key === "eventDate" ? new Date(`${vb}T12:00:00`).getTime() : new Date(vb).getTime();
+    const cmp = ta - tb;
+    return asc ? cmp : -cmp;
+  }
+  const cmp = String(va).localeCompare(String(vb), "sv", { sensitivity: "base" });
+  return asc ? cmp : -cmp;
+}
+
+const ADMIN_EVENT_LINKS_SORT_OPTIONS = [
+  { value: "customer:asc", label: "Kund (A–Ö)" },
+  { value: "customer:desc", label: "Kund (Ö–A)" },
+  { value: "eventName:asc", label: "Eventnamn (A–Ö)" },
+  { value: "eventName:desc", label: "Eventnamn (Ö–A)" },
+  { value: "eventDate:asc", label: "Eventdatum (tidigast först)" },
+  { value: "eventDate:desc", label: "Eventdatum (senast först)" },
+  { value: "updatedAt:desc", label: "Senast uppdaterad (nyast först)" },
+  { value: "updatedAt:asc", label: "Senast uppdaterad (äldst först)" }
+];
+
 const EVENT_VAT_RATE_OPTIONS = [
   {
     percent: 6,
@@ -5540,29 +5580,9 @@ const AdminPage = () => {
                       if (filters.eventName && String(r.eventName || "–").trim() !== filters.eventName) return false;
                       return true;
                     });
-                    const sorted = [...filtered].sort((a, b) => {
-                      const k = adminEventLinksSort.key;
-                      let va;
-                      let vb;
-                      if (k === "eventName") {
-                        va = a.eventName || "";
-                        vb = b.eventName || "";
-                      } else if (k === "eventDate") {
-                        va = a.eventStartDate || "";
-                        vb = b.eventStartDate || "";
-                      } else if (k === "updatedAt") {
-                        va = a.updatedAt || "";
-                        vb = b.updatedAt || "";
-                      } else {
-                        va = a.customer || "";
-                        vb = b.customer || "";
-                      }
-                      const cmp =
-                        k === "eventDate" || k === "updatedAt"
-                          ? String(va).localeCompare(String(vb))
-                          : String(va).localeCompare(String(vb), "sv", { sensitivity: "base" });
-                      return adminEventLinksSort.dir === "asc" ? cmp : -cmp;
-                    });
+                    const sorted = [...filtered].sort((a, b) =>
+                      compareAdminEventLinks(a, b, adminEventLinksSort.key, adminEventLinksSort.dir)
+                    );
                     const totalFiltered = sorted.length;
                     const totalPages = Math.max(1, Math.ceil(totalFiltered / adminEventLinksPageSize));
                     const page = Math.min(Math.max(1, adminEventLinksPage), totalPages);
@@ -5619,6 +5639,26 @@ const AdminPage = () => {
                               <option value={100}>100</option>
                             </select>
                           </label>
+                          <label className="field" style={{ marginBottom: 0 }}>
+                            <span className="field-label" style={{ marginRight: "0.5rem" }}>Sortera:</span>
+                            <select
+                              value={`${adminEventLinksSort.key}:${adminEventLinksSort.dir}`}
+                              onChange={(e) => {
+                                const [key, dir] = e.target.value.split(":");
+                                setAdminEventLinksSort({ key, dir });
+                                setAdminEventLinksPage(1);
+                              }}
+                              className="admin-payments-filter-select"
+                              style={{ width: "auto", maxWidth: "none", minWidth: "14rem" }}
+                              aria-label="Sortera eventlänkar"
+                            >
+                              {ADMIN_EVENT_LINKS_SORT_OPTIONS.map((opt) => (
+                                <option key={opt.value} value={opt.value}>
+                                  {opt.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
                         </div>
                         <div className="table-wrap">
                           <table className="table admin-event-links-table">
@@ -5629,12 +5669,13 @@ const AdminPage = () => {
                                     <button
                                       type="button"
                                       className={`sort-button ${adminEventLinksSort.key === "customer" ? "is-active" : ""}`}
-                                      onClick={() =>
+                                      onClick={() => {
                                         setAdminEventLinksSort((s) => ({
                                           key: "customer",
                                           dir: s.key === "customer" && s.dir === "asc" ? "desc" : "asc"
-                                        }))
-                                      }
+                                        }));
+                                        setAdminEventLinksPage(1);
+                                      }}
                                     >
                                       Kund {adminEventLinksSort.key === "customer" ? (adminEventLinksSort.dir === "asc" ? "↑" : "↓") : ""}
                                     </button>
@@ -5659,12 +5700,13 @@ const AdminPage = () => {
                                     <button
                                       type="button"
                                       className={`sort-button ${adminEventLinksSort.key === "eventName" ? "is-active" : ""}`}
-                                      onClick={() =>
+                                      onClick={() => {
                                         setAdminEventLinksSort((s) => ({
                                           key: "eventName",
                                           dir: s.key === "eventName" && s.dir === "asc" ? "desc" : "asc"
-                                        }))
-                                      }
+                                        }));
+                                        setAdminEventLinksPage(1);
+                                      }}
                                     >
                                       Eventnamn {adminEventLinksSort.key === "eventName" ? (adminEventLinksSort.dir === "asc" ? "↑" : "↓") : ""}
                                     </button>
@@ -5688,12 +5730,13 @@ const AdminPage = () => {
                                   <button
                                     type="button"
                                     className={`sort-button ${adminEventLinksSort.key === "eventDate" ? "is-active" : ""}`}
-                                    onClick={() =>
+                                    onClick={() => {
                                       setAdminEventLinksSort((s) => ({
                                         key: "eventDate",
                                         dir: s.key === "eventDate" && s.dir === "asc" ? "desc" : "asc"
-                                      }))
-                                    }
+                                      }));
+                                      setAdminEventLinksPage(1);
+                                    }}
                                   >
                                     Eventdatum {adminEventLinksSort.key === "eventDate" ? (adminEventLinksSort.dir === "asc" ? "↑" : "↓") : ""}
                                   </button>
@@ -5702,12 +5745,13 @@ const AdminPage = () => {
                                   <button
                                     type="button"
                                     className={`sort-button ${adminEventLinksSort.key === "updatedAt" ? "is-active" : ""}`}
-                                    onClick={() =>
+                                    onClick={() => {
                                       setAdminEventLinksSort((s) => ({
                                         key: "updatedAt",
                                         dir: s.key === "updatedAt" && s.dir === "asc" ? "desc" : "asc"
-                                      }))
-                                    }
+                                      }));
+                                      setAdminEventLinksPage(1);
+                                    }}
                                   >
                                     Senast uppdaterad{" "}
                                     {adminEventLinksSort.key === "updatedAt" ? (adminEventLinksSort.dir === "asc" ? "↑" : "↓") : ""}
