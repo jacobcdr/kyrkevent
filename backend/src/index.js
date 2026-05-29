@@ -4146,6 +4146,35 @@ app.post("/admin/payout-requests/:id/anonymize-bookings", requireAdmin, requireS
   }
 });
 
+app.get("/admin/event-links", requireAdmin, requireSuperAdmin, async (_req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT e.id, e.slug, e.name, e.event_start_date, e.event_end_date, e.updated_at, e.created_at,
+              COALESCE(NULLIF(TRIM(p.organization), ''), NULLIF(TRIM(u.username), ''), '–') AS customer_name,
+              p.profile_id, p.organization
+       FROM events e
+       LEFT JOIN admin_user_profiles p ON p.user_id = e.user_id
+       LEFT JOIN admin_users u ON u.id = e.user_id
+       WHERE e.slug IS NOT NULL AND TRIM(e.slug) <> ''
+       ORDER BY customer_name ASC, e.name ASC, e.id DESC`
+    );
+    const rows = (result.rows || []).map((row) => ({
+      id: row.id,
+      slug: String(row.slug || "").trim(),
+      eventName: row.name || "",
+      eventStartDate: row.event_start_date ? String(row.event_start_date).slice(0, 10) : null,
+      eventEndDate: row.event_end_date ? String(row.event_end_date).slice(0, 10) : null,
+      updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+      customer: row.customer_name || "–",
+      organization: row.organization || "",
+      profileId: row.profile_id || ""
+    }));
+    res.json({ ok: true, rows });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Kunde inte ladda eventlänkar" });
+  }
+});
+
 app.get("/admin/organizations", requireAdmin, requireSuperAdmin, async (_req, res) => {
   try {
     const result = await pool.query(
@@ -6414,6 +6443,80 @@ app.get("/admin/event-views", requireAdmin, async (req, res) => {
   }
 });
 
+const EVENT_UPDATED_AT_CHILD_TABLES = [
+  "event_sections",
+  "program_items",
+  "prices",
+  "place_settings",
+  "hero_section",
+  "speakers",
+  "partners",
+  "event_custom_fields",
+  "discount_codes"
+];
+
+const ensureEventUpdatedAt = async (db) => {
+  await db.query(`
+    UPDATE events e
+    SET updated_at = GREATEST(
+      e.updated_at,
+      e.created_at,
+      COALESCE((SELECT MAX(ps.updated_at) FROM place_settings ps WHERE ps.event_id = e.id), e.created_at),
+      COALESCE((SELECT MAX(pi.created_at) FROM program_items pi WHERE pi.event_id = e.id), e.created_at),
+      COALESCE((SELECT MAX(s.created_at) FROM speakers s WHERE s.event_id = e.id), e.created_at),
+      COALESCE((SELECT MAX(p.created_at) FROM partners p WHERE p.event_id = e.id), e.created_at),
+      COALESCE((SELECT MAX(cf.created_at) FROM event_custom_fields cf WHERE cf.event_id = e.id), e.created_at),
+      COALESCE((SELECT MAX(dc.created_at) FROM discount_codes dc WHERE dc.event_id = e.id), e.created_at)
+    )
+  `);
+  await db.query(`
+    CREATE OR REPLACE FUNCTION events_row_set_updated_at()
+    RETURNS TRIGGER AS $$
+    BEGIN
+      NEW.updated_at = NOW();
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql
+  `);
+  await db.query(`
+    CREATE OR REPLACE FUNCTION bump_event_updated_at_from_child()
+    RETURNS TRIGGER AS $$
+    DECLARE eid INTEGER;
+    BEGIN
+      IF TG_OP = 'DELETE' THEN
+        eid := OLD.event_id;
+      ELSE
+        eid := NEW.event_id;
+      END IF;
+      IF eid IS NOT NULL THEN
+        UPDATE events SET updated_at = NOW() WHERE id = eid;
+      END IF;
+      IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+      END IF;
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql
+  `);
+  await db.query("DROP TRIGGER IF EXISTS events_row_updated_at ON events");
+  await db.query(`
+    CREATE TRIGGER events_row_updated_at
+    BEFORE UPDATE ON events
+    FOR EACH ROW
+    EXECUTE FUNCTION events_row_set_updated_at()
+  `);
+  for (const table of EVENT_UPDATED_AT_CHILD_TABLES) {
+    const triggerName = `bump_event_updated_at_${table}`;
+    await db.query(`DROP TRIGGER IF EXISTS ${triggerName} ON ${table}`);
+    await db.query(`
+      CREATE TRIGGER ${triggerName}
+      AFTER INSERT OR UPDATE OR DELETE ON ${table}
+      FOR EACH ROW
+      EXECUTE FUNCTION bump_event_updated_at_from_child()
+    `);
+  }
+};
+
 const ensureBookingsTable = async () => {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS admin_users (
@@ -6515,7 +6618,8 @@ const ensureBookingsTable = async () => {
       ADD COLUMN IF NOT EXISTS registration_deadline DATE,
       ADD COLUMN IF NOT EXISTS bas_credit_used BOOLEAN NOT NULL DEFAULT FALSE,
       ADD COLUMN IF NOT EXISTS max_participants INTEGER,
-      ADD COLUMN IF NOT EXISTS vat_rate_percent INTEGER NOT NULL DEFAULT 25
+      ADD COLUMN IF NOT EXISTS vat_rate_percent INTEGER NOT NULL DEFAULT 25,
+      ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   `);
   const defaultEventResult = await pool.query(
     `
@@ -6883,6 +6987,7 @@ const ensureBookingsTable = async () => {
       defaultEventId
     ]);
   }
+  await ensureEventUpdatedAt(pool);
 };
 
 waitForDatabase(pool)

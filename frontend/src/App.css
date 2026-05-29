@@ -1926,6 +1926,103 @@ h2 {
   margin-bottom: 1.5rem;
 }
 
+/* Admin: flikar inuti samma rundade section-ram */
+.section.admin-tabbed-frame {
+  margin-top: 1.5rem;
+  padding: 0;
+  overflow: hidden;
+}
+
+.admin-tabbed-frame__bar {
+  padding: 0.75rem 1rem 0;
+  background: linear-gradient(180deg, #f8fafc 0%, var(--card) 100%);
+  border-bottom: 1px solid var(--border);
+}
+
+.admin-tabbed-frame__body {
+  padding: 1.5rem;
+}
+
+.admin-main-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.admin-main-tab {
+  flex: 0 1 auto;
+  min-width: 5.5rem;
+  padding: 0.6rem 1.15rem;
+  border: 1px solid transparent;
+  border-radius: 10px 10px 0 0;
+  border-bottom: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.95rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s, border-color 0.2s;
+  margin-bottom: -1px;
+}
+
+.admin-main-tab:hover {
+  background: rgba(241, 245, 249, 0.9);
+  color: var(--text);
+}
+
+.admin-main-tab.is-active {
+  background: var(--card);
+  border-color: var(--border);
+  border-bottom-color: var(--card);
+  color: #0c4a6e;
+  box-shadow: 0 -1px 0 var(--card);
+}
+
+.admin-panel {
+  margin-top: 0;
+}
+
+.admin-panel h2 {
+  margin-top: 0;
+}
+
+.admin-subsection-title {
+  margin: 0 0 0.75rem;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.admin-subsection-title-spaced {
+  margin-top: 2rem;
+}
+
+.admin-panel-ekonomi > .admin-subsection-title:first-of-type {
+  margin-top: 0.5rem;
+}
+
+.admin-event-link-url {
+  color: var(--accent);
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.admin-event-link-url:hover {
+  color: var(--accent-dark);
+  text-decoration: underline;
+}
+
+.admin-event-links-table td {
+  vertical-align: top;
+}
+
 .admin-topbar-title {
   font-weight: 700;
   font-size: 1.4rem;

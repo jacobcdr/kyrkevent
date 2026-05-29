@@ -17,6 +17,34 @@ import "./App.css";
 const API_BASE = import.meta.env.VITE_API_URL || "";
 const API_BASE_NORMALIZED = API_BASE.replace(/\/+$/, "");
 
+function formatAdminEventDateLabel(startDate, endDate) {
+  const formatShort = (dateStr) => {
+    if (!dateStr) return null;
+    const d = new Date(`${String(dateStr).slice(0, 10)}T12:00:00`);
+    if (Number.isNaN(d.getTime())) return null;
+    return d.toLocaleDateString("sv-SE", { day: "numeric", month: "short", year: "numeric" });
+  };
+  const startLabel = formatShort(startDate);
+  const endLabel = formatShort(endDate);
+  if (startLabel && endLabel && String(startDate).slice(0, 10) !== String(endDate).slice(0, 10)) {
+    return `${startLabel} – ${endLabel}`;
+  }
+  return startLabel || endLabel || "–";
+}
+
+function formatAdminEventUpdatedAt(iso) {
+  if (!iso) return "–";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "–";
+  return d.toLocaleString("sv-SE", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
 const EVENT_VAT_RATE_OPTIONS = [
   {
     percent: 6,
@@ -1357,6 +1385,7 @@ const AdminPage = () => {
   const [dbStatus, setDbStatus] = useState("checking");
   const [statusMessage, setStatusMessage] = useState("");
   const [adminSection, setAdminSection] = useState("bookings");
+  const [adminPanelTab, setAdminPanelTab] = useState("start");
   const [adminMenuOpen, setAdminMenuOpen] = useState(false);
   const adminMenuTimerRef = useRef(null);
   const adminUsername = useMemo(() => {
@@ -1620,6 +1649,15 @@ const AdminPage = () => {
   const [adminOrgSavingProfileId, setAdminOrgSavingProfileId] = useState(null);
   const [adminDeleteProfileConfirm, setAdminDeleteProfileConfirm] = useState(null);
   const [adminDeleteProfileLoading, setAdminDeleteProfileLoading] = useState(false);
+  const [adminEventLinks, setAdminEventLinks] = useState([]);
+  const [adminEventLinksLoading, setAdminEventLinksLoading] = useState(false);
+  const [adminEventLinksColumnFilters, setAdminEventLinksColumnFilters] = useState({
+    customer: "",
+    eventName: ""
+  });
+  const [adminEventLinksSort, setAdminEventLinksSort] = useState({ key: "customer", dir: "asc" });
+  const [adminEventLinksPageSize, setAdminEventLinksPageSize] = useState(10);
+  const [adminEventLinksPage, setAdminEventLinksPage] = useState(1);
 
   const payoutEventIdsWithOngoingRequest = useMemo(
     () =>
@@ -1653,6 +1691,17 @@ const AdminPage = () => {
     const amounts = [...new Set(rows.map((r) => (Number(r.amount) || 0).toFixed(2)))].filter(Boolean).sort((a, b) => Number(a) - Number(b));
     return { profileIds, organizations, eventNames, amounts };
   }, [adminPaymentsRows]);
+
+  const adminEventLinksDistinctValues = useMemo(() => {
+    const rows = adminEventLinks || [];
+    const customers = [...new Set(rows.map((r) => String(r.customer || "–").trim()))].filter(Boolean).sort((a, b) =>
+      a.localeCompare(b, "sv")
+    );
+    const eventNames = [...new Set(rows.map((r) => String(r.eventName || "–").trim()))].filter(Boolean).sort((a, b) =>
+      a.localeCompare(b, "sv")
+    );
+    return { customers, eventNames };
+  }, [adminEventLinks]);
   const payoutEventsToShow = useMemo(
     () =>
       (payoutSummary.events || []).filter((ev) => !payoutEventIdsWithPaidRequest.has(ev.id)),
@@ -2078,6 +2127,24 @@ const AdminPage = () => {
     }
   };
 
+  const loadAdminEventLinks = async () => {
+    if (!token || !isAdminUser) return;
+    setAdminEventLinksLoading(true);
+    try {
+      const response = await fetch(`${API_BASE}/admin/event-links`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!response.ok) throw new Error("Failed to load");
+      const data = await response.json();
+      setAdminEventLinks(data.rows || []);
+      setAdminEventLinksPage(1);
+    } catch {
+      setAdminEventLinks([]);
+    } finally {
+      setAdminEventLinksLoading(false);
+    }
+  };
+
   const handleSaveOrgBasCredits = async (profileId, value) => {
     if (!token || profileId == null || profileId === "") return;
     setAdminOrgSavingProfileId(profileId);
@@ -2202,6 +2269,7 @@ const AdminPage = () => {
       loadAdminPayments();
       loadAdminPayoutRequests();
       loadAdminOrganizations();
+      loadAdminEventLinks();
     }
   }, [token, isAdminUser, adminSection]);
 
@@ -4467,6 +4535,7 @@ const AdminPage = () => {
                 type="button"
                 className={`admin-nav-item ${adminSection === "admin" ? "is-active" : ""}`}
                 onClick={() => {
+                  setAdminPanelTab("start");
                   setAdminSection("admin");
                   setAdminMenuOpen(false);
                 }}
@@ -4546,7 +4615,7 @@ const AdminPage = () => {
 
       <div className="admin-content">
         {token && isAdminUser && adminSection === "admin" ? (
-          <div className="section">
+          <div className="section admin-tabbed-frame">
             {adminAnonymizeConfirmRequestId != null ? (
               <div
                 className="admin-toaster-overlay"
@@ -4684,10 +4753,36 @@ const AdminPage = () => {
                 </div>
               </div>
             ) : null}
-            <h2>Admin</h2>
-            <p className="muted">
-              Samtliga betalda anmälningar i systemet. Filtrera på datum (när bokningen skapades).
-            </p>
+            <div className="admin-tabbed-frame__bar">
+              <nav className="admin-main-tabs" role="tablist" aria-label="Adminpanel">
+                <button
+                  type="button"
+                  role="tab"
+                  className={`admin-main-tab ${adminPanelTab === "start" ? "is-active" : ""}`}
+                  aria-selected={adminPanelTab === "start"}
+                  onClick={() => setAdminPanelTab("start")}
+                >
+                  Start
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  className={`admin-main-tab ${adminPanelTab === "ekonomi" ? "is-active" : ""}`}
+                  aria-selected={adminPanelTab === "ekonomi"}
+                  onClick={() => setAdminPanelTab("ekonomi")}
+                >
+                  Ekonomi
+                </button>
+              </nav>
+            </div>
+            <div className="admin-tabbed-frame__body">
+            {adminPanelTab === "ekonomi" ? (
+              <div className="admin-panel admin-panel-ekonomi">
+                <h2>Ekonomi</h2>
+                <h3 className="admin-subsection-title">Betalningsstatistik</h3>
+                <p className="muted">
+                  Samtliga betalda anmälningar i systemet. Filtrera på datum (när bokningen skapades).
+                </p>
             <form
               className="admin-form"
               onSubmit={(e) => {
@@ -4760,7 +4855,7 @@ const AdminPage = () => {
             ) : null}
             {adminPaymentsRows.length > 0 ? (
               <>
-                <h3 style={{ marginTop: "2rem", marginBottom: "0.75rem" }}>Lista betalningar</h3>
+                <h3 className="admin-subsection-title admin-subsection-title-spaced">Lista betalningar</h3>
                 {(() => {
                   const filters = adminPaymentsColumnFilters;
                   const filtered = adminPaymentsRows.filter((r) => {
@@ -5059,7 +5154,7 @@ const AdminPage = () => {
                 })()}
               </>
             ) : null}
-            <h3 style={{ marginTop: "2rem", marginBottom: "0.75rem" }}>Förfrågar utbetalning</h3>
+            <h3 className="admin-subsection-title admin-subsection-title-spaced">Förfrågar utbetalning</h3>
             {adminPayoutRequestsLoading ? (
               <p className="muted">Laddar...</p>
             ) : adminPayoutRequests.length > 0 ? (
@@ -5321,8 +5416,13 @@ const AdminPage = () => {
             ) : (
               <p className="muted">Inga utbetalningsbegäran.</p>
             )}
+              </div>
+            ) : null}
 
-            <h3 style={{ marginTop: "2.5rem", marginBottom: "0.75rem" }}>Organisationer – abonnemang och eventkrediter</h3>
+            {adminPanelTab === "start" ? (
+              <div className="admin-panel admin-panel-start">
+                <h2>Start</h2>
+                <h3 className="admin-subsection-title">Organisationer – abonnemang och eventkrediter</h3>
             <p className="muted" style={{ marginBottom: "1rem" }}>
               Antal event med pris kvar = hur många event (med biljettpriser) organisationen kan lägga till. Du kan ändra värdet och spara för att tilldela krediter utan att kunden betalar.
             </p>
@@ -5423,6 +5523,300 @@ const AdminPage = () => {
                 </table>
               </div>
             )}
+
+                <h3 className="admin-subsection-title admin-subsection-title-spaced">Eventlänkar</h3>
+                <p className="muted" style={{ marginBottom: "1rem" }}>
+                  Alla publika eventsidor. Klicka på länken för att öppna anmälningssidan.
+                </p>
+                {adminEventLinksLoading ? (
+                  <p className="muted">Laddar...</p>
+                ) : adminEventLinks.length === 0 ? (
+                  <p className="muted">Inga event med länk hittades.</p>
+                ) : (
+                  (() => {
+                    const filters = adminEventLinksColumnFilters;
+                    const filtered = adminEventLinks.filter((r) => {
+                      if (filters.customer && String(r.customer || "–").trim() !== filters.customer) return false;
+                      if (filters.eventName && String(r.eventName || "–").trim() !== filters.eventName) return false;
+                      return true;
+                    });
+                    const sorted = [...filtered].sort((a, b) => {
+                      const k = adminEventLinksSort.key;
+                      let va;
+                      let vb;
+                      if (k === "eventName") {
+                        va = a.eventName || "";
+                        vb = b.eventName || "";
+                      } else if (k === "eventDate") {
+                        va = a.eventStartDate || "";
+                        vb = b.eventStartDate || "";
+                      } else if (k === "updatedAt") {
+                        va = a.updatedAt || "";
+                        vb = b.updatedAt || "";
+                      } else {
+                        va = a.customer || "";
+                        vb = b.customer || "";
+                      }
+                      const cmp =
+                        k === "eventDate" || k === "updatedAt"
+                          ? String(va).localeCompare(String(vb))
+                          : String(va).localeCompare(String(vb), "sv", { sensitivity: "base" });
+                      return adminEventLinksSort.dir === "asc" ? cmp : -cmp;
+                    });
+                    const totalFiltered = sorted.length;
+                    const totalPages = Math.max(1, Math.ceil(totalFiltered / adminEventLinksPageSize));
+                    const page = Math.min(Math.max(1, adminEventLinksPage), totalPages);
+                    const start = (page - 1) * adminEventLinksPageSize;
+                    const paged = sorted.slice(start, start + adminEventLinksPageSize);
+                    const { customers, eventNames } = adminEventLinksDistinctValues;
+                    const setColumnFilter = (key, value) => {
+                      setAdminEventLinksColumnFilters((prev) => ({ ...prev, [key]: value }));
+                      setAdminEventLinksPage(1);
+                    };
+                    const hasActiveFilter = !!filters.customer || !!filters.eventName;
+                    const clearFilters = () => {
+                      setAdminEventLinksColumnFilters({ customer: "", eventName: "" });
+                      setAdminEventLinksPage(1);
+                    };
+                    return (
+                      <>
+                        <div className="admin-payments-filter-row">
+                          <p style={{ margin: 0 }}>
+                            <strong>Antal event:</strong> {totalFiltered}
+                            {hasActiveFilter ? (
+                              <span className="muted" style={{ marginLeft: "0.5rem" }}>
+                                (filtrerat från {adminEventLinks.length})
+                              </span>
+                            ) : null}
+                          </p>
+                          {hasActiveFilter ? (
+                            <button
+                              type="button"
+                              className="admin-payments-clear-filters"
+                              onClick={clearFilters}
+                              title="Rensa alla filter"
+                              aria-label="Rensa alla filter"
+                            >
+                              ✕
+                            </button>
+                          ) : null}
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: "1rem", marginBottom: "0.75rem", flexWrap: "wrap" }}>
+                          <label className="field" style={{ marginBottom: 0 }}>
+                            <span className="field-label" style={{ marginRight: "0.5rem" }}>Visa:</span>
+                            <select
+                              value={adminEventLinksPageSize}
+                              onChange={(e) => {
+                                setAdminEventLinksPageSize(Number(e.target.value));
+                                setAdminEventLinksPage(1);
+                              }}
+                              className="admin-payments-filter-select"
+                              style={{ width: "auto", maxWidth: "none" }}
+                            >
+                              <option value={10}>10</option>
+                              <option value={25}>25</option>
+                              <option value={50}>50</option>
+                              <option value={100}>100</option>
+                            </select>
+                          </label>
+                        </div>
+                        <div className="table-wrap">
+                          <table className="table admin-event-links-table">
+                            <thead>
+                              <tr>
+                                <th>
+                                  <div>
+                                    <button
+                                      type="button"
+                                      className={`sort-button ${adminEventLinksSort.key === "customer" ? "is-active" : ""}`}
+                                      onClick={() =>
+                                        setAdminEventLinksSort((s) => ({
+                                          key: "customer",
+                                          dir: s.key === "customer" && s.dir === "asc" ? "desc" : "asc"
+                                        }))
+                                      }
+                                    >
+                                      Kund {adminEventLinksSort.key === "customer" ? (adminEventLinksSort.dir === "asc" ? "↑" : "↓") : ""}
+                                    </button>
+                                  </div>
+                                  <select
+                                    className="admin-payments-filter-select"
+                                    value={filters.customer}
+                                    onChange={(e) => setColumnFilter("customer", e.target.value)}
+                                    onClick={(e) => e.stopPropagation()}
+                                    aria-label="Filtrera kund"
+                                  >
+                                    <option value="">Alla</option>
+                                    {customers.map((v) => (
+                                      <option key={v} value={v}>
+                                        {v}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </th>
+                                <th>
+                                  <div>
+                                    <button
+                                      type="button"
+                                      className={`sort-button ${adminEventLinksSort.key === "eventName" ? "is-active" : ""}`}
+                                      onClick={() =>
+                                        setAdminEventLinksSort((s) => ({
+                                          key: "eventName",
+                                          dir: s.key === "eventName" && s.dir === "asc" ? "desc" : "asc"
+                                        }))
+                                      }
+                                    >
+                                      Eventnamn {adminEventLinksSort.key === "eventName" ? (adminEventLinksSort.dir === "asc" ? "↑" : "↓") : ""}
+                                    </button>
+                                  </div>
+                                  <select
+                                    className="admin-payments-filter-select"
+                                    value={filters.eventName}
+                                    onChange={(e) => setColumnFilter("eventName", e.target.value)}
+                                    onClick={(e) => e.stopPropagation()}
+                                    aria-label="Filtrera eventnamn"
+                                  >
+                                    <option value="">Alla</option>
+                                    {eventNames.map((v) => (
+                                      <option key={v} value={v}>
+                                        {v}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </th>
+                                <th>
+                                  <button
+                                    type="button"
+                                    className={`sort-button ${adminEventLinksSort.key === "eventDate" ? "is-active" : ""}`}
+                                    onClick={() =>
+                                      setAdminEventLinksSort((s) => ({
+                                        key: "eventDate",
+                                        dir: s.key === "eventDate" && s.dir === "asc" ? "desc" : "asc"
+                                      }))
+                                    }
+                                  >
+                                    Eventdatum {adminEventLinksSort.key === "eventDate" ? (adminEventLinksSort.dir === "asc" ? "↑" : "↓") : ""}
+                                  </button>
+                                </th>
+                                <th>
+                                  <button
+                                    type="button"
+                                    className={`sort-button ${adminEventLinksSort.key === "updatedAt" ? "is-active" : ""}`}
+                                    onClick={() =>
+                                      setAdminEventLinksSort((s) => ({
+                                        key: "updatedAt",
+                                        dir: s.key === "updatedAt" && s.dir === "asc" ? "desc" : "asc"
+                                      }))
+                                    }
+                                  >
+                                    Senast uppdaterad{" "}
+                                    {adminEventLinksSort.key === "updatedAt" ? (adminEventLinksSort.dir === "asc" ? "↑" : "↓") : ""}
+                                  </button>
+                                </th>
+                                <th>Eventlänk</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {paged.map((r) => {
+                                const eventUrl = r.slug ? `${window.location.origin}/e/${encodeURIComponent(r.slug)}` : "";
+                                const dateLabel = formatAdminEventDateLabel(r.eventStartDate, r.eventEndDate);
+                                const updatedLabel = formatAdminEventUpdatedAt(r.updatedAt);
+                                return (
+                                  <tr key={r.id}>
+                                    <td>{r.customer || "–"}</td>
+                                    <td>{r.eventName || "–"}</td>
+                                    <td className="admin-event-date">{dateLabel}</td>
+                                    <td className="admin-event-updated">{updatedLabel}</td>
+                                    <td>
+                                      {eventUrl ? (
+                                        <a href={eventUrl} target="_blank" rel="noreferrer" className="admin-event-link-url">
+                                          {eventUrl}
+                                        </a>
+                                      ) : (
+                                        "–"
+                                      )}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                        {totalFiltered > 0 ? (
+                          <nav className="admin-payments-pagination" aria-label="Sidnavigering eventlänkar">
+                            <span className="admin-payments-pagination-info">
+                              Visar {start + 1}–{Math.min(start + adminEventLinksPageSize, totalFiltered)} av {totalFiltered}
+                            </span>
+                            <div className="admin-payments-pagination-controls">
+                              <button
+                                type="button"
+                                className="admin-payments-pagination-btn"
+                                disabled={page <= 1}
+                                onClick={() => setAdminEventLinksPage(1)}
+                                aria-label="Första sidan"
+                              >
+                                «
+                              </button>
+                              <button
+                                type="button"
+                                className="admin-payments-pagination-btn"
+                                disabled={page <= 1}
+                                onClick={() => setAdminEventLinksPage((p) => Math.max(1, p - 1))}
+                                aria-label="Föregående sida"
+                              >
+                                ‹
+                              </button>
+                              <button
+                                type="button"
+                                className={`admin-payments-pagination-btn admin-payments-pagination-num ${page === 1 ? "is-current" : ""}`}
+                                onClick={() => setAdminEventLinksPage(1)}
+                                aria-label="Sida 1"
+                                aria-current={page === 1 ? "page" : undefined}
+                              >
+                                1
+                              </button>
+                              {totalPages > 1 ? (
+                                <button
+                                  type="button"
+                                  className={`admin-payments-pagination-btn admin-payments-pagination-num ${page === totalPages ? "is-current" : ""}`}
+                                  onClick={() => setAdminEventLinksPage(totalPages)}
+                                  aria-label={`Sida ${totalPages}`}
+                                  aria-current={page === totalPages ? "page" : undefined}
+                                >
+                                  {totalPages}
+                                </button>
+                              ) : null}
+                              <button
+                                type="button"
+                                className="admin-payments-pagination-btn"
+                                disabled={page >= totalPages}
+                                onClick={() => setAdminEventLinksPage((p) => Math.min(totalPages, p + 1))}
+                                aria-label="Nästa sida"
+                              >
+                                ›
+                              </button>
+                              <button
+                                type="button"
+                                className="admin-payments-pagination-btn"
+                                disabled={page >= totalPages}
+                                onClick={() => setAdminEventLinksPage(totalPages)}
+                                aria-label="Sista sidan"
+                              >
+                                »
+                              </button>
+                            </div>
+                            <span className="admin-payments-pagination-info admin-payments-pagination-suffix">
+                              Sida {page} av {totalPages}
+                            </span>
+                          </nav>
+                        ) : null}
+                      </>
+                    );
+                  })()
+                )}
+              </div>
+            ) : null}
+            </div>
           </div>
         ) : null}
         {token && adminSection === "payout" ? (
