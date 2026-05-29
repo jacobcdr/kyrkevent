@@ -22,7 +22,13 @@ import * as xlsx from "xlsx";
 import { Resend } from "resend";
 import PDFDocument from "pdfkit";
 import QRCode from "qrcode";
-import { startDbMonitor, sendDbMonitorAlert } from "./dbMonitor.js";
+import { startHealthMonitor, sendDbMonitorAlert } from "./healthMonitor.js";
+import {
+  getDbConnectionTimeoutMs,
+  isRetryableDbError,
+  waitForDatabase,
+  wrapPoolWithRetry
+} from "./dbRetry.js";
 
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || "";
@@ -70,7 +76,19 @@ const poolConfig = databaseUrl
       database: process.env.PGDATABASE,
       ssl: useSsl ? { rejectUnauthorized: false } : undefined
     };
-const pool = new pg.Pool(poolConfig);
+poolConfig.connectionTimeoutMillis = getDbConnectionTimeoutMs();
+poolConfig.max = Math.max(1, Number(process.env.PG_POOL_MAX || 10) || 10);
+const pool = wrapPoolWithRetry(new pg.Pool(poolConfig));
+
+process.on("unhandledRejection", (reason) => {
+  if (isRetryableDbError(reason)) {
+    // eslint-disable-next-line no-console
+    console.error("[db-retry] Ohanterat databasfel (processen fortsätter):", reason);
+    return;
+  }
+  // eslint-disable-next-line no-console
+  console.error("Unhandled rejection:", reason);
+});
 
 app.set("trust proxy", 1);
 app.use(
@@ -6867,9 +6885,10 @@ const ensureBookingsTable = async () => {
   }
 };
 
-ensureBookingsTable()
+waitForDatabase(pool)
+  .then(() => ensureBookingsTable())
   .then(() => {
-    startDbMonitor(pool);
+    startHealthMonitor(pool);
     app.listen(PORT, () => {
       // eslint-disable-next-line no-console
       console.log(`Backend listening on http://localhost:${PORT}`);

@@ -9528,7 +9528,7 @@ function App() {
                   dangerouslySetInnerHTML={{ __html: hero.bodyHtml }}
                 />
               ) : (
-                <p className="muted">Texten uppdateras snart.</p>
+                <p className="muted">Lägg till din text här.</p>
               )}
             </div>
           );
