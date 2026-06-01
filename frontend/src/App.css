@@ -543,11 +543,93 @@ h2 {
   color: var(--text);
 }
 
-.speaker-bio {
+.speaker-bio-wrap {
+  position: relative;
   margin-top: 0.35rem;
+  width: 100%;
+}
+
+.speaker-bio {
+  margin-top: 0;
   color: #000;
   font-size: 0.9rem;
   white-space: pre-line;
+  line-height: 1.5;
+}
+
+.speaker-bio--clamped {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 10;
+  overflow: hidden;
+}
+
+.speaker-bio-fade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 2.35rem;
+  height: 3.5rem;
+  background: linear-gradient(to bottom, transparent, var(--card));
+  pointer-events: none;
+}
+
+.speaker-bio-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 0.6rem;
+  padding: 0.5rem 1.35rem;
+  min-height: 2.25rem;
+  border: 1.5px solid var(--accent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--card));
+  color: var(--accent);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+  cursor: pointer;
+  text-decoration: none;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 22%, transparent);
+  transition:
+    background 0.2s ease,
+    color 0.2s ease,
+    border-color 0.2s ease,
+    transform 0.15s ease,
+    box-shadow 0.2s ease;
+}
+
+.speaker-bio-toggle:hover {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent-dark, var(--accent));
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 38%, transparent);
+}
+
+.speaker-bio-toggle:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.speaker-bio-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.speaker-bio-wrap.is-expanded .speaker-bio-toggle {
+  background: var(--card);
+  color: var(--accent);
+}
+
+.speaker-bio-wrap.is-expanded .speaker-bio-toggle:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+.speakers--list .speaker-bio-toggle {
+  margin-left: 0;
 }
 
 .speakers--list {

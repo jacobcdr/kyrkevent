@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Html5Qrcode } from "html5-qrcode";
 import {
@@ -72,6 +72,72 @@ function compareAdminEventLinks(a, b, key, dir) {
   }
   const cmp = String(va).localeCompare(String(vb), "sv", { sensitivity: "base" });
   return asc ? cmp : -cmp;
+}
+
+function SpeakerBio({ bio }) {
+  const text = String(bio || "").trim();
+  const contentRef = useRef(null);
+  const [expanded, setExpanded] = useState(false);
+  const [hasOverflow, setHasOverflow] = useState(false);
+
+  useLayoutEffect(() => {
+    setExpanded(false);
+  }, [text]);
+
+  useLayoutEffect(() => {
+    const el = contentRef.current;
+    if (!el || !text) {
+      setHasOverflow(false);
+      return undefined;
+    }
+    const measure = () => {
+      if (expanded) return;
+      const hadClamp = el.classList.contains("speaker-bio--clamped");
+      if (hadClamp) el.classList.remove("speaker-bio--clamped");
+      const fullHeight = el.scrollHeight;
+      const style = getComputedStyle(el);
+      let lineHeight = parseFloat(style.lineHeight);
+      if (Number.isNaN(lineHeight)) {
+        lineHeight = parseFloat(style.fontSize) * 1.5;
+      }
+      const needsClamp = fullHeight > lineHeight * 10 + 2;
+      if (hadClamp && needsClamp) el.classList.add("speaker-bio--clamped");
+      setHasOverflow(needsClamp);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    window.addEventListener("resize", measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [text, expanded]);
+
+  if (!text) return null;
+
+  const showClamp = hasOverflow && !expanded;
+
+  return (
+    <div className={`speaker-bio-wrap${showClamp ? " is-clamped" : ""}${expanded ? " is-expanded" : ""}`}>
+      <div ref={contentRef} className={`speaker-bio${showClamp ? " speaker-bio--clamped" : ""}`}>
+        {text}
+      </div>
+      {hasOverflow ? (
+        <>
+          {showClamp ? <div className="speaker-bio-fade" aria-hidden="true" /> : null}
+          <button
+            type="button"
+            className="speaker-bio-toggle"
+            onClick={() => setExpanded((v) => !v)}
+            aria-expanded={expanded}
+          >
+            {expanded ? "Visa mindre" : "Visa mer"}
+          </button>
+        </>
+      ) : null}
+    </div>
+  );
 }
 
 const ADMIN_EVENT_LINKS_SORT_OPTIONS = [
@@ -8158,7 +8224,7 @@ const AdminPage = () => {
                         />
                         <div className="speaker-body">
                           <div className="speaker-name">{speaker.name}</div>
-                          <div className="speaker-bio">{speaker.bio}</div>
+                          <SpeakerBio bio={speaker.bio} />
                         </div>
                         <button
                           type="button"
@@ -10020,7 +10086,7 @@ function App() {
                       />
                       <div className="speaker-body">
                         <div className="speaker-name">{speaker.name}</div>
-                        <div className="speaker-bio">{speaker.bio}</div>
+                        <SpeakerBio bio={speaker.bio} />
                       </div>
                     </div>
                   ))}
