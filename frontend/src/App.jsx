@@ -1893,14 +1893,16 @@ const AdminPage = () => {
   const [anonymizeEligibleEvents, setAnonymizeEligibleEvents] = useState([]);
   const [anonymizeEligibleLoading, setAnonymizeEligibleLoading] = useState(false);
   const [anonymizeInProgress, setAnonymizeInProgress] = useState(null);
-  const [adminPaymentsSeries, setAdminPaymentsSeries] = useState([]);
-  const [adminPaymentsTotal, setAdminPaymentsTotal] = useState(0);
   const [adminPaymentsRows, setAdminPaymentsRows] = useState([]);
   const [adminPaymentsColumnFilters, setAdminPaymentsColumnFilters] = useState({
     profileId: "",
     organization: "",
     eventName: "",
     amount: ""
+  });
+  const [adminPaymentsChartFilters, setAdminPaymentsChartFilters] = useState({
+    organization: "",
+    eventName: ""
   });
   const [adminPaymentsSort, setAdminPaymentsSort] = useState({ key: "created_at", dir: "desc" });
   const [adminPaymentsPageSize, setAdminPaymentsPageSize] = useState(10);
@@ -1968,6 +1970,62 @@ const AdminPage = () => {
     const amounts = [...new Set(rows.map((r) => (Number(r.amount) || 0).toFixed(2)))].filter(Boolean).sort((a, b) => Number(a) - Number(b));
     return { profileIds, organizations, eventNames, amounts };
   }, [adminPaymentsRows]);
+
+  const adminPaymentsChartData = useMemo(() => {
+    const filters = adminPaymentsChartFilters;
+    const filtered = (adminPaymentsRows || []).filter((r) => {
+      if (filters.organization && String(r.organization || "–").trim() !== filters.organization) return false;
+      if (filters.eventName && String(r.eventName || "–").trim() !== filters.eventName) return false;
+      return true;
+    });
+    const byDate = {};
+    let grandTotal = 0;
+    for (const row of filtered) {
+      const amount = Number(row.amount) || 0;
+      const d = row.created_at ? String(row.created_at).slice(0, 10) : "";
+      if (!d) continue;
+      if (!byDate[d]) byDate[d] = { date: d, total: 0, count: 0 };
+      byDate[d].total += amount;
+      byDate[d].count += 1;
+      grandTotal += amount;
+    }
+    const series = Object.keys(byDate)
+      .sort()
+      .map((d) => ({
+        date: d,
+        total: Math.round(byDate[d].total * 100) / 100,
+        count: byDate[d].count
+      }));
+    return {
+      series,
+      grandTotal: Math.round(grandTotal * 100) / 100,
+      rowCount: filtered.length
+    };
+  }, [adminPaymentsRows, adminPaymentsChartFilters]);
+
+  const adminPaymentsChartFilterOptions = useMemo(() => {
+    const rows = adminPaymentsRows || [];
+    const selectedOrg = adminPaymentsChartFilters.organization;
+    const selectedEvent = adminPaymentsChartFilters.eventName;
+
+    const rowsForOrganizations = selectedEvent
+      ? rows.filter((r) => String(r.eventName || "–").trim() === selectedEvent)
+      : rows;
+    const organizations = [
+      ...new Set(rowsForOrganizations.map((r) => String(r.organization || "–").trim()))
+    ]
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b, "sv"));
+
+    const rowsForEvents = selectedOrg
+      ? rows.filter((r) => String(r.organization || "–").trim() === selectedOrg)
+      : rows;
+    const eventNames = [...new Set(rowsForEvents.map((r) => String(r.eventName || "–").trim()))]
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b, "sv"));
+
+    return { organizations, eventNames };
+  }, [adminPaymentsRows, adminPaymentsChartFilters.organization, adminPaymentsChartFilters.eventName]);
 
   const adminEventLinksDistinctValues = useMemo(() => {
     const rows = adminEventLinks || [];
@@ -2358,13 +2416,11 @@ const AdminPage = () => {
       });
       if (!response.ok) throw new Error("Failed to load");
       const data = await response.json();
-      setAdminPaymentsSeries(data.series || []);
-      setAdminPaymentsTotal(data.grandTotal ?? 0);
       setAdminPaymentsRows(data.rows || []);
+      setAdminPaymentsChartFilters({ organization: "", eventName: "" });
     } catch {
-      setAdminPaymentsSeries([]);
-      setAdminPaymentsTotal(0);
       setAdminPaymentsRows([]);
+      setAdminPaymentsChartFilters({ organization: "", eventName: "" });
     } finally {
       setAdminPaymentsLoading(false);
     }
@@ -4885,7 +4941,7 @@ const AdminPage = () => {
                 setAdminMenuOpen(false);
               }}
             >
-              Bokningar
+              Bokningar{!selectedEventId ? " (Välj event)" : ""}
             </button>
             <button
               type="button"
@@ -4898,7 +4954,7 @@ const AdminPage = () => {
                 setAdminMenuOpen(false);
               }}
             >
-              Framsida
+              Framsida{!selectedEventId ? " (Välj event)" : ""}
             </button>
             <button
               type="button"
@@ -4911,7 +4967,7 @@ const AdminPage = () => {
                 setAdminMenuOpen(false);
               }}
             >
-              Eventinställningar
+              Eventinställningar{!selectedEventId ? " (Välj event)" : ""}
             </button>
             <button
               type="button"
@@ -5298,7 +5354,7 @@ const AdminPage = () => {
                 <h2>Ekonomi</h2>
                 <h3 className="admin-subsection-title">Betalningsstatistik</h3>
                 <p className="muted">
-                  Samtliga betalda anmälningar i systemet. Filtrera på datum (när bokningen skapades).
+                  Samtliga betalda anmälningar i systemet. Filtrera på datum och filtrera diagrammet på organisation och eventnamn.
                 </p>
             <form
               className="admin-form"
@@ -5328,12 +5384,96 @@ const AdminPage = () => {
                 {adminPaymentsLoading ? "Laddar..." : "Visa"}
               </button>
             </form>
-            {adminPaymentsSeries.length > 0 ? (
+            {adminPaymentsRows.length > 0 ? (
+              <div
+                className="admin-payments-filter-row"
+                style={{ marginBottom: "1rem", flexWrap: "wrap", gap: "0.75rem", alignItems: "flex-end" }}
+              >
+                <label className="field" style={{ marginBottom: 0 }}>
+                  <span className="field-label">Organisation (diagram)</span>
+                  <select
+                    className="admin-payments-filter-select"
+                    value={adminPaymentsChartFilters.organization}
+                    onChange={(e) => {
+                      const nextOrg = e.target.value;
+                      setAdminPaymentsChartFilters((prev) => {
+                        const next = { ...prev, organization: nextOrg };
+                        if (!nextOrg || !prev.eventName) return next;
+                        const validEvents = [
+                          ...new Set(
+                            (adminPaymentsRows || [])
+                              .filter((r) => String(r.organization || "–").trim() === nextOrg)
+                              .map((r) => String(r.eventName || "–").trim())
+                          )
+                        ];
+                        if (!validEvents.includes(prev.eventName)) {
+                          next.eventName = "";
+                        }
+                        return next;
+                      });
+                    }}
+                    aria-label="Filtrera diagram på organisation"
+                  >
+                    <option value="">Alla</option>
+                    {adminPaymentsChartFilterOptions.organizations.map((v) => (
+                      <option key={v} value={v}>
+                        {v}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field" style={{ marginBottom: 0 }}>
+                  <span className="field-label">Eventnamn (diagram)</span>
+                  <select
+                    className="admin-payments-filter-select"
+                    value={adminPaymentsChartFilters.eventName}
+                    onChange={(e) => {
+                      const nextEvent = e.target.value;
+                      setAdminPaymentsChartFilters((prev) => {
+                        const next = { ...prev, eventName: nextEvent };
+                        if (!nextEvent || !prev.organization) return next;
+                        const validOrgs = [
+                          ...new Set(
+                            (adminPaymentsRows || [])
+                              .filter((r) => String(r.eventName || "–").trim() === nextEvent)
+                              .map((r) => String(r.organization || "–").trim())
+                          )
+                        ];
+                        if (!validOrgs.includes(prev.organization)) {
+                          next.organization = "";
+                        }
+                        return next;
+                      });
+                    }}
+                    aria-label="Filtrera diagram på eventnamn"
+                  >
+                    <option value="">Alla</option>
+                    {adminPaymentsChartFilterOptions.eventNames.map((v) => (
+                      <option key={v} value={v}>
+                        {v}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {adminPaymentsChartFilters.organization || adminPaymentsChartFilters.eventName ? (
+                  <button
+                    type="button"
+                    className="admin-payments-clear-filters"
+                    onClick={() => setAdminPaymentsChartFilters({ organization: "", eventName: "" })}
+                    title="Rensa diagramfilter"
+                    aria-label="Rensa diagramfilter"
+                  >
+                    ✕
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+            {adminPaymentsChartData.series.length > 0 ? (
               <>
                 <div style={{ width: "100%", height: 320, marginBottom: "1rem" }}>
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart
-                      data={adminPaymentsSeries.map((s) => ({
+                      data={adminPaymentsChartData.series.map((s) => ({
                         ...s,
                         name: s.date,
                         intäkter: s.total
@@ -5360,13 +5500,21 @@ const AdminPage = () => {
                 </div>
                 <p style={{ margin: 0, fontSize: "1.1rem" }}>
                   <strong>Totalt i valt intervall:</strong>{" "}
-                  {adminPaymentsTotal.toLocaleString("sv-SE", {
+                  {adminPaymentsChartData.grandTotal.toLocaleString("sv-SE", {
                     minimumFractionDigits: 2,
                     maximumFractionDigits: 2
                   })}{" "}
                   SEK
+                  {adminPaymentsChartFilters.organization || adminPaymentsChartFilters.eventName ? (
+                    <span className="muted" style={{ marginLeft: "0.5rem", fontSize: "0.95rem" }}>
+                      ({adminPaymentsChartData.rowCount}{" "}
+                      {adminPaymentsChartData.rowCount === 1 ? "betalning" : "betalningar"} efter filter)
+                    </span>
+                  ) : null}
                 </p>
               </>
+            ) : adminPaymentsRows.length > 0 && !adminPaymentsLoading ? (
+              <p className="muted">Inga betalda anmälningar matchar valt diagramfilter.</p>
             ) : !adminPaymentsLoading ? (
               <p className="muted">Inga betalda anmälningar i valt datumintervall.</p>
             ) : null}
