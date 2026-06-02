@@ -161,6 +161,28 @@ function AdminProfileInfoRow({ label, value }) {
   );
 }
 
+const TRANSLATE_DEFAULT_LANGUAGE_OPTIONS = [
+  { value: "sv", label: "Svenska" },
+  { value: "en", label: "Engelska" }
+];
+
+function normalizeTranslateDefaultLanguage(value) {
+  return value === "en" ? "en" : "sv";
+}
+
+function setGoogleTranslateDefaultLanguage(language) {
+  const target = normalizeTranslateDefaultLanguage(language);
+  const cookieValue = target === "en" ? "/sv/en" : "/sv/sv";
+  document.cookie = `googtrans=${cookieValue};path=/`;
+  const host = window.location.hostname;
+  if (host && host !== "localhost" && host !== "127.0.0.1") {
+    document.cookie = `googtrans=${cookieValue};path=/;domain=${host}`;
+    if (host.startsWith("www.")) {
+      document.cookie = `googtrans=${cookieValue};path=/;domain=${host.slice(4)}`;
+    }
+  }
+}
+
 const ADMIN_EVENT_LINKS_SORT_OPTIONS = [
   { value: "customer:asc", label: "Kund (A–Ö)" },
   { value: "customer:desc", label: "Kund (Ö–A)" },
@@ -1565,6 +1587,7 @@ const AdminPage = () => {
   });
   const [adminFaqText, setAdminFaqText] = useState("");
   const [adminSpeakersLayout, setAdminSpeakersLayout] = useState("grid");
+  const [adminTranslateDefaultLanguage, setAdminTranslateDefaultLanguage] = useState("sv");
   const DEFAULT_SECTION_ORDER = ["text", "program", "faq", "form", "speakers", "partners", "place"];
   const [adminSectionOrder, setAdminSectionOrder] = useState([...DEFAULT_SECTION_ORDER]);
   const [adminFormFieldOrder, setAdminFormFieldOrder] = useState([]);
@@ -2051,6 +2074,7 @@ const AdminPage = () => {
     });
     setAdminFaqText(data.sections?.faqText || "");
     setAdminSpeakersLayout(data.sections?.speakersLayout === "list" ? "list" : "grid");
+    setAdminTranslateDefaultLanguage(normalizeTranslateDefaultLanguage(data.sections?.translateDefaultLanguage));
     setAdminFormFieldOrder(Array.isArray(data.sections?.formFieldOrder) ? data.sections.formFieldOrder : []);
   };
 
@@ -3670,7 +3694,8 @@ const AdminPage = () => {
           sectionLabelPartners: adminSectionLabels.partners,
           sectionLabelFaq: adminSectionLabels.faq,
           faqText: adminFaqText,
-          speakersLayout: adminSpeakersLayout
+          speakersLayout: adminSpeakersLayout,
+          translateDefaultLanguage: adminTranslateDefaultLanguage
         })
       });
       if (!response.ok) {
@@ -3678,6 +3703,40 @@ const AdminPage = () => {
       }
     };
     saveSections().catch(() => setError("Kunde inte spara sektionerna."));
+  };
+
+  const handleTranslateDefaultLanguageChange = (event) => {
+    const next = normalizeTranslateDefaultLanguage(event.target.value);
+    setAdminTranslateDefaultLanguage(next);
+    if (!token || !selectedEventId) {
+      return;
+    }
+    const saveSections = async () => {
+      const response = await fetch(`${API_BASE}/admin/sections`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          eventId: Number(selectedEventId),
+          ...adminSectionVisibility,
+          sectionOrder: adminSectionOrder,
+          formFieldOrder: adminMergedFormFieldOrder,
+          sectionLabelProgram: adminSectionLabels.program,
+          sectionLabelSpeakers: adminSectionLabels.speakers,
+          sectionLabelPartners: adminSectionLabels.partners,
+          sectionLabelFaq: adminSectionLabels.faq,
+          faqText: adminFaqText,
+          speakersLayout: adminSpeakersLayout,
+          translateDefaultLanguage: next
+        })
+      });
+      if (!response.ok) {
+        throw new Error("Sections save failed");
+      }
+    };
+    saveSections().catch(() => setError("Kunde inte spara standardspråk."));
   };
 
   const handleSpeakersLayoutChange = (layout) => {
@@ -3703,7 +3762,8 @@ const AdminPage = () => {
           sectionLabelPartners: adminSectionLabels.partners,
           sectionLabelFaq: adminSectionLabels.faq,
           faqText: adminFaqText,
-          speakersLayout: next
+          speakersLayout: next,
+          translateDefaultLanguage: adminTranslateDefaultLanguage
         })
       });
       if (!response.ok) {
@@ -3732,7 +3792,8 @@ const AdminPage = () => {
           sectionLabelPartners: adminSectionLabels.partners,
           sectionLabelFaq: adminSectionLabels.faq,
           faqText: adminFaqText,
-          speakersLayout: adminSpeakersLayout
+          speakersLayout: adminSpeakersLayout,
+          translateDefaultLanguage: adminTranslateDefaultLanguage
         })
       });
       if (!response.ok) throw new Error("Sections save failed");
@@ -3780,7 +3841,8 @@ const AdminPage = () => {
           sectionLabelPartners: adminSectionLabels.partners,
           sectionLabelFaq: adminSectionLabels.faq,
           faqText: adminFaqText,
-          speakersLayout: adminSpeakersLayout
+          speakersLayout: adminSpeakersLayout,
+          translateDefaultLanguage: adminTranslateDefaultLanguage
         })
       });
       if (!response.ok) throw new Error("Sections save failed");
@@ -8937,6 +8999,27 @@ const AdminPage = () => {
                     />
                   </label>
                 </div>
+                {adminSectionVisibility.showTranslate ? (
+                  <label className="field admin-translate-default-field">
+                    <span className="field-label">Standardspråk för besökare</span>
+                    <p className="muted" style={{ marginTop: "0.25rem", marginBottom: "0.5rem" }}>
+                      Eventets innehåll skrivs på svenska. Välj om besökaren ska se svenska direkt eller engelsk översättning när sidan laddas. Besökaren kan fortfarande byta språk i menyn.
+                    </p>
+                    <select
+                      value={adminTranslateDefaultLanguage}
+                      onChange={handleTranslateDefaultLanguageChange}
+                      className="admin-payments-filter-select"
+                      style={{ width: "auto", minWidth: "12rem", maxWidth: "none" }}
+                      aria-label="Standardspråk för Google-översättning"
+                    >
+                      {TRANSLATE_DEFAULT_LANGUAGE_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
               </div>
               <div className="section">
                 <h2>Tema</h2>
@@ -9640,7 +9723,8 @@ function App() {
     showCity: true,
     showOrganization: true,
     showTranslate: true,
-    showDiscountCode: true
+    showDiscountCode: true,
+    translateDefaultLanguage: "sv"
   });
   const [formFieldOrder, setFormFieldOrder] = useState([]);
   const publicDefaultSectionOrder = ["text", "program", "faq", "form", "speakers", "partners", "place"];
@@ -9708,14 +9792,22 @@ function App() {
 
   useEffect(() => {
     if (isAdminRoute || isPaymentStatusRoute) {
-      return;
+      return undefined;
     }
-    if (window.googleTranslateElementInit) {
-      return;
+    if (!sectionVisibility.showTranslate) {
+      return undefined;
     }
-    window.googleTranslateElementInit = () => {
+
+    const defaultLanguage = normalizeTranslateDefaultLanguage(sectionVisibility.translateDefaultLanguage);
+    setGoogleTranslateDefaultLanguage(defaultLanguage);
+
+    const initGoogleTranslate = () => {
       if (!window.google?.translate?.TranslateElement) {
         return;
+      }
+      const container = document.getElementById("google_translate_element");
+      if (container) {
+        container.innerHTML = "";
       }
       new window.google.translate.TranslateElement(
         {
@@ -9726,14 +9818,28 @@ function App() {
         "google_translate_element"
       );
     };
-    if (!document.getElementById("google-translate-script")) {
+
+    window.googleTranslateElementInit = initGoogleTranslate;
+
+    if (window.google?.translate?.TranslateElement) {
+      initGoogleTranslate();
+    } else if (!document.getElementById("google-translate-script")) {
       const script = document.createElement("script");
       script.id = "google-translate-script";
       script.src = "//translate.google.com/translate_a/element.js?cb=googleTranslateElementInit";
       script.async = true;
       document.body.appendChild(script);
+    } else {
+      initGoogleTranslate();
     }
-  }, [isAdminRoute, isPaymentStatusRoute]);
+
+    return undefined;
+  }, [
+    isAdminRoute,
+    isPaymentStatusRoute,
+    sectionVisibility.showTranslate,
+    sectionVisibility.translateDefaultLanguage
+  ]);
 
   useEffect(() => {
     if (isAdminRoute || isPaymentStatusRoute || isVerifyEmailRoute || isResetPasswordRoute) {
@@ -9848,7 +9954,8 @@ function App() {
       showOrganization: data.sections?.showOrganization !== false,
       showTranslate: data.sections?.showTranslate !== false,
       showDiscountCode: data.sections?.showDiscountCode !== false,
-      showFaq: data.sections?.showFaq || false
+      showFaq: data.sections?.showFaq || false,
+      translateDefaultLanguage: normalizeTranslateDefaultLanguage(data.sections?.translateDefaultLanguage)
     });
     const order = data.sections?.sectionOrder;
     setSectionOrder(

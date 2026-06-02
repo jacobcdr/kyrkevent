@@ -323,6 +323,13 @@ function parseSpeakersLayout(value) {
   return VALID_SPEAKERS_LAYOUTS.has(normalized) ? normalized : "grid";
 }
 
+const VALID_TRANSLATE_DEFAULT_LANGUAGES = new Set(["sv", "en"]);
+
+function parseTranslateDefaultLanguage(value) {
+  const normalized = String(value || "sv").toLowerCase();
+  return VALID_TRANSLATE_DEFAULT_LANGUAGES.has(normalized) ? normalized : "sv";
+}
+
 function parseSectionOrder(raw) {
   if (!raw) return [...DEFAULT_SECTION_ORDER];
   try {
@@ -1083,7 +1090,7 @@ app.get("/sections", async (req, res) => {
                show_name, show_email, show_phone, show_city, show_organization, show_translate, show_discount_code,
                show_faq, section_order, form_field_order,
                section_label_program, section_label_speakers, section_label_partners, section_label_faq,
-               faq_text, speakers_layout
+               faq_text, speakers_layout, translate_default_language
         FROM event_sections
         WHERE event_id = $1
       `,
@@ -1096,7 +1103,8 @@ app.get("/sections", async (req, res) => {
           ...defaultSectionVisibility,
           sectionOrder: DEFAULT_SECTION_ORDER,
           formFieldOrder: parseFormFieldOrder(null, customIds),
-          speakersLayout: "grid"
+          speakersLayout: "grid",
+          translateDefaultLanguage: "sv"
         }
       });
       return;
@@ -1125,7 +1133,8 @@ app.get("/sections", async (req, res) => {
         sectionLabelPartners: row.section_label_partners ?? "",
         sectionLabelFaq: row.section_label_faq ?? "",
         faqText: row.faq_text ?? "",
-        speakersLayout: parseSpeakersLayout(row.speakers_layout)
+        speakersLayout: parseSpeakersLayout(row.speakers_layout),
+        translateDefaultLanguage: parseTranslateDefaultLanguage(row.translate_default_language)
       }
     });
   } catch (error) {
@@ -4605,7 +4614,7 @@ app.get("/admin/sections", requireAdmin, async (req, res) => {
                show_name, show_email, show_phone, show_city, show_organization, show_translate, show_discount_code,
                show_faq, section_order, form_field_order,
                section_label_program, section_label_speakers, section_label_partners, section_label_faq,
-               faq_text, speakers_layout
+               faq_text, speakers_layout, translate_default_language
         FROM event_sections
         WHERE event_id = $1
       `,
@@ -4618,7 +4627,8 @@ app.get("/admin/sections", requireAdmin, async (req, res) => {
           ...defaultSectionVisibility,
           sectionOrder: DEFAULT_SECTION_ORDER,
           formFieldOrder: parseFormFieldOrder(null, customIds),
-          speakersLayout: "grid"
+          speakersLayout: "grid",
+          translateDefaultLanguage: "sv"
         }
       });
       return;
@@ -4647,7 +4657,8 @@ app.get("/admin/sections", requireAdmin, async (req, res) => {
         sectionLabelPartners: row.section_label_partners ?? "",
         sectionLabelFaq: row.section_label_faq ?? "",
         faqText: row.faq_text ?? "",
-        speakersLayout: parseSpeakersLayout(row.speakers_layout)
+        speakersLayout: parseSpeakersLayout(row.speakers_layout),
+        translateDefaultLanguage: parseTranslateDefaultLanguage(row.translate_default_language)
       }
     });
   } catch (error) {
@@ -4678,7 +4689,8 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
     sectionLabelPartners,
     sectionLabelFaq,
     faqText,
-    speakersLayout
+    speakersLayout,
+    translateDefaultLanguage
   } = req.body || {};
   const parsedEventId = await ensureEventOwnership(eventId, req.userId, res);
   if (!parsedEventId) {
@@ -4699,15 +4711,16 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
   const labelFaq = typeof sectionLabelFaq === "string" ? sectionLabelFaq.trim() : "";
   const faqTextNormalized = typeof faqText === "string" ? faqText : "";
   const speakersLayoutNormalized = parseSpeakersLayout(speakersLayout);
+  const translateDefaultLanguageNormalized = parseTranslateDefaultLanguage(translateDefaultLanguage);
   try {
     const result = await pool.query(
       `
         INSERT INTO event_sections
           (event_id, show_program, show_place, show_text, show_speakers, show_partners,
            show_name, show_email, show_phone, show_city, show_organization, show_translate, show_discount_code, show_faq,
-           section_order, form_field_order, section_label_program, section_label_speakers, section_label_partners, section_label_faq, faq_text, speakers_layout)
+           section_order, form_field_order, section_label_program, section_label_speakers, section_label_partners, section_label_faq, faq_text, speakers_layout, translate_default_language)
         VALUES
-          ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+          ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
         ON CONFLICT (event_id) DO UPDATE SET
           show_program = EXCLUDED.show_program,
           show_place = EXCLUDED.show_place,
@@ -4729,10 +4742,11 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
           section_label_partners = EXCLUDED.section_label_partners,
           section_label_faq = EXCLUDED.section_label_faq,
           faq_text = EXCLUDED.faq_text,
-          speakers_layout = EXCLUDED.speakers_layout
+          speakers_layout = EXCLUDED.speakers_layout,
+          translate_default_language = EXCLUDED.translate_default_language
         RETURNING show_program, show_place, show_text, show_speakers, show_partners,
                   show_name, show_email, show_phone, show_city, show_organization, show_translate, show_discount_code, show_faq,
-                  section_order, form_field_order, section_label_program, section_label_speakers, section_label_partners, section_label_faq, faq_text, speakers_layout
+                  section_order, form_field_order, section_label_program, section_label_speakers, section_label_partners, section_label_faq, faq_text, speakers_layout, translate_default_language
       `,
       [
         parsedEventId,
@@ -4756,7 +4770,8 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
         labelPartners,
         labelFaq,
         faqTextNormalized,
-        speakersLayoutNormalized
+        speakersLayoutNormalized,
+        translateDefaultLanguageNormalized
       ]
     );
     const row = result.rows[0];
@@ -4783,7 +4798,8 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
         sectionLabelPartners: row.section_label_partners ?? "",
         sectionLabelFaq: row.section_label_faq ?? "",
         faqText: row.faq_text ?? "",
-        speakersLayout: parseSpeakersLayout(row.speakers_layout)
+        speakersLayout: parseSpeakersLayout(row.speakers_layout),
+        translateDefaultLanguage: parseTranslateDefaultLanguage(row.translate_default_language)
       }
     });
   } catch (error) {
@@ -6769,7 +6785,8 @@ const ensureBookingsTable = async () => {
       section_label_partners TEXT DEFAULT '',
       section_label_faq TEXT DEFAULT '',
       faq_text TEXT DEFAULT '',
-      speakers_layout TEXT NOT NULL DEFAULT 'grid'
+      speakers_layout TEXT NOT NULL DEFAULT 'grid',
+      translate_default_language TEXT NOT NULL DEFAULT 'sv'
     )
   `);
   await pool.query(`
@@ -6789,7 +6806,8 @@ const ensureBookingsTable = async () => {
       ADD COLUMN IF NOT EXISTS section_label_partners TEXT DEFAULT '',
       ADD COLUMN IF NOT EXISTS section_label_faq TEXT DEFAULT '',
       ADD COLUMN IF NOT EXISTS faq_text TEXT DEFAULT '',
-      ADD COLUMN IF NOT EXISTS speakers_layout TEXT NOT NULL DEFAULT 'grid'
+      ADD COLUMN IF NOT EXISTS speakers_layout TEXT NOT NULL DEFAULT 'grid',
+      ADD COLUMN IF NOT EXISTS translate_default_language TEXT NOT NULL DEFAULT 'sv'
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS event_custom_fields (

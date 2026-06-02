@@ -158,7 +158,8 @@ ALTER TABLE event_sections
   ADD COLUMN IF NOT EXISTS section_label_partners TEXT DEFAULT '',
   ADD COLUMN IF NOT EXISTS section_label_faq TEXT DEFAULT '',
   ADD COLUMN IF NOT EXISTS faq_text TEXT DEFAULT '',
-  ADD COLUMN IF NOT EXISTS speakers_layout TEXT NOT NULL DEFAULT 'grid';
+  ADD COLUMN IF NOT EXISTS speakers_layout TEXT NOT NULL DEFAULT 'grid',
+  ADD COLUMN IF NOT EXISTS translate_default_language TEXT NOT NULL DEFAULT 'sv';
 
 CREATE TABLE IF NOT EXISTS event_custom_fields (
   id SERIAL PRIMARY KEY,
