@@ -170,7 +170,24 @@ function normalizeTranslateDefaultLanguage(value) {
   return value === "en" ? "en" : "sv";
 }
 
-function setGoogleTranslateDefaultLanguage(language) {
+function clearGoogleTranslateCookies() {
+  const expires = "expires=Thu, 01 Jan 1970 00:00:00 GMT";
+  document.cookie = `googtrans=;path=/;${expires}`;
+  const host = window.location.hostname;
+  if (host && host !== "localhost" && host !== "127.0.0.1") {
+    document.cookie = `googtrans=;path=/;domain=${host};${expires}`;
+    if (host.startsWith("www.")) {
+      document.cookie = `googtrans=;path=/;domain=${host.slice(4)};${expires}`;
+    }
+  }
+}
+
+function readGoogleTranslateCookieValue() {
+  const match = document.cookie.match(/(?:^|;\s*)googtrans=([^;]+)/);
+  return match ? decodeURIComponent(match[1]).trim() : "";
+}
+
+function setGoogleTranslateCookie(language) {
   const target = normalizeTranslateDefaultLanguage(language);
   const cookieValue = target === "en" ? "/sv/en" : "/sv/sv";
   document.cookie = `googtrans=${cookieValue};path=/`;
@@ -181,6 +198,115 @@ function setGoogleTranslateDefaultLanguage(language) {
       document.cookie = `googtrans=${cookieValue};path=/;domain=${host.slice(4)}`;
     }
   }
+}
+
+function isGoogleTranslateActive() {
+  return (
+    document.documentElement.classList.contains("translated-ltr") ||
+    document.documentElement.classList.contains("translated-rtl")
+  );
+}
+
+function requestGoogleTranslateReloadIfNeeded(defaultLanguage, eventId) {
+  const target = normalizeTranslateDefaultLanguage(defaultLanguage);
+  const current = readGoogleTranslateCookieValue();
+  const reloadKey = `kyrkevent-gt-reload:${eventId}:${target}`;
+
+  if (target === "en") {
+    if (current !== "/sv/en") {
+      if (sessionStorage.getItem(reloadKey) === "1") {
+        sessionStorage.removeItem(reloadKey);
+        return false;
+      }
+      setGoogleTranslateCookie("en");
+      sessionStorage.setItem(reloadKey, "1");
+      window.location.reload();
+      return true;
+    }
+    sessionStorage.removeItem(reloadKey);
+    return false;
+  }
+
+  if (current && current !== "/sv/sv") {
+    if (sessionStorage.getItem(reloadKey) === "1") {
+      sessionStorage.removeItem(reloadKey);
+      return false;
+    }
+    clearGoogleTranslateCookies();
+    sessionStorage.setItem(reloadKey, "1");
+    window.location.reload();
+    return true;
+  }
+  sessionStorage.removeItem(reloadKey);
+  return false;
+}
+
+function syncGoogleTranslateDropdown(language) {
+  const select = document.querySelector("select.goog-te-combo");
+  if (!select) return false;
+  const target = normalizeTranslateDefaultLanguage(language);
+  if (target === "en") {
+    const hasEnglish = Array.from(select.options).some((option) => option.value === "en");
+    if (hasEnglish && select.value !== "en") {
+      select.value = "en";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  } else if (select.value) {
+    select.value = "";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+  return true;
+}
+
+function waitForGoogleTranslateApplied(maxAttempts = 30, intervalMs = 150) {
+  return new Promise((resolve) => {
+    let attempts = 0;
+    const tryWait = () => {
+      if (isGoogleTranslateActive()) {
+        resolve(true);
+        return;
+      }
+      attempts += 1;
+      if (attempts >= maxAttempts) {
+        resolve(false);
+        return;
+      }
+      window.setTimeout(tryWait, intervalMs);
+    };
+    tryWait();
+  });
+}
+
+function removeGoogleTranslateArtifacts() {
+  const container = document.getElementById("google_translate_element");
+  if (container) {
+    container.innerHTML = "";
+  }
+  document.querySelectorAll("iframe.goog-te-banner-frame").forEach((node) => node.remove());
+  document.querySelectorAll("select.goog-te-combo").forEach((select) => {
+    const wrapper = select.closest(".goog-te-gadget") || select.parentElement;
+    wrapper?.remove();
+  });
+}
+
+function syncGoogleTranslateDropdownWhenReady(language, maxAttempts = 40, intervalMs = 100) {
+  const target = normalizeTranslateDefaultLanguage(language);
+  return new Promise((resolve) => {
+    let attempts = 0;
+    const trySync = () => {
+      if (syncGoogleTranslateDropdown(target)) {
+        resolve(true);
+        return;
+      }
+      attempts += 1;
+      if (attempts >= maxAttempts) {
+        resolve(false);
+        return;
+      }
+      window.setTimeout(trySync, intervalMs);
+    };
+    trySync();
+  });
 }
 
 const ADMIN_EVENT_LINKS_SORT_OPTIONS = [
@@ -9726,6 +9852,8 @@ function App() {
     showDiscountCode: true,
     translateDefaultLanguage: "sv"
   });
+  const [eventSectionsLoaded, setEventSectionsLoaded] = useState(false);
+  const translateMountedEventIdRef = useRef(null);
   const [formFieldOrder, setFormFieldOrder] = useState([]);
   const publicDefaultSectionOrder = ["text", "program", "faq", "form", "speakers", "partners", "place"];
   const [sectionOrder, setSectionOrder] = useState([...publicDefaultSectionOrder]);
@@ -9794,35 +9922,62 @@ function App() {
     if (isAdminRoute || isPaymentStatusRoute) {
       return undefined;
     }
-    if (!sectionVisibility.showTranslate) {
+    if (!eventSectionsLoaded || !sectionVisibility.showTranslate || !event?.id) {
+      if (!sectionVisibility.showTranslate) {
+        removeGoogleTranslateArtifacts();
+        translateMountedEventIdRef.current = null;
+      }
       return undefined;
     }
 
     const defaultLanguage = normalizeTranslateDefaultLanguage(sectionVisibility.translateDefaultLanguage);
-    setGoogleTranslateDefaultLanguage(defaultLanguage);
+    let cancelled = false;
+    let waitTimer;
 
-    const initGoogleTranslate = () => {
-      if (!window.google?.translate?.TranslateElement) {
+    const mountAndApply = async () => {
+      if (cancelled) return;
+      if (requestGoogleTranslateReloadIfNeeded(defaultLanguage, event.id)) {
         return;
       }
       const container = document.getElementById("google_translate_element");
-      if (container) {
-        container.innerHTML = "";
+      if (!container) {
+        waitTimer = window.setTimeout(mountAndApply, 50);
+        return;
       }
-      new window.google.translate.TranslateElement(
-        {
-          pageLanguage: "sv",
-          includedLanguages: "sv,en",
-          autoDisplay: false
-        },
-        "google_translate_element"
-      );
+      if (!window.google?.translate?.TranslateElement) {
+        waitTimer = window.setTimeout(mountAndApply, 100);
+        return;
+      }
+
+      if (translateMountedEventIdRef.current !== event.id) {
+        removeGoogleTranslateArtifacts();
+        if (defaultLanguage === "sv") {
+          clearGoogleTranslateCookies();
+        }
+        container.innerHTML = "";
+        new window.google.translate.TranslateElement(
+          {
+            pageLanguage: "sv",
+            includedLanguages: "sv,en",
+            autoDisplay: false
+          },
+          "google_translate_element"
+        );
+        translateMountedEventIdRef.current = event.id;
+      }
+
+      if (defaultLanguage === "en") {
+        await waitForGoogleTranslateApplied();
+      }
+      await syncGoogleTranslateDropdownWhenReady(defaultLanguage);
     };
 
-    window.googleTranslateElementInit = initGoogleTranslate;
+    window.googleTranslateElementInit = () => {
+      void mountAndApply();
+    };
 
     if (window.google?.translate?.TranslateElement) {
-      initGoogleTranslate();
+      void mountAndApply();
     } else if (!document.getElementById("google-translate-script")) {
       const script = document.createElement("script");
       script.id = "google-translate-script";
@@ -9830,13 +9985,18 @@ function App() {
       script.async = true;
       document.body.appendChild(script);
     } else {
-      initGoogleTranslate();
+      void mountAndApply();
     }
 
-    return undefined;
+    return () => {
+      cancelled = true;
+      if (waitTimer) window.clearTimeout(waitTimer);
+    };
   }, [
     isAdminRoute,
     isPaymentStatusRoute,
+    event?.id,
+    eventSectionsLoaded,
     sectionVisibility.showTranslate,
     sectionVisibility.translateDefaultLanguage
   ]);
@@ -10053,8 +10213,32 @@ function App() {
 
   useEffect(() => {
     if (isAdminRoute || !event?.id) {
-      return;
+      setEventSectionsLoaded(false);
+      return undefined;
     }
+    let alive = true;
+    setEventSectionsLoaded(false);
+    translateMountedEventIdRef.current = null;
+    loadSectionVisibility(event.id)
+      .catch(() =>
+        setSectionVisibility({
+          showProgram: true,
+          showPlace: true,
+          showText: true,
+          showSpeakers: true,
+          showPartners: true,
+          showName: true,
+          showEmail: true,
+          showPhone: true,
+          showOrganization: true,
+          showTranslate: true,
+          showDiscountCode: true,
+          translateDefaultLanguage: "sv"
+        })
+      )
+      .finally(() => {
+        if (alive) setEventSectionsLoaded(true);
+      });
     loadProgramItems(event.id).catch(() => setProgramItems([]));
     loadPlace(event.id).catch(() => setPlace({ address: "", description: "" }));
     loadSpeakers(event.id).catch(() => setSpeakers([]));
@@ -10062,19 +10246,9 @@ function App() {
     loadPrices(event.id).catch(() => setPrices([]));
     loadHero(event.id).catch(() => setHero({ title: "", bodyHtml: "" }));
     loadCustomFields(event.id).catch(() => setCustomFields([]));
-    loadSectionVisibility(event.id).catch(() =>
-      setSectionVisibility({
-        showProgram: true,
-        showPlace: true,
-        showText: true,
-        showSpeakers: true,
-        showPartners: true,
-        showName: true,
-        showEmail: true,
-        showPhone: true,
-        showOrganization: true
-      })
-    );
+    return () => {
+      alive = false;
+    };
   }, [event, isAdminRoute]);
 
   useEffect(() => {
@@ -10372,10 +10546,10 @@ function App() {
 
   return (
     <div className="page">
-      {sectionVisibility.showTranslate ? (
-        <div className="translate-row">
+      {sectionVisibility.showTranslate && eventSectionsLoaded ? (
+        <div className="translate-row notranslate">
           <span className="translate-label">Språk</span>
-          <div id="google_translate_element" />
+          <div id="google_translate_element" className="notranslate" />
         </div>
       ) : null}
       {hero.imageUrl ? (

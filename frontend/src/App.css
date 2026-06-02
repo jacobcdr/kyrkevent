@@ -2422,6 +2422,16 @@ h2 {
   justify-content: flex-end;
   gap: 0.5rem;
   margin-bottom: 0.75rem;
+  min-height: 2.25rem;
+}
+
+.translate-row #google_translate_element {
+  min-height: 1.75rem;
+}
+
+.translate-row .goog-te-gadget,
+.translate-row .goog-te-gadget-simple {
+  font-family: inherit;
 }
 
 .translate-label {
@@ -2429,7 +2439,8 @@ h2 {
   font-size: 0.95rem;
 }
 
-#google_translate_element select {
+#google_translate_element select,
+select.goog-te-combo {
   border: 1px solid #e4e7ec;
   border-radius: 999px;
   padding: 0.35rem 0.75rem;
