@@ -140,6 +140,27 @@ function SpeakerBio({ bio }) {
   );
 }
 
+function formatAdminProfileDisplayValue(value) {
+  const text = (value ?? "").toString().trim();
+  return text || "–";
+}
+
+function formatAdminSubscriptionPlanLabel(plan) {
+  const key = (plan || "gratis").toLowerCase();
+  if (key === "bas") return "Bas";
+  if (key === "premium") return "Premium";
+  return "Gratis";
+}
+
+function AdminProfileInfoRow({ label, value }) {
+  return (
+    <div className="admin-profile-info-row">
+      <div className="admin-profile-info-label">{label}</div>
+      <div className="admin-profile-info-value">{formatAdminProfileDisplayValue(value)}</div>
+    </div>
+  );
+}
+
 const ADMIN_EVENT_LINKS_SORT_OPTIONS = [
   { value: "customer:asc", label: "Kund (A–Ö)" },
   { value: "customer:desc", label: "Kund (Ö–A)" },
@@ -1755,6 +1776,7 @@ const AdminPage = () => {
   const [adminOrgSavingProfileId, setAdminOrgSavingProfileId] = useState(null);
   const [adminDeleteProfileConfirm, setAdminDeleteProfileConfirm] = useState(null);
   const [adminDeleteProfileLoading, setAdminDeleteProfileLoading] = useState(false);
+  const [adminOrgProfileModal, setAdminOrgProfileModal] = useState(null);
   const [adminEventLinks, setAdminEventLinks] = useState([]);
   const [adminEventLinksLoading, setAdminEventLinksLoading] = useState(false);
   const [adminEventLinksColumnFilters, setAdminEventLinksColumnFilters] = useState({
@@ -2284,6 +2306,47 @@ const AdminPage = () => {
   const handleDeleteOrgAccount = (row) => {
     if (!row?.profileId) return;
     setAdminDeleteProfileConfirm({ profileId: row.profileId, organization: row.organization || "denna organisation" });
+  };
+
+  const handleOpenAdminOrgProfileModal = async (row) => {
+    if (!token || !row?.profileId) return;
+    setAdminOrgProfileModal({
+      profileId: row.profileId,
+      organization: row.organization || "",
+      username: row.username || "",
+      loading: true,
+      profile: null,
+      error: ""
+    });
+    try {
+      const response = await fetch(`${API_BASE}/admin/profiles/${encodeURIComponent(row.profileId)}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "Kunde inte ladda profil");
+      }
+      setAdminOrgProfileModal((prev) =>
+        prev
+          ? {
+              ...prev,
+              loading: false,
+              profile: data.profile || null,
+              error: data.profile ? "" : "Profil hittades inte"
+            }
+          : null
+      );
+    } catch (err) {
+      setAdminOrgProfileModal((prev) =>
+        prev
+          ? {
+              ...prev,
+              loading: false,
+              error: err?.message || "Kunde inte ladda profil"
+            }
+          : null
+      );
+    }
   };
 
   const handleSaveOrgSubscriptionPlan = async (profileId, plan) => {
@@ -3960,6 +4023,43 @@ const AdminPage = () => {
     }
   };
 
+  const handleSpeakerMove = (index, direction) => {
+    const nextIndex = direction === "up" ? index - 1 : index + 1;
+    if (nextIndex < 0 || nextIndex >= speakers.length) {
+      return;
+    }
+    if (!token) {
+      setError("Logga in för att ändra ordning.");
+      return;
+    }
+    if (!selectedEventId) {
+      setError("Välj ett event först.");
+      return;
+    }
+    const next = [...speakers];
+    const [moved] = next.splice(index, 1);
+    next.splice(nextIndex, 0, moved);
+    setSpeakers(next);
+    const saveOrder = async () => {
+      const response = await fetch(`${API_BASE}/admin/speakers/reorder`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ ids: next.map((s) => s.id), eventId: Number(selectedEventId) })
+      });
+      if (!response.ok) {
+        throw new Error("Speaker reorder failed");
+      }
+      localStorage.setItem(buildStorageKey("speakersUpdatedAt", selectedEventId), String(Date.now()));
+    };
+    saveOrder().catch(() => {
+      setError("Kunde inte spara talarnas ordning.");
+      loadSpeakers(selectedEventId).catch(() => {});
+    });
+  };
+
   const handleSpeakerDelete = (speaker) => {
     if (!token) {
       setError("Logga in för att ta bort talare.");
@@ -4859,6 +4959,129 @@ const AdminPage = () => {
                 </div>
               </div>
             ) : null}
+            {adminOrgProfileModal != null ? (
+              <div
+                className="modal-overlay"
+                onClick={() => setAdminOrgProfileModal(null)}
+                role="presentation"
+              >
+                <div
+                  className="modal admin-org-profile-modal"
+                  onClick={(event) => event.stopPropagation()}
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="admin-org-profile-modal-title"
+                >
+                  <div className="modal-header">
+                    <h3 id="admin-org-profile-modal-title">
+                      Profil – {adminOrgProfileModal.organization || adminOrgProfileModal.username || "Organisation"}
+                    </h3>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      onClick={() => setAdminOrgProfileModal(null)}
+                      aria-label="Stäng"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <div className="modal-body">
+                    {adminOrgProfileModal.loading ? (
+                      <p className="muted">Laddar profil…</p>
+                    ) : adminOrgProfileModal.error ? (
+                      <p className="field-hint-error">{adminOrgProfileModal.error}</p>
+                    ) : adminOrgProfileModal.profile ? (
+                      <div className="admin-profile-info-grid">
+                        <div className="field-row">
+                          <AdminProfileInfoRow label="Profil-ID" value={adminOrgProfileModal.profile.profileId} />
+                          <AdminProfileInfoRow label="Användarnamn" value={adminOrgProfileModal.profile.username} />
+                        </div>
+                        <div className="field-row">
+                          <AdminProfileInfoRow label="Förnamn" value={adminOrgProfileModal.profile.firstName} />
+                          <AdminProfileInfoRow label="Efternamn" value={adminOrgProfileModal.profile.lastName} />
+                        </div>
+                        <div className="field-row">
+                          <AdminProfileInfoRow label="Organisation" value={adminOrgProfileModal.profile.organization} />
+                          <AdminProfileInfoRow label="Organisationsnummer" value={adminOrgProfileModal.profile.orgNumber} />
+                        </div>
+                        <AdminProfileInfoRow label="Adress" value={adminOrgProfileModal.profile.address} />
+                        <div className="field-row">
+                          <AdminProfileInfoRow label="Post.nr" value={adminOrgProfileModal.profile.postalCode} />
+                          <AdminProfileInfoRow label="Ort" value={adminOrgProfileModal.profile.city} />
+                        </div>
+                        <div className="field-row">
+                          <AdminProfileInfoRow label="E-post" value={adminOrgProfileModal.profile.email} />
+                          <AdminProfileInfoRow label="Mob.nr" value={adminOrgProfileModal.profile.phone} />
+                        </div>
+                        <AdminProfileInfoRow label="BG-nummer" value={adminOrgProfileModal.profile.bgNumber} />
+                        <div className="admin-profile-info-section">
+                          <h4 className="admin-profile-info-section-title">Abonnemang</h4>
+                          <div className="field-row">
+                            <AdminProfileInfoRow
+                              label="Abonnemangsform"
+                              value={formatAdminSubscriptionPlanLabel(adminOrgProfileModal.profile.subscriptionPlan)}
+                            />
+                            <AdminProfileInfoRow
+                              label="Antal event med pris kvar"
+                              value={adminOrgProfileModal.profile.basEventCredits}
+                            />
+                          </div>
+                          <div className="field-row">
+                            <AdminProfileInfoRow
+                              label="Premium start"
+                              value={
+                                adminOrgProfileModal.profile.premiumActivatedAt
+                                  ? new Date(adminOrgProfileModal.profile.premiumActivatedAt).toLocaleDateString("sv-SE", {
+                                      year: "numeric",
+                                      month: "short",
+                                      day: "numeric"
+                                    })
+                                  : "–"
+                              }
+                            />
+                            <AdminProfileInfoRow
+                              label="Premium slut"
+                              value={
+                                adminOrgProfileModal.profile.premiumEndsAt
+                                  ? new Date(adminOrgProfileModal.profile.premiumEndsAt).toLocaleDateString("sv-SE", {
+                                      year: "numeric",
+                                      month: "short",
+                                      day: "numeric"
+                                    })
+                                  : "–"
+                              }
+                            />
+                          </div>
+                          <AdminProfileInfoRow
+                            label="Avslut anmält"
+                            value={
+                              adminOrgProfileModal.profile.premiumAvslutRequestedAt
+                                ? new Date(adminOrgProfileModal.profile.premiumAvslutRequestedAt).toLocaleDateString("sv-SE", {
+                                    year: "numeric",
+                                    month: "short",
+                                    day: "numeric"
+                                  })
+                                : "–"
+                            }
+                          />
+                          <AdminProfileInfoRow
+                            label="Moms"
+                            value={adminOrgProfileModal.profile.vatExempt ? "Momsbefriad" : "Momspliktig"}
+                          />
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="muted">Ingen profilinformation hittades.</p>
+                    )}
+                  </div>
+                  <div className="modal-footer">
+                    <button type="button" className="button" onClick={() => setAdminOrgProfileModal(null)}>
+                      Stäng
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
             <div className="admin-tabbed-frame__bar">
               <nav className="admin-main-tabs" role="tablist" aria-label="Adminpanel">
                 <button
@@ -5550,6 +5773,7 @@ const AdminPage = () => {
                       <th>Avslut anmält</th>
                       <th>Antal event med pris kvar</th>
                       <th style={{ width: "6rem" }}></th>
+                      <th style={{ width: "2.5rem" }} aria-label="Profilinfo"></th>
                       <th style={{ width: "2.5rem" }} aria-label="Ta bort konto"></th>
                     </tr>
                   </thead>
@@ -5607,6 +5831,19 @@ const AdminPage = () => {
                             >
                               {isSaving ? "Sparar…" : "Spara"}
                             </button>
+                          </td>
+                          <td>
+                            {row.profileId ? (
+                              <button
+                                type="button"
+                                className="icon-button admin-org-info-button"
+                                onClick={() => handleOpenAdminOrgProfileModal(row)}
+                                aria-label={`Visa profilinformation för ${row.organization || row.username || "organisationen"}`}
+                                title="Visa profilinformation"
+                              >
+                                ℹ
+                              </button>
+                            ) : null}
                           </td>
                           <td>
                             {!isOwnProfile && row.profileId ? (
@@ -8210,39 +8447,64 @@ const AdminPage = () => {
                   </div>
                 </form>
                 {speakers.length > 0 ? (
-                  <div
-                    className={`speakers admin-speakers${
-                      adminSpeakersLayout === "list" ? " speakers--list" : ""
-                    }`}
-                  >
-                    {speakers.map((speaker) => (
-                      <div className="speaker-card" key={speaker.id}>
-                        <img
-                          className="speaker-photo"
-                          src={resolveAssetUrl(speaker.image_url)}
-                          alt={speaker.name}
-                        />
-                        <div className="speaker-body">
-                          <div className="speaker-name">{speaker.name}</div>
-                          <SpeakerBio bio={speaker.bio} />
+                  <>
+                    <p className="muted" style={{ marginTop: "1rem", marginBottom: "0.75rem" }}>
+                      Använd pilarna för att ändra i vilken ordning talarna visas på webbsidan.
+                    </p>
+                    <div
+                      className={`speakers admin-speakers${
+                        adminSpeakersLayout === "list" ? " speakers--list" : ""
+                      }`}
+                    >
+                      {speakers.map((speaker, index) => (
+                        <div className="speaker-card admin-speaker-card" key={speaker.id}>
+                          <span className="admin-speaker-order-arrows section-order-arrows">
+                            <button
+                              type="button"
+                              className="icon-button"
+                              aria-label={`Flytta ${speaker.name || "talare"} upp`}
+                              disabled={index === 0}
+                              onClick={() => handleSpeakerMove(index, "up")}
+                            >
+                              ↑
+                            </button>
+                            <button
+                              type="button"
+                              className="icon-button"
+                              aria-label={`Flytta ${speaker.name || "talare"} ner`}
+                              disabled={index === speakers.length - 1}
+                              onClick={() => handleSpeakerMove(index, "down")}
+                            >
+                              ↓
+                            </button>
+                          </span>
+                          <img
+                            className="speaker-photo"
+                            src={resolveAssetUrl(speaker.image_url)}
+                            alt={speaker.name}
+                          />
+                          <div className="speaker-body">
+                            <div className="speaker-name">{speaker.name}</div>
+                            <SpeakerBio bio={speaker.bio} />
+                          </div>
+                          <button
+                            type="button"
+                            className="icon-button edit"
+                            onClick={() => handleSpeakerEdit(speaker)}
+                          >
+                            Redigera
+                          </button>
+                          <button
+                            type="button"
+                            className="icon-button danger"
+                            onClick={() => handleSpeakerDelete(speaker)}
+                          >
+                            Ta bort
+                          </button>
                         </div>
-                        <button
-                          type="button"
-                          className="icon-button edit"
-                          onClick={() => handleSpeakerEdit(speaker)}
-                        >
-                          Redigera
-                        </button>
-                        <button
-                          type="button"
-                          className="icon-button danger"
-                          onClick={() => handleSpeakerDelete(speaker)}
-                        >
-                          Ta bort
-                        </button>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  </>
                 ) : (
                   <p className="muted">Inga talare ännu.</p>
                 )}

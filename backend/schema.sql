@@ -247,7 +247,16 @@ CREATE TABLE IF NOT EXISTS speakers (
 );
 
 ALTER TABLE speakers
-  ADD COLUMN IF NOT EXISTS event_id INTEGER;
+  ADD COLUMN IF NOT EXISTS event_id INTEGER,
+  ADD COLUMN IF NOT EXISTS position INTEGER;
+
+UPDATE speakers s
+SET position = sub.pos
+FROM (
+  SELECT id, ROW_NUMBER() OVER (PARTITION BY event_id ORDER BY created_at DESC, id DESC) AS pos
+  FROM speakers
+) AS sub
+WHERE s.id = sub.id AND s.position IS NULL;
 
 CREATE TABLE IF NOT EXISTS partners (
   id SERIAL PRIMARY KEY,

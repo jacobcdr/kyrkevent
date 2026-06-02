@@ -1164,7 +1164,7 @@ app.get("/speakers", async (req, res) => {
       return;
     }
     const result = await pool.query(
-      "SELECT id, name, bio, image_url, created_at FROM speakers WHERE event_id = $1 ORDER BY created_at DESC",
+      "SELECT id, name, bio, image_url, position, created_at FROM speakers WHERE event_id = $1 ORDER BY position ASC NULLS LAST, id ASC",
       [eventId]
     );
     res.json({ ok: true, speakers: result.rows });
@@ -4202,6 +4202,59 @@ app.get("/admin/organizations", requireAdmin, requireSuperAdmin, async (_req, re
   }
 });
 
+app.get("/admin/profiles/:profileId", requireAdmin, requireSuperAdmin, async (req, res) => {
+  const profileId = (req.params.profileId || "").toString().trim();
+  if (!profileId) {
+    return res.status(400).json({ ok: false, error: "Profil-ID saknas" });
+  }
+  try {
+    const result = await pool.query(
+      `SELECT p.user_id, p.profile_id, p.first_name, p.last_name, p.organization, p.org_number,
+              p.address, p.postal_code, p.city, p.email, p.phone, p.bg_number,
+              p.subscription_plan, COALESCE(p.bas_event_credits, 0) AS bas_event_credits,
+              p.premium_activated_at, p.premium_ends_at, p.premium_avslut_requested_at,
+              COALESCE(p.vat_exempt, false) AS vat_exempt,
+              u.username
+       FROM admin_user_profiles p
+       LEFT JOIN admin_users u ON u.id = p.user_id
+       WHERE p.profile_id = $1`,
+      [profileId]
+    );
+    if (result.rowCount === 0) {
+      return res.status(404).json({ ok: false, error: "Profil hittades inte" });
+    }
+    const row = result.rows[0];
+    res.json({
+      ok: true,
+      profile: {
+        userId: row.user_id,
+        profileId: row.profile_id || "",
+        username: row.username || "",
+        firstName: row.first_name || "",
+        lastName: row.last_name || "",
+        organization: row.organization || "",
+        orgNumber: row.org_number || "",
+        address: row.address || "",
+        postalCode: row.postal_code || "",
+        city: row.city || "",
+        email: row.email || "",
+        phone: row.phone || "",
+        bgNumber: row.bg_number || "",
+        subscriptionPlan: (row.subscription_plan || "gratis").toLowerCase(),
+        basEventCredits: Number(row.bas_event_credits) || 0,
+        premiumActivatedAt: row.premium_activated_at ? row.premium_activated_at.toISOString() : null,
+        premiumEndsAt: row.premium_ends_at ? row.premium_ends_at.toISOString() : null,
+        premiumAvslutRequestedAt: row.premium_avslut_requested_at
+          ? row.premium_avslut_requested_at.toISOString()
+          : null,
+        vatExempt: row.vat_exempt === true
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Kunde inte ladda profil" });
+  }
+});
+
 app.patch("/admin/profiles/:profileId/bas-credits", requireAdmin, requireSuperAdmin, async (req, res) => {
   const profileId = (req.params.profileId || "").toString().trim();
   if (!profileId) {
@@ -5753,7 +5806,13 @@ app.post("/admin/speakers", requireAdmin, upload.single("image"), async (req, re
     const imageUrl = `/uploads/${req.file.filename}`;
     const bioValue = String(bio ?? "").trim();
     const result = await pool.query(
-      "INSERT INTO speakers (event_id, name, bio, image_url) VALUES ($1, $2, $3, $4) RETURNING id, name, bio, image_url, created_at",
+      `
+        INSERT INTO speakers (event_id, name, bio, image_url, position)
+        SELECT $1, $2, $3, $4, COALESCE(MAX(position), 0) + 1
+        FROM speakers
+        WHERE event_id = $1
+        RETURNING id, name, bio, image_url, position, created_at
+      `,
       [parsedEventId, String(name).trim(), bioValue, imageUrl]
     );
     res.status(201).json({ ok: true, speaker: result.rows[0] });
@@ -5808,7 +5867,7 @@ app.put("/admin/speakers/:id", requireAdmin, upload.single("image"), async (req,
     const nextImage = req.file ? `/uploads/${req.file.filename}` : previousImage;
     const bioValue = String(bio ?? "").trim();
     const result = await pool.query(
-      "UPDATE speakers SET name = $1, bio = $2, image_url = $3 WHERE id = $4 AND event_id = $5 RETURNING id, name, bio, image_url, created_at",
+      "UPDATE speakers SET name = $1, bio = $2, image_url = $3 WHERE id = $4 AND event_id = $5 RETURNING id, name, bio, image_url, position, created_at",
       [String(name).trim(), bioValue, nextImage, id, parsedEventId]
     );
     if (req.file && previousImage && previousImage !== nextImage) {
@@ -5876,6 +5935,45 @@ app.delete("/admin/partners/:id", requireAdmin, async (req, res) => {
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to delete partner" });
+  }
+});
+
+app.post("/admin/speakers/reorder", requireAdmin, async (req, res) => {
+  const { ids, eventId } = req.body || {};
+  const parsedEventId = await ensureEventOwnership(eventId, req.userId, res);
+  if (!parsedEventId) {
+    return;
+  }
+  if (!Array.isArray(ids) || ids.length === 0) {
+    res.status(400).json({ ok: false, error: "Missing ids" });
+    return;
+  }
+  const parsedIds = ids
+    .map((id) => Number.parseInt(id, 10))
+    .filter((id) => Number.isFinite(id));
+  if (parsedIds.length !== ids.length) {
+    res.status(400).json({ ok: false, error: "Invalid ids" });
+    return;
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `
+        UPDATE speakers AS s
+        SET position = u.ord
+        FROM UNNEST($1::int[]) WITH ORDINALITY AS u(id, ord)
+        WHERE s.id = u.id AND s.event_id = $2
+      `,
+      [parsedIds, parsedEventId]
+    );
+    await client.query("COMMIT");
+    res.json({ ok: true });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    res.status(500).json({ ok: false, error: "Failed to reorder speakers" });
+  } finally {
+    client.release();
   }
 });
 
@@ -6841,7 +6939,17 @@ const ensureBookingsTable = async () => {
   `);
   await pool.query(`
     ALTER TABLE speakers
-      ADD COLUMN IF NOT EXISTS event_id INTEGER
+      ADD COLUMN IF NOT EXISTS event_id INTEGER,
+      ADD COLUMN IF NOT EXISTS position INTEGER
+  `);
+  await pool.query(`
+    UPDATE speakers s
+    SET position = sub.pos
+    FROM (
+      SELECT id, ROW_NUMBER() OVER (PARTITION BY event_id ORDER BY created_at DESC, id DESC) AS pos
+      FROM speakers
+    ) AS sub
+    WHERE s.id = sub.id AND s.position IS NULL
   `);
 
   await pool.query(`
