@@ -4403,6 +4403,43 @@ const AdminPage = () => {
     }
   };
 
+  const handlePartnerMove = (index, direction) => {
+    const nextIndex = direction === "up" ? index - 1 : index + 1;
+    if (nextIndex < 0 || nextIndex >= partners.length) {
+      return;
+    }
+    if (!token) {
+      setError("Logga in för att ändra ordning.");
+      return;
+    }
+    if (!selectedEventId) {
+      setError("Välj ett event först.");
+      return;
+    }
+    const next = [...partners];
+    const [moved] = next.splice(index, 1);
+    next.splice(nextIndex, 0, moved);
+    setPartners(next);
+    const saveOrder = async () => {
+      const response = await fetch(`${API_BASE}/admin/partners/reorder`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ ids: next.map((p) => p.id), eventId: Number(selectedEventId) })
+      });
+      if (!response.ok) {
+        throw new Error("Partner reorder failed");
+      }
+      localStorage.setItem(buildStorageKey("partnersUpdatedAt", selectedEventId), String(Date.now()));
+    };
+    saveOrder().catch(() => {
+      setError("Kunde inte spara partnerordning.");
+      loadPartners(selectedEventId).catch(() => {});
+    });
+  };
+
   const handlePartnerDelete = (partner) => {
     if (!token) {
       setError("Logga in för att ta bort partner.");
@@ -8920,41 +8957,66 @@ const AdminPage = () => {
                   </div>
                 </form>
                 {partners.length > 0 ? (
-                  <div className="partner-grid admin-partners">
-                    {partners.map((partner) => (
-                      <div className="partner-card" key={partner.id}>
-                        {partner.url ? (
-                          <a href={partner.url} target="_blank" rel="noreferrer">
+                  <>
+                    <p className="muted" style={{ marginTop: "1rem", marginBottom: "0.75rem" }}>
+                      Använd pilarna för att ändra i vilken ordning partnerloggorna visas på webbsidan.
+                    </p>
+                    <div className="partner-grid admin-partners">
+                      {partners.map((partner, index) => (
+                        <div className="partner-card admin-partner-card" key={partner.id}>
+                          <span className="admin-partner-order-arrows section-order-arrows">
+                            <button
+                              type="button"
+                              className="icon-button"
+                              aria-label={`Flytta partner ${index + 1} upp`}
+                              disabled={index === 0}
+                              onClick={() => handlePartnerMove(index, "up")}
+                            >
+                              ↑
+                            </button>
+                            <button
+                              type="button"
+                              className="icon-button"
+                              aria-label={`Flytta partner ${index + 1} ner`}
+                              disabled={index === partners.length - 1}
+                              onClick={() => handlePartnerMove(index, "down")}
+                            >
+                              ↓
+                            </button>
+                          </span>
+                          {partner.url ? (
+                            <a href={partner.url} target="_blank" rel="noreferrer">
+                              <img
+                                className="partner-logo"
+                                src={resolveAssetUrl(partner.image_url)}
+                                alt={partner.name || "Partnerlogo"}
+                              />
+                            </a>
+                          ) : (
                             <img
                               className="partner-logo"
                               src={resolveAssetUrl(partner.image_url)}
                               alt={partner.name || "Partnerlogo"}
                             />
-                          </a>
-                        ) : (
-                          <img
-                            className="partner-logo"
-                            src={resolveAssetUrl(partner.image_url)}
-                            alt={partner.name || "Partnerlogo"}
-                          />
-                        )}
-                        <button
-                          type="button"
-                          className="icon-button edit"
-                          onClick={() => handlePartnerEdit(partner)}
-                        >
-                          Redigera
-                        </button>
-                        <button
-                          type="button"
-                          className="icon-button danger"
-                          onClick={() => handlePartnerDelete(partner)}
-                        >
-                          Ta bort
-                        </button>
-                      </div>
-                    ))}
-                  </div>
+                          )}
+                          <button
+                            type="button"
+                            className="icon-button edit"
+                            onClick={() => handlePartnerEdit(partner)}
+                          >
+                            Redigera
+                          </button>
+                          <button
+                            type="button"
+                            className="icon-button danger"
+                            onClick={() => handlePartnerDelete(partner)}
+                          >
+                            Ta bort
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </>
                 ) : (
                   <p className="muted">Inga partners ännu.</p>
                 )}

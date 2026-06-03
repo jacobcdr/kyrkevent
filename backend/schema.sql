@@ -270,7 +270,16 @@ CREATE TABLE IF NOT EXISTS partners (
 
 ALTER TABLE partners
   ADD COLUMN IF NOT EXISTS event_id INTEGER,
-  ADD COLUMN IF NOT EXISTS url TEXT NOT NULL DEFAULT '';
+  ADD COLUMN IF NOT EXISTS url TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS position INTEGER;
+
+UPDATE partners p
+SET position = sub.pos
+FROM (
+  SELECT id, ROW_NUMBER() OVER (PARTITION BY event_id ORDER BY created_at DESC, id DESC) AS pos
+  FROM partners
+) AS sub
+WHERE p.id = sub.id AND p.position IS NULL;
 
 CREATE TABLE IF NOT EXISTS prices (
   id SERIAL PRIMARY KEY,

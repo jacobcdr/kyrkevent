@@ -1190,7 +1190,7 @@ app.get("/partners", async (req, res) => {
       return;
     }
     const result = await pool.query(
-      "SELECT id, name, image_url, url, created_at FROM partners WHERE event_id = $1 ORDER BY created_at DESC",
+      "SELECT id, name, image_url, url, position, created_at FROM partners WHERE event_id = $1 ORDER BY position ASC NULLS LAST, id ASC",
       [eventId]
     );
     res.json({ ok: true, partners: result.rows });
@@ -5850,7 +5850,13 @@ app.post("/admin/partners", requireAdmin, upload.single("image"), async (req, re
   try {
     const imageUrl = `/uploads/${req.file.filename}`;
     const result = await pool.query(
-      "INSERT INTO partners (event_id, name, image_url, url) VALUES ($1, $2, $3, $4) RETURNING id, name, image_url, url, created_at",
+      `
+        INSERT INTO partners (event_id, name, image_url, url, position)
+        SELECT $1, $2, $3, $4, COALESCE(MAX(position), 0) + 1
+        FROM partners
+        WHERE event_id = $1
+        RETURNING id, name, image_url, url, position, created_at
+      `,
       [parsedEventId, String(name || "").trim(), imageUrl, String(url || "").trim()]
     );
     res.status(201).json({ ok: true, partner: result.rows[0] });
@@ -5915,7 +5921,7 @@ app.put("/admin/partners/:id", requireAdmin, upload.single("image"), async (req,
     const previousImage = existing.rows[0].image_url;
     const nextImage = req.file ? `/uploads/${req.file.filename}` : previousImage;
     const result = await pool.query(
-      "UPDATE partners SET name = $1, image_url = $2, url = $3 WHERE id = $4 AND event_id = $5 RETURNING id, name, image_url, url, created_at",
+      "UPDATE partners SET name = $1, image_url = $2, url = $3 WHERE id = $4 AND event_id = $5 RETURNING id, name, image_url, url, position, created_at",
       [String(name || "").trim(), nextImage, String(url || "").trim(), id, parsedEventId]
     );
     if (req.file && previousImage && previousImage !== nextImage) {
@@ -5925,6 +5931,45 @@ app.put("/admin/partners/:id", requireAdmin, upload.single("image"), async (req,
     res.json({ ok: true, partner: result.rows[0] });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to update partner" });
+  }
+});
+
+app.post("/admin/partners/reorder", requireAdmin, async (req, res) => {
+  const { ids, eventId } = req.body || {};
+  const parsedEventId = await ensureEventOwnership(eventId, req.userId, res);
+  if (!parsedEventId) {
+    return;
+  }
+  if (!Array.isArray(ids) || ids.length === 0) {
+    res.status(400).json({ ok: false, error: "Missing ids" });
+    return;
+  }
+  const parsedIds = ids
+    .map((id) => Number.parseInt(id, 10))
+    .filter((id) => Number.isFinite(id));
+  if (parsedIds.length !== ids.length) {
+    res.status(400).json({ ok: false, error: "Invalid ids" });
+    return;
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `
+        UPDATE partners AS p
+        SET position = u.ord
+        FROM UNNEST($1::int[]) WITH ORDINALITY AS u(id, ord)
+        WHERE p.id = u.id AND p.event_id = $2
+      `,
+      [parsedIds, parsedEventId]
+    );
+    await client.query("COMMIT");
+    res.json({ ok: true });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    res.status(500).json({ ok: false, error: "Failed to reorder partners" });
+  } finally {
+    client.release();
   }
 });
 
@@ -6983,7 +7028,17 @@ const ensureBookingsTable = async () => {
   await pool.query(`
     ALTER TABLE partners
       ADD COLUMN IF NOT EXISTS event_id INTEGER,
-      ADD COLUMN IF NOT EXISTS url TEXT NOT NULL DEFAULT ''
+      ADD COLUMN IF NOT EXISTS url TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS position INTEGER
+  `);
+  await pool.query(`
+    UPDATE partners p
+    SET position = sub.pos
+    FROM (
+      SELECT id, ROW_NUMBER() OVER (PARTITION BY event_id ORDER BY created_at DESC, id DESC) AS pos
+      FROM partners
+    ) AS sub
+    WHERE p.id = sub.id AND p.position IS NULL
   `);
 
   await pool.query(`

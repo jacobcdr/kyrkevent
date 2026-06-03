@@ -703,6 +703,23 @@ h2 {
   border: none;
 }
 
+.admin-partners {
+  margin-top: 0;
+}
+
+.admin-partners .admin-partner-card {
+  position: relative;
+  padding-top: 2.25rem;
+}
+
+.admin-partners .admin-partner-order-arrows {
+  position: absolute;
+  top: 0.25rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+}
+
 .admin-event-card {
   border: 1px solid var(--border);
   border-radius: 16px;
