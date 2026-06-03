@@ -703,6 +703,16 @@ h2 {
   border: none;
 }
 
+.partner-grid.admin-partners {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  width: 100%;
+  max-width: 100%;
+  align-items: flex-start;
+  justify-content: flex-start;
+}
+
 .admin-partners {
   margin-top: 0;
 }
@@ -710,6 +720,10 @@ h2 {
 .admin-partners .admin-partner-card {
   position: relative;
   padding-top: 2.25rem;
+  flex: 0 0 160px;
+  width: 160px;
+  max-width: calc(50% - 0.5rem);
+  box-sizing: border-box;
 }
 
 .admin-partners .admin-partner-order-arrows {
