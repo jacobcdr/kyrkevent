@@ -139,7 +139,10 @@ CREATE TABLE IF NOT EXISTS event_sections (
   section_label_partners TEXT DEFAULT '',
   section_label_faq TEXT DEFAULT '',
   faq_text TEXT DEFAULT '',
-  speakers_layout TEXT NOT NULL DEFAULT 'grid'
+  speakers_layout TEXT NOT NULL DEFAULT 'grid',
+  show_gallery BOOLEAN NOT NULL DEFAULT FALSE,
+  section_label_gallery TEXT DEFAULT '',
+  gallery_mode TEXT NOT NULL DEFAULT 'grid'
 );
 
 ALTER TABLE event_sections
@@ -159,7 +162,18 @@ ALTER TABLE event_sections
   ADD COLUMN IF NOT EXISTS section_label_faq TEXT DEFAULT '',
   ADD COLUMN IF NOT EXISTS faq_text TEXT DEFAULT '',
   ADD COLUMN IF NOT EXISTS speakers_layout TEXT NOT NULL DEFAULT 'grid',
-  ADD COLUMN IF NOT EXISTS translate_default_language TEXT NOT NULL DEFAULT 'sv';
+  ADD COLUMN IF NOT EXISTS translate_default_language TEXT NOT NULL DEFAULT 'sv',
+  ADD COLUMN IF NOT EXISTS show_gallery BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS section_label_gallery TEXT DEFAULT '',
+  ADD COLUMN IF NOT EXISTS gallery_mode TEXT NOT NULL DEFAULT 'grid';
+
+CREATE TABLE IF NOT EXISTS event_gallery_images (
+  id SERIAL PRIMARY KEY,
+  event_id INTEGER NOT NULL,
+  image_url TEXT NOT NULL,
+  position INTEGER,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
 CREATE TABLE IF NOT EXISTS event_custom_fields (
   id SERIAL PRIMARY KEY,

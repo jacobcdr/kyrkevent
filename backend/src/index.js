@@ -187,6 +187,14 @@ if (!fs.existsSync(UPLOAD_DIR)) {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 }
 
+const imageFileFilter = (_req, file, cb) => {
+  if (file.mimetype && file.mimetype.startsWith("image/")) {
+    cb(null, true);
+    return;
+  }
+  cb(new Error("Only image uploads are allowed"));
+};
+
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
   filename: (_req, file, cb) => {
@@ -196,16 +204,25 @@ const storage = multer.diskStorage({
   }
 });
 
+const galleryStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname || "").toLowerCase();
+    const safeExt = ext && ext.length <= 10 ? ext : ".jpg";
+    cb(null, `gallery-${Date.now()}-${Math.round(Math.random() * 1e9)}${safeExt}`);
+  }
+});
+
 const upload = multer({
   storage,
   limits: { fileSize: 5 * 1024 * 1024 },
-  fileFilter: (_req, file, cb) => {
-    if (file.mimetype && file.mimetype.startsWith("image/")) {
-      cb(null, true);
-      return;
-    }
-    cb(new Error("Only image uploads are allowed"));
-  }
+  fileFilter: imageFileFilter
+});
+
+const galleryUpload = multer({
+  storage: galleryStorage,
+  limits: { fileSize: 8 * 1024 * 1024 },
+  fileFilter: imageFileFilter
 });
 
 const PROFILE_ID_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -311,12 +328,16 @@ const defaultSectionVisibility = {
   sectionLabelPartners: "",
   showFaq: false,
   sectionLabelFaq: "",
-  faqText: ""
+  faqText: "",
+  showGallery: false,
+  sectionLabelGallery: "",
+  galleryMode: "grid"
 };
 
-const DEFAULT_SECTION_ORDER = ["text", "program", "faq", "form", "speakers", "partners", "place"];
+const DEFAULT_SECTION_ORDER = ["text", "program", "faq", "form", "speakers", "partners", "gallery", "place"];
 const VALID_SECTION_ORDER_KEYS = new Set(DEFAULT_SECTION_ORDER);
 const VALID_SPEAKERS_LAYOUTS = new Set(["grid", "list"]);
+const VALID_GALLERY_MODES = new Set(["grid", "slideshow", "marquee"]);
 
 function parseSpeakersLayout(value) {
   const normalized = String(value || "grid").toLowerCase();
@@ -328,6 +349,49 @@ const VALID_TRANSLATE_DEFAULT_LANGUAGES = new Set(["sv", "en"]);
 function parseTranslateDefaultLanguage(value) {
   const normalized = String(value || "sv").toLowerCase();
   return VALID_TRANSLATE_DEFAULT_LANGUAGES.has(normalized) ? normalized : "sv";
+}
+
+function parseGalleryMode(value) {
+  const normalized = String(value || "grid").toLowerCase();
+  return VALID_GALLERY_MODES.has(normalized) ? normalized : "grid";
+}
+
+const EVENT_SECTIONS_SELECT = `
+  show_program, show_place, show_text, show_speakers, show_partners,
+  show_name, show_email, show_phone, show_city, show_organization, show_translate, show_discount_code,
+  show_faq, show_gallery, section_order, form_field_order,
+  section_label_program, section_label_speakers, section_label_partners, section_label_faq, section_label_gallery,
+  faq_text, speakers_layout, translate_default_language, gallery_mode
+`;
+
+function formatSectionsResponse(row, customIds = []) {
+  return {
+    showProgram: row.show_program,
+    showPlace: row.show_place,
+    showText: row.show_text,
+    showSpeakers: row.show_speakers,
+    showPartners: row.show_partners,
+    showName: row.show_name,
+    showEmail: row.show_email,
+    showPhone: row.show_phone,
+    showCity: row.show_city,
+    showOrganization: row.show_organization,
+    showTranslate: row.show_translate,
+    showDiscountCode: row.show_discount_code,
+    showFaq: row.show_faq,
+    showGallery: row.show_gallery === true,
+    sectionOrder: parseSectionOrder(row.section_order),
+    formFieldOrder: parseFormFieldOrder(row.form_field_order, customIds),
+    sectionLabelProgram: row.section_label_program ?? "",
+    sectionLabelSpeakers: row.section_label_speakers ?? "",
+    sectionLabelPartners: row.section_label_partners ?? "",
+    sectionLabelFaq: row.section_label_faq ?? "",
+    sectionLabelGallery: row.section_label_gallery ?? "",
+    faqText: row.faq_text ?? "",
+    speakersLayout: parseSpeakersLayout(row.speakers_layout),
+    translateDefaultLanguage: parseTranslateDefaultLanguage(row.translate_default_language),
+    galleryMode: parseGalleryMode(row.gallery_mode)
+  };
 }
 
 function parseSectionOrder(raw) {
@@ -1085,15 +1149,7 @@ app.get("/sections", async (req, res) => {
       .map((r) => Number(r.id))
       .filter(Number.isFinite);
     const result = await pool.query(
-      `
-        SELECT show_program, show_place, show_text, show_speakers, show_partners,
-               show_name, show_email, show_phone, show_city, show_organization, show_translate, show_discount_code,
-               show_faq, section_order, form_field_order,
-               section_label_program, section_label_speakers, section_label_partners, section_label_faq,
-               faq_text, speakers_layout, translate_default_language
-        FROM event_sections
-        WHERE event_id = $1
-      `,
+      `SELECT ${EVENT_SECTIONS_SELECT} FROM event_sections WHERE event_id = $1`,
       [eventId]
     );
     if (result.rowCount === 0) {
@@ -1109,36 +1165,29 @@ app.get("/sections", async (req, res) => {
       });
       return;
     }
-    const row = result.rows[0];
     res.json({
       ok: true,
-      sections: {
-        showProgram: row.show_program,
-        showPlace: row.show_place,
-        showText: row.show_text,
-        showSpeakers: row.show_speakers,
-        showPartners: row.show_partners,
-        showName: row.show_name,
-        showEmail: row.show_email,
-        showPhone: row.show_phone,
-        showCity: row.show_city,
-        showOrganization: row.show_organization,
-        showTranslate: row.show_translate,
-        showDiscountCode: row.show_discount_code,
-        showFaq: row.show_faq,
-        sectionOrder: parseSectionOrder(row.section_order),
-        formFieldOrder: parseFormFieldOrder(row.form_field_order, customIds),
-        sectionLabelProgram: row.section_label_program ?? "",
-        sectionLabelSpeakers: row.section_label_speakers ?? "",
-        sectionLabelPartners: row.section_label_partners ?? "",
-        sectionLabelFaq: row.section_label_faq ?? "",
-        faqText: row.faq_text ?? "",
-        speakersLayout: parseSpeakersLayout(row.speakers_layout),
-        translateDefaultLanguage: parseTranslateDefaultLanguage(row.translate_default_language)
-      }
+      sections: formatSectionsResponse(result.rows[0], customIds)
     });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to load sections" });
+  }
+});
+
+app.get("/gallery", async (req, res) => {
+  try {
+    const eventId = resolveEventId(req.query.eventId);
+    if (!eventId) {
+      res.status(400).json({ ok: false, error: "Missing event" });
+      return;
+    }
+    const result = await pool.query(
+      "SELECT id, image_url, position, created_at FROM event_gallery_images WHERE event_id = $1 ORDER BY position ASC NULLS LAST, id ASC",
+      [eventId]
+    );
+    res.json({ ok: true, images: result.rows });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Failed to load gallery" });
   }
 });
 
@@ -4609,15 +4658,7 @@ app.get("/admin/sections", requireAdmin, async (req, res) => {
       .map((r) => Number(r.id))
       .filter(Number.isFinite);
     const result = await pool.query(
-      `
-        SELECT show_program, show_place, show_text, show_speakers, show_partners,
-               show_name, show_email, show_phone, show_city, show_organization, show_translate, show_discount_code,
-               show_faq, section_order, form_field_order,
-               section_label_program, section_label_speakers, section_label_partners, section_label_faq,
-               faq_text, speakers_layout, translate_default_language
-        FROM event_sections
-        WHERE event_id = $1
-      `,
+      `SELECT ${EVENT_SECTIONS_SELECT} FROM event_sections WHERE event_id = $1`,
       [eventId]
     );
     if (result.rowCount === 0) {
@@ -4633,33 +4674,9 @@ app.get("/admin/sections", requireAdmin, async (req, res) => {
       });
       return;
     }
-    const row = result.rows[0];
     res.json({
       ok: true,
-      sections: {
-        showProgram: row.show_program,
-        showPlace: row.show_place,
-        showText: row.show_text,
-        showSpeakers: row.show_speakers,
-        showPartners: row.show_partners,
-        showName: row.show_name,
-        showEmail: row.show_email,
-        showPhone: row.show_phone,
-        showCity: row.show_city,
-        showOrganization: row.show_organization,
-        showTranslate: row.show_translate,
-        showDiscountCode: row.show_discount_code,
-        showFaq: row.show_faq,
-        sectionOrder: parseSectionOrder(row.section_order),
-        formFieldOrder: parseFormFieldOrder(row.form_field_order, customIds),
-        sectionLabelProgram: row.section_label_program ?? "",
-        sectionLabelSpeakers: row.section_label_speakers ?? "",
-        sectionLabelPartners: row.section_label_partners ?? "",
-        sectionLabelFaq: row.section_label_faq ?? "",
-        faqText: row.faq_text ?? "",
-        speakersLayout: parseSpeakersLayout(row.speakers_layout),
-        translateDefaultLanguage: parseTranslateDefaultLanguage(row.translate_default_language)
-      }
+      sections: formatSectionsResponse(result.rows[0], customIds)
     });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to load sections" });
@@ -4682,15 +4699,18 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
     showTranslate,
     showDiscountCode,
     showFaq,
+    showGallery,
     sectionOrder,
     formFieldOrder,
     sectionLabelProgram,
     sectionLabelSpeakers,
     sectionLabelPartners,
     sectionLabelFaq,
+    sectionLabelGallery,
     faqText,
     speakersLayout,
-    translateDefaultLanguage
+    translateDefaultLanguage,
+    galleryMode
   } = req.body || {};
   const parsedEventId = await ensureEventOwnership(eventId, req.userId, res);
   if (!parsedEventId) {
@@ -4709,18 +4729,20 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
   const labelSpeakers = typeof sectionLabelSpeakers === "string" ? sectionLabelSpeakers.trim() : "";
   const labelPartners = typeof sectionLabelPartners === "string" ? sectionLabelPartners.trim() : "";
   const labelFaq = typeof sectionLabelFaq === "string" ? sectionLabelFaq.trim() : "";
+  const labelGallery = typeof sectionLabelGallery === "string" ? sectionLabelGallery.trim() : "";
   const faqTextNormalized = typeof faqText === "string" ? faqText : "";
   const speakersLayoutNormalized = parseSpeakersLayout(speakersLayout);
   const translateDefaultLanguageNormalized = parseTranslateDefaultLanguage(translateDefaultLanguage);
+  const galleryModeNormalized = parseGalleryMode(galleryMode);
   try {
     const result = await pool.query(
       `
         INSERT INTO event_sections
           (event_id, show_program, show_place, show_text, show_speakers, show_partners,
-           show_name, show_email, show_phone, show_city, show_organization, show_translate, show_discount_code, show_faq,
-           section_order, form_field_order, section_label_program, section_label_speakers, section_label_partners, section_label_faq, faq_text, speakers_layout, translate_default_language)
+           show_name, show_email, show_phone, show_city, show_organization, show_translate, show_discount_code, show_faq, show_gallery,
+           section_order, form_field_order, section_label_program, section_label_speakers, section_label_partners, section_label_faq, section_label_gallery, faq_text, speakers_layout, translate_default_language, gallery_mode)
         VALUES
-          ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
+          ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
         ON CONFLICT (event_id) DO UPDATE SET
           show_program = EXCLUDED.show_program,
           show_place = EXCLUDED.show_place,
@@ -4735,18 +4757,19 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
           show_translate = EXCLUDED.show_translate,
           show_discount_code = EXCLUDED.show_discount_code,
           show_faq = EXCLUDED.show_faq,
+          show_gallery = EXCLUDED.show_gallery,
           section_order = EXCLUDED.section_order,
           form_field_order = EXCLUDED.form_field_order,
           section_label_program = EXCLUDED.section_label_program,
           section_label_speakers = EXCLUDED.section_label_speakers,
           section_label_partners = EXCLUDED.section_label_partners,
           section_label_faq = EXCLUDED.section_label_faq,
+          section_label_gallery = EXCLUDED.section_label_gallery,
           faq_text = EXCLUDED.faq_text,
           speakers_layout = EXCLUDED.speakers_layout,
-          translate_default_language = EXCLUDED.translate_default_language
-        RETURNING show_program, show_place, show_text, show_speakers, show_partners,
-                  show_name, show_email, show_phone, show_city, show_organization, show_translate, show_discount_code, show_faq,
-                  section_order, form_field_order, section_label_program, section_label_speakers, section_label_partners, section_label_faq, faq_text, speakers_layout, translate_default_language
+          translate_default_language = EXCLUDED.translate_default_language,
+          gallery_mode = EXCLUDED.gallery_mode
+        RETURNING ${EVENT_SECTIONS_SELECT}
       `,
       [
         parsedEventId,
@@ -4763,44 +4786,23 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
         showTranslate !== false,
         showDiscountCode !== false,
         showFaq !== false,
+        showGallery === true,
         orderJson,
         formOrderJson,
         labelProgram,
         labelSpeakers,
         labelPartners,
         labelFaq,
+        labelGallery,
         faqTextNormalized,
         speakersLayoutNormalized,
-        translateDefaultLanguageNormalized
+        translateDefaultLanguageNormalized,
+        galleryModeNormalized
       ]
     );
-    const row = result.rows[0];
     res.json({
       ok: true,
-      sections: {
-        showProgram: row.show_program,
-        showPlace: row.show_place,
-        showText: row.show_text,
-        showSpeakers: row.show_speakers,
-        showPartners: row.show_partners,
-        showName: row.show_name,
-        showEmail: row.show_email,
-        showPhone: row.show_phone,
-        showCity: row.show_city,
-        showOrganization: row.show_organization,
-        showTranslate: row.show_translate,
-        showDiscountCode: row.show_discount_code,
-        showFaq: row.show_faq,
-        sectionOrder: parseSectionOrder(row.section_order),
-        formFieldOrder: parseFormFieldOrder(row.form_field_order, customIds),
-        sectionLabelProgram: row.section_label_program ?? "",
-        sectionLabelSpeakers: row.section_label_speakers ?? "",
-        sectionLabelPartners: row.section_label_partners ?? "",
-        sectionLabelFaq: row.section_label_faq ?? "",
-        faqText: row.faq_text ?? "",
-        speakersLayout: parseSpeakersLayout(row.speakers_layout),
-        translateDefaultLanguage: parseTranslateDefaultLanguage(row.translate_default_language)
-      }
+      sections: formatSectionsResponse(result.rows[0], customIds)
     });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to update sections" });
@@ -5127,6 +5129,17 @@ app.delete("/admin/events/:id", requireAdmin, async (req, res) => {
     await client.query("DELETE FROM prices WHERE event_id = $1", [eventId]);
     await client.query("DELETE FROM speakers WHERE event_id = $1", [eventId]);
     await client.query("DELETE FROM partners WHERE event_id = $1", [eventId]);
+    const galleryFiles = await client.query(
+      "SELECT image_url FROM event_gallery_images WHERE event_id = $1",
+      [eventId]
+    );
+    for (const row of galleryFiles.rows) {
+      if (row.image_url) {
+        const filePath = path.join(UPLOAD_DIR, path.basename(row.image_url));
+        fs.unlink(filePath, () => {});
+      }
+    }
+    await client.query("DELETE FROM event_gallery_images WHERE event_id = $1", [eventId]);
     await client.query("DELETE FROM discount_codes WHERE event_id = $1", [eventId]);
     await client.query("DELETE FROM place_settings WHERE event_id = $1", [eventId]);
     await client.query("DELETE FROM hero_section WHERE event_id = $1", [eventId]);
@@ -5973,6 +5986,101 @@ app.post("/admin/partners/reorder", requireAdmin, async (req, res) => {
   }
 });
 
+app.post("/admin/gallery", requireAdmin, galleryUpload.single("image"), async (req, res) => {
+  const { eventId } = req.body || {};
+  const parsedEventId = await ensureEventOwnership(eventId, req.userId, res);
+  if (!parsedEventId) {
+    return;
+  }
+  if (!req.file) {
+    res.status(400).json({ ok: false, error: "Missing image" });
+    return;
+  }
+  try {
+    const imageUrl = `/uploads/${req.file.filename}`;
+    const result = await pool.query(
+      `
+        INSERT INTO event_gallery_images (event_id, image_url, position)
+        VALUES (
+          $1,
+          $2,
+          (SELECT COALESCE(MAX(position), 0) + 1 FROM event_gallery_images WHERE event_id = $1)
+        )
+        RETURNING id, image_url, position, created_at
+      `,
+      [parsedEventId, imageUrl]
+    );
+    res.status(201).json({ ok: true, image: result.rows[0] });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Failed to save gallery image" });
+  }
+});
+
+app.post("/admin/gallery/reorder", requireAdmin, async (req, res) => {
+  const { ids, eventId } = req.body || {};
+  const parsedEventId = await ensureEventOwnership(eventId, req.userId, res);
+  if (!parsedEventId) {
+    return;
+  }
+  if (!Array.isArray(ids) || ids.length === 0) {
+    res.status(400).json({ ok: false, error: "Missing ids" });
+    return;
+  }
+  const parsedIds = ids
+    .map((id) => Number.parseInt(id, 10))
+    .filter((id) => Number.isFinite(id));
+  if (parsedIds.length !== ids.length) {
+    res.status(400).json({ ok: false, error: "Invalid ids" });
+    return;
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `
+        UPDATE event_gallery_images AS g
+        SET position = u.ord
+        FROM UNNEST($1::int[]) WITH ORDINALITY AS u(id, ord)
+        WHERE g.id = u.id AND g.event_id = $2
+      `,
+      [parsedIds, parsedEventId]
+    );
+    await client.query("COMMIT");
+    res.json({ ok: true });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    res.status(500).json({ ok: false, error: "Failed to reorder gallery" });
+  } finally {
+    client.release();
+  }
+});
+
+app.delete("/admin/gallery/:id", requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  const eventId = await ensureEventOwnership(req.query.eventId, req.userId, res);
+  if (!eventId) {
+    return;
+  }
+  try {
+    const result = await pool.query(
+      "DELETE FROM event_gallery_images WHERE id = $1 AND event_id = $2 RETURNING image_url",
+      [id, eventId]
+    );
+    if (result.rowCount === 0) {
+      res.status(404).json({ ok: false, error: "Gallery image not found" });
+      return;
+    }
+    const imageUrl = result.rows[0].image_url;
+    if (imageUrl) {
+      const filePath = path.join(UPLOAD_DIR, path.basename(imageUrl));
+      fs.unlink(filePath, () => {});
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Failed to delete gallery image" });
+  }
+});
+
 app.delete("/admin/partners/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
   const eventId = await ensureEventOwnership(req.query.eventId, req.userId, res);
@@ -6610,6 +6718,7 @@ const EVENT_UPDATED_AT_CHILD_TABLES = [
   "hero_section",
   "speakers",
   "partners",
+  "event_gallery_images",
   "event_custom_fields",
   "discount_codes"
 ];
@@ -6624,6 +6733,7 @@ const ensureEventUpdatedAt = async (db) => {
       COALESCE((SELECT MAX(pi.created_at) FROM program_items pi WHERE pi.event_id = e.id), e.created_at),
       COALESCE((SELECT MAX(s.created_at) FROM speakers s WHERE s.event_id = e.id), e.created_at),
       COALESCE((SELECT MAX(p.created_at) FROM partners p WHERE p.event_id = e.id), e.created_at),
+      COALESCE((SELECT MAX(g.created_at) FROM event_gallery_images g WHERE g.event_id = e.id), e.created_at),
       COALESCE((SELECT MAX(cf.created_at) FROM event_custom_fields cf WHERE cf.event_id = e.id), e.created_at),
       COALESCE((SELECT MAX(dc.created_at) FROM discount_codes dc WHERE dc.event_id = e.id), e.created_at)
     )
@@ -6831,7 +6941,10 @@ const ensureBookingsTable = async () => {
       section_label_faq TEXT DEFAULT '',
       faq_text TEXT DEFAULT '',
       speakers_layout TEXT NOT NULL DEFAULT 'grid',
-      translate_default_language TEXT NOT NULL DEFAULT 'sv'
+      translate_default_language TEXT NOT NULL DEFAULT 'sv',
+      show_gallery BOOLEAN NOT NULL DEFAULT FALSE,
+      section_label_gallery TEXT DEFAULT '',
+      gallery_mode TEXT NOT NULL DEFAULT 'grid'
     )
   `);
   await pool.query(`
@@ -6852,7 +6965,19 @@ const ensureBookingsTable = async () => {
       ADD COLUMN IF NOT EXISTS section_label_faq TEXT DEFAULT '',
       ADD COLUMN IF NOT EXISTS faq_text TEXT DEFAULT '',
       ADD COLUMN IF NOT EXISTS speakers_layout TEXT NOT NULL DEFAULT 'grid',
-      ADD COLUMN IF NOT EXISTS translate_default_language TEXT NOT NULL DEFAULT 'sv'
+      ADD COLUMN IF NOT EXISTS translate_default_language TEXT NOT NULL DEFAULT 'sv',
+      ADD COLUMN IF NOT EXISTS show_gallery BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS section_label_gallery TEXT DEFAULT '',
+      ADD COLUMN IF NOT EXISTS gallery_mode TEXT NOT NULL DEFAULT 'grid'
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS event_gallery_images (
+      id SERIAL PRIMARY KEY,
+      event_id INTEGER NOT NULL,
+      image_url TEXT NOT NULL,
+      position INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS event_custom_fields (
@@ -7039,6 +7164,16 @@ const ensureBookingsTable = async () => {
       FROM partners
     ) AS sub
     WHERE p.id = sub.id AND p.position IS NULL
+  `);
+
+  await pool.query(`
+    UPDATE event_gallery_images g
+    SET position = sub.pos
+    FROM (
+      SELECT id, ROW_NUMBER() OVER (PARTITION BY event_id ORDER BY created_at ASC, id ASC) AS pos
+      FROM event_gallery_images
+    ) AS sub
+    WHERE g.id = sub.id AND g.position IS NULL
   `);
 
   await pool.query(`

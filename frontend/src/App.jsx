@@ -13,6 +13,7 @@ import {
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "./App.css";
+import { EventGallery } from "./EventGallery";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 const API_BASE_NORMALIZED = API_BASE.replace(/\/+$/, "");
@@ -1619,6 +1620,7 @@ const AdminPage = () => {
   const [speakerEditingId, setSpeakerEditingId] = useState(null);
   const [partnerForm, setPartnerForm] = useState({ url: "", image: null });
   const [partners, setPartners] = useState([]);
+  const [galleryImages, setGalleryImages] = useState([]);
   const [partnerEditingId, setPartnerEditingId] = useState(null);
   const [heroForm, setHeroForm] = useState({ title: "", bodyHtml: "" });
   const [heroImageUrl, setHeroImageUrl] = useState("");
@@ -1626,6 +1628,7 @@ const AdminPage = () => {
   const faqEditorRef = useRef(null);
   const speakerImageInputRef = useRef(null);
   const partnerImageInputRef = useRef(null);
+  const galleryImageInputRef = useRef(null);
   const [pricesAdmin, setPricesAdmin] = useState([]);
   const [priceForm, setPriceForm] = useState({ name: "", amount: "", description: "" });
   const [priceEditingId, setPriceEditingId] = useState(null);
@@ -1703,18 +1706,21 @@ const AdminPage = () => {
     showOrganization: true,
     showTranslate: true,
     showDiscountCode: true,
-    showFaq: false
+    showFaq: false,
+    showGallery: false
   });
   const [adminSectionLabels, setAdminSectionLabels] = useState({
     program: "",
     speakers: "",
     partners: "",
-    faq: ""
+    faq: "",
+    gallery: ""
   });
   const [adminFaqText, setAdminFaqText] = useState("");
   const [adminSpeakersLayout, setAdminSpeakersLayout] = useState("grid");
+  const [adminGalleryMode, setAdminGalleryMode] = useState("grid");
   const [adminTranslateDefaultLanguage, setAdminTranslateDefaultLanguage] = useState("sv");
-  const DEFAULT_SECTION_ORDER = ["text", "program", "faq", "form", "speakers", "partners", "place"];
+  const DEFAULT_SECTION_ORDER = ["text", "program", "faq", "form", "speakers", "partners", "gallery", "place"];
   const [adminSectionOrder, setAdminSectionOrder] = useState([...DEFAULT_SECTION_ORDER]);
   const [adminFormFieldOrder, setAdminFormFieldOrder] = useState([]);
   const [pendingTheme, setPendingTheme] = useState("default");
@@ -2168,6 +2174,15 @@ const AdminPage = () => {
     setPartners(data.partners || []);
   };
 
+  const loadGallery = async (eventId) => {
+    const response = await fetch(`${API_BASE}/gallery?eventId=${eventId}`);
+    if (!response.ok) {
+      throw new Error("Gallery fetch failed");
+    }
+    const data = await response.json();
+    setGalleryImages(data.images || []);
+  };
+
   const loadAdminPrices = async (authToken, eventId) => {
     const response = await fetch(`${API_BASE}/admin/prices?eventId=${eventId}`, {
       headers: { Authorization: `Bearer ${authToken}` }
@@ -2242,7 +2257,8 @@ const AdminPage = () => {
       showOrganization: data.sections?.showOrganization !== false,
       showTranslate: data.sections?.showTranslate !== false,
       showDiscountCode: data.sections?.showDiscountCode !== false,
-      showFaq: data.sections?.showFaq || false
+      showFaq: data.sections?.showFaq || false,
+      showGallery: data.sections?.showGallery === true
     });
     const order = data.sections?.sectionOrder;
     setAdminSectionOrder(
@@ -2254,10 +2270,13 @@ const AdminPage = () => {
       program: data.sections?.sectionLabelProgram ?? "",
       speakers: data.sections?.sectionLabelSpeakers ?? "",
       partners: data.sections?.sectionLabelPartners ?? "",
-      faq: data.sections?.sectionLabelFaq ?? ""
+      faq: data.sections?.sectionLabelFaq ?? "",
+      gallery: data.sections?.sectionLabelGallery ?? ""
     });
     setAdminFaqText(data.sections?.faqText || "");
     setAdminSpeakersLayout(data.sections?.speakersLayout === "list" ? "list" : "grid");
+    const mode = data.sections?.galleryMode;
+    setAdminGalleryMode(mode === "slideshow" || mode === "marquee" ? mode : "grid");
     setAdminTranslateDefaultLanguage(normalizeTranslateDefaultLanguage(data.sections?.translateDefaultLanguage));
     setAdminFormFieldOrder(Array.isArray(data.sections?.formFieldOrder) ? data.sections.formFieldOrder : []);
   };
@@ -2706,6 +2725,7 @@ const AdminPage = () => {
     loadPlace(selectedEventId).catch(() => setPlace({ address: "", description: "" }));
     loadSpeakers(selectedEventId).catch(() => setSpeakers([]));
     loadPartners(selectedEventId).catch(() => setPartners([]));
+    loadGallery(selectedEventId).catch(() => setGalleryImages([]));
     loadHero(selectedEventId).catch(() => {});
     loadAdminCustomFields(token, selectedEventId).catch(() => setCustomFieldsAdmin([]));
     loadAdminSectionVisibility(token, selectedEventId).catch(() =>
@@ -3875,8 +3895,10 @@ const AdminPage = () => {
           sectionLabelSpeakers: adminSectionLabels.speakers,
           sectionLabelPartners: adminSectionLabels.partners,
           sectionLabelFaq: adminSectionLabels.faq,
+          sectionLabelGallery: adminSectionLabels.gallery,
           faqText: adminFaqText,
           speakersLayout: adminSpeakersLayout,
+          galleryMode: adminGalleryMode,
           translateDefaultLanguage: adminTranslateDefaultLanguage
         })
       });
@@ -3909,8 +3931,10 @@ const AdminPage = () => {
           sectionLabelSpeakers: adminSectionLabels.speakers,
           sectionLabelPartners: adminSectionLabels.partners,
           sectionLabelFaq: adminSectionLabels.faq,
+          sectionLabelGallery: adminSectionLabels.gallery,
           faqText: adminFaqText,
           speakersLayout: adminSpeakersLayout,
+          galleryMode: adminGalleryMode,
           translateDefaultLanguage: next
         })
       });
@@ -3943,8 +3967,10 @@ const AdminPage = () => {
           sectionLabelSpeakers: adminSectionLabels.speakers,
           sectionLabelPartners: adminSectionLabels.partners,
           sectionLabelFaq: adminSectionLabels.faq,
+          sectionLabelGallery: adminSectionLabels.gallery,
           faqText: adminFaqText,
           speakersLayout: next,
+          galleryMode: adminGalleryMode,
           translateDefaultLanguage: adminTranslateDefaultLanguage
         })
       });
@@ -3953,6 +3979,42 @@ const AdminPage = () => {
       }
     };
     saveSections().catch(() => setError("Kunde inte spara talarlayout."));
+  };
+
+  const handleGalleryModeChange = (mode) => {
+    const next = mode === "slideshow" || mode === "marquee" ? mode : "grid";
+    setAdminGalleryMode(next);
+    if (!token || !selectedEventId) {
+      return;
+    }
+    const saveSections = async () => {
+      const response = await fetch(`${API_BASE}/admin/sections`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          eventId: Number(selectedEventId),
+          ...adminSectionVisibility,
+          sectionOrder: adminSectionOrder,
+          formFieldOrder: adminMergedFormFieldOrder,
+          sectionLabelProgram: adminSectionLabels.program,
+          sectionLabelSpeakers: adminSectionLabels.speakers,
+          sectionLabelPartners: adminSectionLabels.partners,
+          sectionLabelFaq: adminSectionLabels.faq,
+          sectionLabelGallery: adminSectionLabels.gallery,
+          faqText: adminFaqText,
+          speakersLayout: adminSpeakersLayout,
+          galleryMode: next,
+          translateDefaultLanguage: adminTranslateDefaultLanguage
+        })
+      });
+      if (!response.ok) {
+        throw new Error("Sections save failed");
+      }
+    };
+    saveSections().catch(() => setError("Kunde inte spara galleriläge."));
   };
 
   const saveAdminSectionLabels = () => {
@@ -3973,8 +4035,10 @@ const AdminPage = () => {
           sectionLabelSpeakers: adminSectionLabels.speakers,
           sectionLabelPartners: adminSectionLabels.partners,
           sectionLabelFaq: adminSectionLabels.faq,
+          sectionLabelGallery: adminSectionLabels.gallery,
           faqText: adminFaqText,
           speakersLayout: adminSpeakersLayout,
+          galleryMode: adminGalleryMode,
           translateDefaultLanguage: adminTranslateDefaultLanguage
         })
       });
@@ -3994,6 +4058,7 @@ const AdminPage = () => {
     form: "Anmäl dig här",
     speakers: "Talare",
     partners: "Partner",
+    gallery: "Galleri",
     place: "Plats"
   };
 
@@ -4022,8 +4087,10 @@ const AdminPage = () => {
           sectionLabelSpeakers: adminSectionLabels.speakers,
           sectionLabelPartners: adminSectionLabels.partners,
           sectionLabelFaq: adminSectionLabels.faq,
+          sectionLabelGallery: adminSectionLabels.gallery,
           faqText: adminFaqText,
           speakersLayout: adminSpeakersLayout,
+          galleryMode: adminGalleryMode,
           translateDefaultLanguage: adminTranslateDefaultLanguage
         })
       });
@@ -4469,6 +4536,97 @@ const AdminPage = () => {
       localStorage.setItem(buildStorageKey("partnersUpdatedAt", selectedEventId), String(Date.now()));
     };
     removePartner().catch(() => setError("Kunde inte ta bort partner."));
+  };
+
+  const handleGalleryUpload = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!token) {
+      setError("Logga in för att ladda upp bilder.");
+      return;
+    }
+    if (!selectedEventId) {
+      setError("Välj ett event först.");
+      return;
+    }
+    setError("");
+    const upload = async () => {
+      const formData = new FormData();
+      formData.append("eventId", selectedEventId);
+      formData.append("image", file);
+      const response = await fetch(`${API_BASE}/admin/gallery`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData
+      });
+      if (!response.ok) {
+        throw new Error("Gallery upload failed");
+      }
+      if (galleryImageInputRef.current) {
+        galleryImageInputRef.current.value = "";
+      }
+      await loadGallery(selectedEventId);
+      localStorage.setItem(buildStorageKey("galleryUpdatedAt", selectedEventId), String(Date.now()));
+    };
+    upload().catch(() => setError("Kunde inte ladda upp bilden."));
+  };
+
+  const handleGalleryMove = (index, direction) => {
+    const nextIndex = direction === "up" ? index - 1 : index + 1;
+    if (nextIndex < 0 || nextIndex >= galleryImages.length) {
+      return;
+    }
+    if (!token || !selectedEventId) {
+      setError("Logga in för att ändra ordning.");
+      return;
+    }
+    const next = [...galleryImages];
+    const [moved] = next.splice(index, 1);
+    next.splice(nextIndex, 0, moved);
+    setGalleryImages(next);
+    const saveOrder = async () => {
+      const response = await fetch(`${API_BASE}/admin/gallery/reorder`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ ids: next.map((img) => img.id), eventId: Number(selectedEventId) })
+      });
+      if (!response.ok) {
+        throw new Error("Gallery reorder failed");
+      }
+      localStorage.setItem(buildStorageKey("galleryUpdatedAt", selectedEventId), String(Date.now()));
+    };
+    saveOrder().catch(() => {
+      setError("Kunde inte spara bildordning.");
+      loadGallery(selectedEventId).catch(() => {});
+    });
+  };
+
+  const handleGalleryDelete = (image) => {
+    if (!token || !selectedEventId) {
+      setError("Logga in för att ta bort bild.");
+      return;
+    }
+    if (!window.confirm("Ta bort bilden från galleriet?")) {
+      return;
+    }
+    const remove = async () => {
+      const response = await fetch(
+        `${API_BASE}/admin/gallery/${image.id}?eventId=${selectedEventId}`,
+        {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` }
+        }
+      );
+      if (!response.ok) {
+        throw new Error("Gallery delete failed");
+      }
+      await loadGallery(selectedEventId);
+      localStorage.setItem(buildStorageKey("galleryUpdatedAt", selectedEventId), String(Date.now()));
+    };
+    remove().catch(() => setError("Kunde inte ta bort bilden."));
   };
 
   const handleDragStart = (id) => {
@@ -8794,17 +8952,36 @@ const AdminPage = () => {
                       onChange={handleSpeakerChange}
                     ></textarea>
                   </label>
-                  <label className="field">
+                  <div className="field">
                     <span className="field-label">Bild</span>
-                    <input
-                      ref={speakerImageInputRef}
-                      name="image"
-                      type="file"
-                      accept="image/*"
-                      onChange={handleSpeakerChange}
-                      required={!speakerEditingId}
-                    />
-                  </label>
+                    <label className="file-upload">
+                      <input
+                        ref={speakerImageInputRef}
+                        className="file-upload-input"
+                        name="image"
+                        type="file"
+                        accept="image/*"
+                        aria-label="Välj bild för talare"
+                        onChange={handleSpeakerChange}
+                        required={!speakerEditingId}
+                      />
+                      <span className="file-upload-face" aria-hidden="true">
+                        <svg className="file-upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                          <path d="M12 16V4m0 0 8 8m-8-8-8 8" strokeLinecap="round" strokeLinejoin="round" />
+                          <path d="M4 20h16" strokeLinecap="round" />
+                        </svg>
+                        Välj bild
+                      </span>
+                    </label>
+                    {speakerForm.image ? (
+                      <p className="file-upload-selected">
+                        Vald fil:{" "}
+                        <span className="file-upload-selected-name" title={speakerForm.image.name}>
+                          {speakerForm.image.name}
+                        </span>
+                      </p>
+                    ) : null}
+                  </div>
                   {speakerEditingId ? (
                     <p className="muted">Lämna tomt om du vill behålla bilden.</p>
                   ) : null}
@@ -8931,17 +9108,36 @@ const AdminPage = () => {
                   <p className="muted" style={{ marginTop: "-0.25rem" }}>
                     Partnerloggor kan vara upp till 5&nbsp;MB (bildfil).
                   </p>
-                  <label className="field">
+                  <div className="field">
                     <span className="field-label">Logga</span>
-                    <input
-                      ref={partnerImageInputRef}
-                      name="image"
-                      type="file"
-                      accept="image/*"
-                      onChange={handlePartnerChange}
-                      required={!partnerEditingId}
-                    />
-                  </label>
+                    <label className="file-upload">
+                      <input
+                        ref={partnerImageInputRef}
+                        className="file-upload-input"
+                        name="image"
+                        type="file"
+                        accept="image/*"
+                        aria-label="Välj partnerlogga"
+                        onChange={handlePartnerChange}
+                        required={!partnerEditingId}
+                      />
+                      <span className="file-upload-face" aria-hidden="true">
+                        <svg className="file-upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                          <path d="M12 16V4m0 0 8 8m-8-8-8 8" strokeLinecap="round" strokeLinejoin="round" />
+                          <path d="M4 20h16" strokeLinecap="round" />
+                        </svg>
+                        Välj logga
+                      </span>
+                    </label>
+                    {partnerForm.image ? (
+                      <p className="file-upload-selected">
+                        Vald fil:{" "}
+                        <span className="file-upload-selected-name" title={partnerForm.image.name}>
+                          {partnerForm.image.name}
+                        </span>
+                      </p>
+                    ) : null}
+                  </div>
                   {partnerEditingId ? (
                     <p className="muted">Lämna tomt om du vill behålla loggan.</p>
                   ) : null}
@@ -9019,6 +9215,153 @@ const AdminPage = () => {
                   </>
                 ) : (
                   <p className="muted">Inga partners ännu.</p>
+                )}
+              </div>
+
+              <div className="section">
+                <div
+                  className="section-header"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "1rem",
+                    flexWrap: "wrap",
+                    justifyContent: "space-between"
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
+                    <h2>Galleri</h2>
+                    <label className="field" style={{ marginBottom: 0, maxWidth: "260px" }}>
+                      <input
+                        type="text"
+                        value={adminSectionLabels.gallery}
+                        onChange={(e) => handleSectionLabelChange("gallery", e.target.value)}
+                        onBlur={saveAdminSectionLabels}
+                        placeholder="Byt ut rubriknamn"
+                        aria-label="Byt ut rubriknamn för Galleri"
+                      />
+                    </label>
+                  </div>
+                  <label className="field checkbox-field section-toggle">
+                    <span className="field-label">Visa</span>
+                    <input
+                      name="showGallery"
+                      type="checkbox"
+                      checked={adminSectionVisibility.showGallery}
+                      onChange={handleSectionVisibilityChange}
+                    />
+                  </label>
+                </div>
+                <p className="muted" style={{ marginTop: 0 }}>
+                  Ladda upp bilder och välj hur galleriet visas på eventsidan — stilla rutnät, bildspel eller flytande karusell.
+                </p>
+                <fieldset className="gallery-mode-picker">
+                  <legend className="field-label">Presentation</legend>
+                  <div className="gallery-mode-options">
+                    <label className="gallery-mode-option">
+                      <input
+                        type="radio"
+                        name="galleryMode"
+                        value="grid"
+                        checked={adminGalleryMode === "grid"}
+                        onChange={() => handleGalleryModeChange("grid")}
+                      />
+                      <span>Stilla rutnät</span>
+                    </label>
+                    <label className="gallery-mode-option">
+                      <input
+                        type="radio"
+                        name="galleryMode"
+                        value="slideshow"
+                        checked={adminGalleryMode === "slideshow"}
+                        onChange={() => handleGalleryModeChange("slideshow")}
+                      />
+                      <span>Bildspel</span>
+                    </label>
+                    <label className="gallery-mode-option">
+                      <input
+                        type="radio"
+                        name="galleryMode"
+                        value="marquee"
+                        checked={adminGalleryMode === "marquee"}
+                        onChange={() => handleGalleryModeChange("marquee")}
+                      />
+                      <span>Flytande karusell</span>
+                    </label>
+                  </div>
+                </fieldset>
+                <div className="field">
+                  <span className="field-label">Ladda upp bild</span>
+                  <label className="file-upload">
+                    <input
+                      ref={galleryImageInputRef}
+                      className="file-upload-input"
+                      type="file"
+                      accept="image/*"
+                      aria-label="Välj bild till galleriet"
+                      onChange={handleGalleryUpload}
+                    />
+                    <span className="file-upload-face" aria-hidden="true">
+                      <svg className="file-upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                        <path d="M12 16V4m0 0 8 8m-8-8-8 8" strokeLinecap="round" strokeLinejoin="round" />
+                        <path d="M4 20h16" strokeLinecap="round" />
+                      </svg>
+                      Välj bild
+                    </span>
+                  </label>
+                </div>
+                <p className="muted" style={{ marginTop: "-0.25rem" }}>
+                  Bilder kan vara upp till 8&nbsp;MB (JPG, PNG m.m.).
+                </p>
+                {galleryImages.length > 0 ? (
+                  <>
+                    <p className="muted" style={{ marginTop: "1rem", marginBottom: "0.75rem" }}>
+                      Använd pilarna för att ändra ordning. Förhandsvisning nedan motsvarar valt presentationsläge.
+                    </p>
+                    <div className="admin-gallery-thumbs">
+                      {galleryImages.map((img, index) => (
+                        <div className="admin-gallery-thumb" key={img.id}>
+                          <span className="admin-gallery-order-arrows section-order-arrows">
+                            <button
+                              type="button"
+                              className="icon-button"
+                              aria-label={`Flytta bild ${index + 1} upp`}
+                              disabled={index === 0}
+                              onClick={() => handleGalleryMove(index, "up")}
+                            >
+                              ↑
+                            </button>
+                            <button
+                              type="button"
+                              className="icon-button"
+                              aria-label={`Flytta bild ${index + 1} ner`}
+                              disabled={index === galleryImages.length - 1}
+                              onClick={() => handleGalleryMove(index, "down")}
+                            >
+                              ↓
+                            </button>
+                          </span>
+                          <img src={resolveAssetUrl(img.image_url)} alt="" />
+                          <button
+                            type="button"
+                            className="icon-button danger"
+                            onClick={() => handleGalleryDelete(img)}
+                          >
+                            Ta bort
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="admin-gallery-preview">
+                      <EventGallery
+                        images={galleryImages}
+                        mode={adminGalleryMode}
+                        resolveAssetUrl={resolveAssetUrl}
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <p className="muted">Inga bilder i galleriet ännu.</p>
                 )}
               </div>
             </>
@@ -9297,14 +9640,30 @@ const AdminPage = () => {
               </div>
               <div className="section">
                 <h2>Eventbild</h2>
-                <label className="field">
+                <div className="field">
                   <span className="field-label">Ladda upp bild</span>
                   <p className="field-hint" style={{ marginBottom: "0.5rem" }}>
                     För bästa resultat, använd en liggande bild (t.ex. 1200×600 px) med tydlig kontrast och utan
                     text som är väldigt nära kanterna.
                   </p>
-                  <input name="heroImage" type="file" accept="image/*" onChange={handleHeroImageChange} />
-                </label>
+                  <label className="file-upload">
+                    <input
+                      className="file-upload-input"
+                      name="heroImage"
+                      type="file"
+                      accept="image/*"
+                      aria-label="Välj eventbild"
+                      onChange={handleHeroImageChange}
+                    />
+                    <span className="file-upload-face" aria-hidden="true">
+                      <svg className="file-upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                        <path d="M12 16V4m0 0 8 8m-8-8-8 8" strokeLinecap="round" strokeLinejoin="round" />
+                        <path d="M4 20h16" strokeLinecap="round" />
+                      </svg>
+                      Välj bild
+                    </span>
+                  </label>
+                </div>
                 {heroImageUrl ? (
                   <>
                     <img
@@ -10044,6 +10403,8 @@ function App() {
   const [place, setPlace] = useState({ address: "", description: "" });
   const [speakers, setSpeakers] = useState([]);
   const [partners, setPartners] = useState([]);
+  const [galleryImages, setGalleryImages] = useState([]);
+  const [galleryMode, setGalleryMode] = useState("grid");
   const [prices, setPrices] = useState([]);
   const [hero, setHero] = useState({ title: "", bodyHtml: "", imageUrl: "" });
   const [heroImageError, setHeroImageError] = useState(false);
@@ -10065,14 +10426,15 @@ function App() {
   const [eventSectionsLoaded, setEventSectionsLoaded] = useState(false);
   const translateMountedEventIdRef = useRef(null);
   const [formFieldOrder, setFormFieldOrder] = useState([]);
-  const publicDefaultSectionOrder = ["text", "program", "faq", "form", "speakers", "partners", "place"];
+  const publicDefaultSectionOrder = ["text", "program", "faq", "form", "speakers", "partners", "gallery", "place"];
   const [sectionOrder, setSectionOrder] = useState([...publicDefaultSectionOrder]);
   const [programItems, setProgramItems] = useState([]);
   const [sectionLabels, setSectionLabels] = useState({
     program: "",
     speakers: "",
     partners: "",
-    faq: ""
+    faq: "",
+    gallery: ""
   });
   const [speakersLayout, setSpeakersLayout] = useState("grid");
   const [faqText, setFaqText] = useState("");
@@ -10325,6 +10687,7 @@ function App() {
       showTranslate: data.sections?.showTranslate !== false,
       showDiscountCode: data.sections?.showDiscountCode !== false,
       showFaq: data.sections?.showFaq || false,
+      showGallery: data.sections?.showGallery === true,
       translateDefaultLanguage: normalizeTranslateDefaultLanguage(data.sections?.translateDefaultLanguage)
     });
     const order = data.sections?.sectionOrder;
@@ -10337,8 +10700,11 @@ function App() {
       program: data.sections?.sectionLabelProgram ?? "",
       speakers: data.sections?.sectionLabelSpeakers ?? "",
       partners: data.sections?.sectionLabelPartners ?? "",
-      faq: data.sections?.sectionLabelFaq ?? ""
+      faq: data.sections?.sectionLabelFaq ?? "",
+      gallery: data.sections?.sectionLabelGallery ?? ""
     });
+    const mode = data.sections?.galleryMode;
+    setGalleryMode(mode === "slideshow" || mode === "marquee" ? mode : "grid");
     setSpeakersLayout(data.sections?.speakersLayout === "list" ? "list" : "grid");
     setFaqText(data.sections?.faqText || "");
     setFormFieldOrder(Array.isArray(data.sections?.formFieldOrder) ? data.sections.formFieldOrder : []);
@@ -10360,6 +10726,15 @@ function App() {
     }
     const data = await response.json();
     setPartners(data.partners || []);
+  };
+
+  const loadGallery = async (eventId) => {
+    const response = await fetch(`${API_BASE}/gallery?eventId=${eventId}`);
+    if (!response.ok) {
+      throw new Error("Gallery fetch failed");
+    }
+    const data = await response.json();
+    setGalleryImages(data.images || []);
   };
 
   const loadCustomFields = async (eventId) => {
@@ -10453,6 +10828,7 @@ function App() {
     loadPlace(event.id).catch(() => setPlace({ address: "", description: "" }));
     loadSpeakers(event.id).catch(() => setSpeakers([]));
     loadPartners(event.id).catch(() => setPartners([]));
+    loadGallery(event.id).catch(() => setGalleryImages([]));
     loadPrices(event.id).catch(() => setPrices([]));
     loadHero(event.id).catch(() => setHero({ title: "", bodyHtml: "" }));
     loadCustomFields(event.id).catch(() => setCustomFields([]));
@@ -10514,6 +10890,10 @@ function App() {
       }
       if (storageEvent.key === buildStorageKey("partnersUpdatedAt", currentEventId)) {
         loadPartners(event.id).catch(() => setPartners([]));
+      }
+      if (storageEvent.key === buildStorageKey("galleryUpdatedAt", currentEventId)) {
+        loadGallery(event.id).catch(() => setGalleryImages([]));
+        loadSectionVisibility(event.id).catch(() => {});
       }
       if (storageEvent.key === buildStorageKey("heroUpdatedAt", currentEventId)) {
         loadHero(event.id).catch(() => setHero({ title: "", bodyHtml: "" }));
@@ -10879,6 +11259,18 @@ function App() {
               ) : (
                 <p className="muted">Partners uppdateras snart.</p>
               )}
+            </div>
+          );
+        }
+        if (key === "gallery" && sectionVisibility.showGallery && galleryImages.length > 0) {
+          return (
+            <div className="section section-gallery" key="gallery">
+              <h2>{sectionLabels.gallery.trim() || "Galleri"}</h2>
+              <EventGallery
+                images={galleryImages}
+                mode={galleryMode}
+                resolveAssetUrl={resolveAssetUrl}
+              />
             </div>
           );
         }
