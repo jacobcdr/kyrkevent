@@ -23,6 +23,12 @@ import { Resend } from "resend";
 import PDFDocument from "pdfkit";
 import QRCode from "qrcode";
 import { startHealthMonitor, sendDbMonitorAlert } from "./healthMonitor.js";
+import { optimizeImageFile } from "./imageOptimize.js";
+import { getUploadDirectoryStats, getVolumeStats } from "./uploadStats.js";
+
+const MAX_GALLERY_IMAGES_PER_EVENT = 10;
+const DEFAULT_UPLOAD_DISK_LIMIT_BYTES = 1024 * 1024 * 1024;
+const DEFAULT_UPLOAD_DISK_WARN_PERCENT = 80;
 import {
   getDbConnectionTimeoutMs,
   isRetryableDbError,
@@ -229,6 +235,23 @@ const handleMulterUpload =
       res.status(400).json({ ok: false, error: message });
     });
   };
+
+function unlinkUploadFile(imageUrl) {
+  if (!imageUrl) return;
+  const filePath = path.join(UPLOAD_DIR, path.basename(String(imageUrl)));
+  fs.unlink(filePath, () => {});
+}
+
+async function finalizeUploadedImage(multerFile, preset) {
+  if (!multerFile?.filename) return null;
+  const absolutePath = multerFile.path || path.join(UPLOAD_DIR, multerFile.filename);
+  try {
+    return await optimizeImageFile(absolutePath, preset);
+  } catch (err) {
+    console.error("[image-optimize]", preset, err.message || err);
+    return multerFile.filename;
+  }
+}
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
@@ -5787,7 +5810,11 @@ app.put("/admin/hero", requireAdmin, async (req, res) => {
   }
 });
 
-app.put("/admin/hero/image", requireAdmin, upload.single("image"), async (req, res) => {
+app.put(
+  "/admin/hero/image",
+  requireAdmin,
+  handleMulterUpload(upload.single("image")),
+  async (req, res) => {
   const { eventId } = req.body || {};
   const parsedEventId = await ensureEventOwnership(eventId, req.userId, res);
   if (!parsedEventId) {
@@ -5798,7 +5825,8 @@ app.put("/admin/hero/image", requireAdmin, upload.single("image"), async (req, r
     return;
   }
   try {
-    const imageUrl = `/uploads/${req.file.filename}`;
+    const filename = await finalizeUploadedImage(req.file, "hero");
+    const imageUrl = `/uploads/${filename}`;
     const existing = await pool.query(
       "SELECT image_url FROM hero_section WHERE event_id = $1",
       [parsedEventId]
@@ -5814,8 +5842,7 @@ app.put("/admin/hero/image", requireAdmin, upload.single("image"), async (req, r
       [parsedEventId, imageUrl]
     );
     if (previousImage && previousImage !== imageUrl) {
-      const filePath = path.resolve(previousImage.replace(/^\/+/, ""));
-      fs.unlink(filePath, () => {});
+      unlinkUploadFile(previousImage);
     }
     res.json({ ok: true, imageUrl: result.rows[0]?.image_url || imageUrl });
   } catch (error) {
@@ -5843,8 +5870,7 @@ app.delete("/admin/hero/image", requireAdmin, async (req, res) => {
       [eventId]
     );
     if (previousImage) {
-      const filePath = path.resolve(previousImage.replace(/^\/+/, ""));
-      fs.unlink(filePath, () => {});
+      unlinkUploadFile(previousImage);
     }
     res.json({ ok: true });
   } catch (error) {
@@ -5852,7 +5878,11 @@ app.delete("/admin/hero/image", requireAdmin, async (req, res) => {
   }
 });
 
-app.post("/admin/speakers", requireAdmin, upload.single("image"), async (req, res) => {
+app.post(
+  "/admin/speakers",
+  requireAdmin,
+  handleMulterUpload(upload.single("image")),
+  async (req, res) => {
   const { name, bio, eventId } = req.body || {};
   const parsedEventId = await ensureEventOwnership(eventId, req.userId, res);
   if (!parsedEventId) {
@@ -5867,7 +5897,8 @@ app.post("/admin/speakers", requireAdmin, upload.single("image"), async (req, re
     return;
   }
   try {
-    const imageUrl = `/uploads/${req.file.filename}`;
+    const filename = await finalizeUploadedImage(req.file, "speaker");
+    const imageUrl = `/uploads/${filename}`;
     const bioValue = String(bio ?? "").trim();
     const result = await pool.query(
       `
@@ -5885,7 +5916,11 @@ app.post("/admin/speakers", requireAdmin, upload.single("image"), async (req, re
   }
 });
 
-app.post("/admin/partners", requireAdmin, upload.single("image"), async (req, res) => {
+app.post(
+  "/admin/partners",
+  requireAdmin,
+  handleMulterUpload(upload.single("image")),
+  async (req, res) => {
   const { name, url, eventId } = req.body || {};
   const parsedEventId = await ensureEventOwnership(eventId, req.userId, res);
   if (!parsedEventId) {
@@ -5896,7 +5931,8 @@ app.post("/admin/partners", requireAdmin, upload.single("image"), async (req, re
     return;
   }
   try {
-    const imageUrl = `/uploads/${req.file.filename}`;
+    const filename = await finalizeUploadedImage(req.file, "partner");
+    const imageUrl = `/uploads/${filename}`;
     const result = await pool.query(
       `
         INSERT INTO partners (event_id, name, image_url, url, position)
@@ -5913,7 +5949,11 @@ app.post("/admin/partners", requireAdmin, upload.single("image"), async (req, re
   }
 });
 
-app.put("/admin/speakers/:id", requireAdmin, upload.single("image"), async (req, res) => {
+app.put(
+  "/admin/speakers/:id",
+  requireAdmin,
+  handleMulterUpload(upload.single("image")),
+  async (req, res) => {
   const { id } = req.params;
   const { name, bio, eventId } = req.body || {};
   const parsedEventId = await ensureEventOwnership(eventId, req.userId, res);
@@ -5934,15 +5974,18 @@ app.put("/admin/speakers/:id", requireAdmin, upload.single("image"), async (req,
       return;
     }
     const previousImage = existing.rows[0].image_url;
-    const nextImage = req.file ? `/uploads/${req.file.filename}` : previousImage;
+    let nextImage = previousImage;
+    if (req.file) {
+      const filename = await finalizeUploadedImage(req.file, "speaker");
+      nextImage = `/uploads/${filename}`;
+    }
     const bioValue = String(bio ?? "").trim();
     const result = await pool.query(
       "UPDATE speakers SET name = $1, bio = $2, image_url = $3 WHERE id = $4 AND event_id = $5 RETURNING id, name, bio, image_url, position, created_at",
       [String(name).trim(), bioValue, nextImage, id, parsedEventId]
     );
     if (req.file && previousImage && previousImage !== nextImage) {
-      const filePath = path.resolve(previousImage.replace(/^\/+/, ""));
-      fs.unlink(filePath, () => {});
+      unlinkUploadFile(previousImage);
     }
     res.json({ ok: true, speaker: result.rows[0] });
   } catch (error) {
@@ -5950,7 +5993,11 @@ app.put("/admin/speakers/:id", requireAdmin, upload.single("image"), async (req,
   }
 });
 
-app.put("/admin/partners/:id", requireAdmin, upload.single("image"), async (req, res) => {
+app.put(
+  "/admin/partners/:id",
+  requireAdmin,
+  handleMulterUpload(upload.single("image")),
+  async (req, res) => {
   const { id } = req.params;
   const { name, url, eventId } = req.body || {};
   const parsedEventId = await ensureEventOwnership(eventId, req.userId, res);
@@ -5967,14 +6014,17 @@ app.put("/admin/partners/:id", requireAdmin, upload.single("image"), async (req,
       return;
     }
     const previousImage = existing.rows[0].image_url;
-    const nextImage = req.file ? `/uploads/${req.file.filename}` : previousImage;
+    let nextImage = previousImage;
+    if (req.file) {
+      const filename = await finalizeUploadedImage(req.file, "partner");
+      nextImage = `/uploads/${filename}`;
+    }
     const result = await pool.query(
       "UPDATE partners SET name = $1, image_url = $2, url = $3 WHERE id = $4 AND event_id = $5 RETURNING id, name, image_url, url, position, created_at",
       [String(name || "").trim(), nextImage, String(url || "").trim(), id, parsedEventId]
     );
     if (req.file && previousImage && previousImage !== nextImage) {
-      const filePath = path.resolve(previousImage.replace(/^\/+/, ""));
-      fs.unlink(filePath, () => {});
+      unlinkUploadFile(previousImage);
     }
     res.json({ ok: true, partner: result.rows[0] });
   } catch (error) {
@@ -6036,7 +6086,23 @@ app.post(
     return;
   }
   try {
-    const imageUrl = `/uploads/${req.file.filename}`;
+    const countResult = await pool.query(
+      "SELECT COUNT(*)::int AS count FROM event_gallery_images WHERE event_id = $1",
+      [parsedEventId]
+    );
+    const currentCount = countResult.rows[0]?.count ?? 0;
+    if (currentCount >= MAX_GALLERY_IMAGES_PER_EVENT) {
+      unlinkUploadFile(`/uploads/${req.file.filename}`);
+      res.status(400).json({
+        ok: false,
+        error: `Max ${MAX_GALLERY_IMAGES_PER_EVENT} bilder per event.`,
+        maxGalleryImages: MAX_GALLERY_IMAGES_PER_EVENT,
+        currentCount
+      });
+      return;
+    }
+    const filename = await finalizeUploadedImage(req.file, "gallery");
+    const imageUrl = `/uploads/${filename}`;
     const result = await pool.query(
       `
         INSERT INTO event_gallery_images (event_id, image_url, position)
@@ -6049,7 +6115,12 @@ app.post(
       `,
       [parsedEventId, imageUrl]
     );
-    res.status(201).json({ ok: true, image: result.rows[0] });
+    res.status(201).json({
+      ok: true,
+      image: result.rows[0],
+      galleryCount: currentCount + 1,
+      maxGalleryImages: MAX_GALLERY_IMAGES_PER_EVENT
+    });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to save gallery image" });
   }
@@ -6109,14 +6180,124 @@ app.delete("/admin/gallery/:id", requireAdmin, async (req, res) => {
       res.status(404).json({ ok: false, error: "Gallery image not found" });
       return;
     }
-    const imageUrl = result.rows[0].image_url;
-    if (imageUrl) {
-      const filePath = path.join(UPLOAD_DIR, path.basename(imageUrl));
-      fs.unlink(filePath, () => {});
-    }
+    unlinkUploadFile(result.rows[0].image_url);
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to delete gallery image" });
+  }
+});
+
+app.get("/admin/system-status", requireAdmin, requireSuperAdmin, async (_req, res) => {
+  try {
+    let databaseOk = false;
+    let databaseLatencyMs = null;
+    const dbStarted = Date.now();
+    try {
+      await pool.query("SELECT 1");
+      databaseOk = true;
+      databaseLatencyMs = Date.now() - dbStarted;
+    } catch {
+      databaseOk = false;
+    }
+
+    const [uploadDirStats, volumeStats, countResult] = await Promise.all([
+      getUploadDirectoryStats(UPLOAD_DIR),
+      getVolumeStats(UPLOAD_DIR),
+      pool.query(`
+        SELECT
+          (SELECT COUNT(*)::int FROM events) AS events,
+          (SELECT COUNT(*)::int FROM events WHERE event_end_date IS NULL OR event_end_date >= CURRENT_DATE) AS events_active,
+          (SELECT COUNT(*)::int FROM admin_users) AS admin_users,
+          (SELECT COUNT(*)::int FROM admin_user_profiles) AS organizations,
+          (SELECT COUNT(*)::int FROM event_gallery_images) AS gallery_images,
+          (SELECT COUNT(*)::int FROM speakers) AS speakers,
+          (SELECT COUNT(*)::int FROM speakers WHERE COALESCE(image_url, '') <> '') AS speaker_images,
+          (SELECT COUNT(*)::int FROM partners) AS partners,
+          (SELECT COUNT(*)::int FROM partners WHERE COALESCE(image_url, '') <> '') AS partner_images,
+          (SELECT COUNT(*)::int FROM hero_section WHERE COALESCE(image_url, '') <> '') AS hero_images,
+          (SELECT COUNT(*)::int FROM program_items) AS program_items,
+          (SELECT COUNT(*)::int FROM bookings) AS bookings,
+          (SELECT COUNT(*)::int FROM bookings WHERE payment_status = 'paid') AS bookings_paid,
+          (SELECT COUNT(*)::int FROM bookings WHERE payment_status = 'pending') AS bookings_pending,
+          (SELECT COUNT(*)::int FROM discount_codes) AS discount_codes,
+          (SELECT COUNT(*)::int FROM payout_requests) AS payout_requests,
+          (SELECT COALESCE(SUM(view_count), 0)::int FROM event_page_views) AS total_page_views,
+          (SELECT COUNT(*)::int FROM event_page_views WHERE view_count > 0) AS events_with_page_views
+      `)
+    ]);
+
+    const counts = countResult.rows[0] || {};
+    const limitBytes = Number(process.env.UPLOAD_DISK_LIMIT_BYTES) || DEFAULT_UPLOAD_DISK_LIMIT_BYTES;
+    const warnPercent = Number(process.env.UPLOAD_DISK_WARN_PERCENT) || DEFAULT_UPLOAD_DISK_WARN_PERCENT;
+
+    let usedBytes = uploadDirStats.bytes;
+    let totalBytes = limitBytes;
+    if (volumeStats.available && volumeStats.totalBytes > 0) {
+      usedBytes = volumeStats.usedBytes;
+      totalBytes = volumeStats.totalBytes;
+    }
+
+    const usedPercent =
+      totalBytes > 0 ? Math.min(100, Math.round((usedBytes / totalBytes) * 100)) : 0;
+
+    let diskLevel = "ok";
+    if (usedPercent >= 90) diskLevel = "critical";
+    else if (usedPercent >= warnPercent) diskLevel = "warning";
+
+    const imageRowsInDb =
+      (counts.gallery_images || 0) +
+      (counts.speaker_images || 0) +
+      (counts.partner_images || 0) +
+      (counts.hero_images || 0);
+
+    const avgFileBytes =
+      uploadDirStats.files > 0
+        ? Math.round(uploadDirStats.bytes / uploadDirStats.files)
+        : 0;
+
+    res.json({
+      ok: true,
+      status: {
+        database: { ok: databaseOk, latencyMs: databaseLatencyMs },
+        uploads: {
+          directoryBytes: uploadDirStats.bytes,
+          directoryFiles: uploadDirStats.files,
+          avgFileBytes,
+          uploadDir: UPLOAD_DIR
+        },
+        volume: volumeStats,
+        disk: {
+          usedBytes,
+          totalBytes,
+          freeBytes: volumeStats.available
+            ? volumeStats.freeBytes
+            : Math.max(0, limitBytes - uploadDirStats.bytes),
+          usedPercent,
+          limitBytes,
+          warnPercent,
+          level: diskLevel
+        },
+        counts,
+        images: {
+          filesOnDisk: uploadDirStats.files,
+          rowsInDatabase: imageRowsInDb,
+          gallery: counts.gallery_images || 0,
+          speakers: counts.speaker_images || 0,
+          partners: counts.partner_images || 0,
+          hero: counts.hero_images || 0,
+          maxGalleryPerEvent: MAX_GALLERY_IMAGES_PER_EVENT
+        },
+        imageOptimization: true,
+        runtime: {
+          uptimeSeconds: Math.floor(process.uptime()),
+          nodeVersion: process.version,
+          environment: process.env.NODE_ENV || "development"
+        },
+        generatedAt: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Failed to load system status" });
   }
 });
 

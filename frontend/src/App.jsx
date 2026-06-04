@@ -17,6 +17,35 @@ import { EventGallery } from "./EventGallery";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 const API_BASE_NORMALIZED = API_BASE.replace(/\/+$/, "");
+const MAX_GALLERY_IMAGES_PER_EVENT = 10;
+
+function formatStorageBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) return "—";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function formatUptime(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return "—";
+  const d = Math.floor(seconds / 86400);
+  const h = Math.floor((seconds % 86400) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (d > 0) return `${d} d ${h} h`;
+  if (h > 0) return `${h} h ${m} min`;
+  return `${m} min`;
+}
+
+function formatStatusTimestamp(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("sv-SE", {
+    dateStyle: "short",
+    timeStyle: "short"
+  });
+}
 
 function formatAdminEventDateLabel(startDate, endDate) {
   const formatShort = (dateStr) => {
@@ -1733,12 +1762,42 @@ const AdminPage = () => {
   const [eventConfirmationNoteInput, setEventConfirmationNoteInput] = useState("");
   const [eventDeleteConfirm, setEventDeleteConfirm] = useState(null);
   const [eventDeleteLoading, setEventDeleteLoading] = useState(false);
+  const [systemStatus, setSystemStatus] = useState(null);
+  const [systemStatusLoading, setSystemStatusLoading] = useState(false);
   useEffect(() => {
     document.title = "Kyrkevent";
     return () => {
       document.title = "Event";
     };
   }, []);
+
+  const loadSystemStatus = async (authToken) => {
+    if (!authToken) return;
+    setSystemStatusLoading(true);
+    try {
+      const response = await fetch(`${API_BASE}/admin/system-status`, {
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data?.ok) {
+        setSystemStatus(data.status);
+      } else {
+        setSystemStatus(null);
+      }
+    } catch {
+      setSystemStatus(null);
+    } finally {
+      setSystemStatusLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!token || !isAdminUser || adminSection !== "admin" || adminPanelTab !== "status") {
+      return undefined;
+    }
+    loadSystemStatus(token);
+    return undefined;
+  }, [token, isAdminUser, adminSection, adminPanelTab]);
   useEffect(() => {
     setPendingTheme(selectedEvent?.theme || "default");
   }, [selectedEvent?.theme, selectedEventId]);
@@ -4549,6 +4608,10 @@ const AdminPage = () => {
       setError("Välj ett event först.");
       return;
     }
+    if (galleryImages.length >= MAX_GALLERY_IMAGES_PER_EVENT) {
+      setError(`Max ${MAX_GALLERY_IMAGES_PER_EVENT} bilder per event i galleriet.`);
+      return;
+    }
     setError("");
     const upload = async () => {
       const formData = new FormData();
@@ -4559,8 +4622,9 @@ const AdminPage = () => {
         headers: { Authorization: `Bearer ${token}` },
         body: formData
       });
+      const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error("Gallery upload failed");
+        throw new Error(data.error || "Gallery upload failed");
       }
       if (galleryImageInputRef.current) {
         galleryImageInputRef.current.value = "";
@@ -5541,6 +5605,18 @@ const AdminPage = () => {
                 >
                   Ekonomi
                 </button>
+                <button
+                  type="button"
+                  role="tab"
+                  className={`admin-main-tab ${adminPanelTab === "status" ? "is-active" : ""}`}
+                  aria-selected={adminPanelTab === "status"}
+                  onClick={() => {
+                    setAdminPanelTab("status");
+                    if (token) loadSystemStatus(token).catch(() => {});
+                  }}
+                >
+                  Status
+                </button>
               </nav>
             </div>
             <div className="admin-tabbed-frame__body">
@@ -6276,6 +6352,206 @@ const AdminPage = () => {
             ) : (
               <p className="muted">Inga utbetalningsbegäran.</p>
             )}
+              </div>
+            ) : null}
+
+            {adminPanelTab === "status" ? (
+              <div className="admin-panel admin-panel-status">
+                <div className="admin-status-header">
+                  <div>
+                    <h2>Status</h2>
+                    <p className="muted" style={{ marginTop: "0.35rem", marginBottom: 0 }}>
+                      Översikt för hela plattformen – lagring, bilder, bokningar och drift.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="button button-outline button-small"
+                    disabled={systemStatusLoading || !token}
+                    onClick={() => loadSystemStatus(token)}
+                  >
+                    {systemStatusLoading ? "Uppdaterar…" : "Uppdatera"}
+                  </button>
+                </div>
+                {systemStatusLoading && !systemStatus ? (
+                  <p className="muted">Laddar systemstatus…</p>
+                ) : systemStatus ? (
+                  <>
+                    <p className="muted admin-status-meta">
+                      Senast uppdaterad: {formatStatusTimestamp(systemStatus.generatedAt)}
+                    </p>
+                    <div className="admin-system-disk admin-status-disk-block">
+                      <div className="admin-system-disk-header">
+                        <span className="admin-system-stat-label">Lagring (total volym)</span>
+                        <span
+                          className={`admin-system-pill admin-system-pill--${
+                            systemStatus.disk?.level === "critical"
+                              ? "bad"
+                              : systemStatus.disk?.level === "warning"
+                                ? "warn"
+                                : "ok"
+                          }`}
+                        >
+                          {systemStatus.disk?.usedPercent ?? 0}% använt
+                        </span>
+                      </div>
+                      <div
+                        className={`admin-system-disk-bar admin-system-disk-bar--${
+                          systemStatus.disk?.level || "ok"
+                        }`}
+                        role="progressbar"
+                        aria-valuenow={systemStatus.disk?.usedPercent ?? 0}
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                      >
+                        <span style={{ width: `${systemStatus.disk?.usedPercent ?? 0}%` }} />
+                      </div>
+                      <p className="muted admin-system-disk-detail">
+                        {formatStorageBytes(systemStatus.disk?.usedBytes)} av{" "}
+                        {formatStorageBytes(systemStatus.disk?.totalBytes)} (
+                        {formatStorageBytes(systemStatus.disk?.freeBytes)} kvar)
+                        {systemStatus.volume?.available
+                          ? " · Railway-volym"
+                          : " · uppskattning"}
+                      </p>
+                      {systemStatus.disk?.level === "warning" ? (
+                        <p className="admin-system-alert admin-system-alert--warn">
+                          Lagringen börjar bli full. Ta bort gamla bilder eller utöka volymen i Railway.
+                        </p>
+                      ) : null}
+                      {systemStatus.disk?.level === "critical" ? (
+                        <p className="admin-system-alert admin-system-alert--bad">
+                          Lagringen är nästan full. Nya uppladdningar kan misslyckas snart.
+                        </p>
+                      ) : null}
+                    </div>
+
+                    <h3 className="admin-subsection-title">Bilder & filer</h3>
+                    <div className="admin-system-status-grid">
+                      <div className="admin-system-stat-card">
+                        <span className="admin-system-stat-label">Filer på disk</span>
+                        <strong>{systemStatus.uploads?.directoryFiles ?? "—"}</strong>
+                        <span className="muted">
+                          {formatStorageBytes(systemStatus.uploads?.directoryBytes)} totalt
+                        </span>
+                      </div>
+                      <div className="admin-system-stat-card">
+                        <span className="admin-system-stat-label">Snittstorlek / fil</span>
+                        <strong>{formatStorageBytes(systemStatus.uploads?.avgFileBytes)}</strong>
+                      </div>
+                      <div className="admin-system-stat-card">
+                        <span className="admin-system-stat-label">Galleribilder</span>
+                        <strong>{systemStatus.images?.gallery ?? "—"}</strong>
+                        <span className="muted">
+                          Max {systemStatus.images?.maxGalleryPerEvent ?? MAX_GALLERY_IMAGES_PER_EVENT} / event
+                        </span>
+                      </div>
+                      <div className="admin-system-stat-card">
+                        <span className="admin-system-stat-label">Talare + partner + hero</span>
+                        <strong>
+                          {(systemStatus.images?.speakers ?? 0) +
+                            (systemStatus.images?.partners ?? 0) +
+                            (systemStatus.images?.hero ?? 0)}
+                        </strong>
+                        <span className="muted">
+                          {systemStatus.images?.speakers ?? 0} talare · {systemStatus.images?.partners ?? 0}{" "}
+                          partner · {systemStatus.images?.hero ?? 0} eventbilder
+                        </span>
+                      </div>
+                      <div className="admin-system-stat-card">
+                        <span className="admin-system-stat-label">Bildrader i databas</span>
+                        <strong>{systemStatus.images?.rowsInDatabase ?? "—"}</strong>
+                        <span className="muted">Referenser till uppladdade bilder</span>
+                      </div>
+                      <div className="admin-system-stat-card">
+                        <span className="admin-system-stat-label">Komprimering</span>
+                        <span className="admin-system-pill admin-system-pill--ok">Aktiv vid upload</span>
+                      </div>
+                    </div>
+
+                    <h3 className="admin-subsection-title">Plattform</h3>
+                    <div className="admin-system-status-grid">
+                      <div className="admin-system-stat-card">
+                        <span className="admin-system-stat-label">Event totalt</span>
+                        <strong>{systemStatus.counts?.events ?? "—"}</strong>
+                        <span className="muted">
+                          {systemStatus.counts?.events_active ?? "—"} pågående / framtida
+                        </span>
+                      </div>
+                      <div className="admin-system-stat-card">
+                        <span className="admin-system-stat-label">Organisationer</span>
+                        <strong>{systemStatus.counts?.organizations ?? "—"}</strong>
+                      </div>
+                      <div className="admin-system-stat-card">
+                        <span className="admin-system-stat-label">Admin-användare</span>
+                        <strong>{systemStatus.counts?.admin_users ?? "—"}</strong>
+                      </div>
+                      <div className="admin-system-stat-card">
+                        <span className="admin-system-stat-label">Anmälningar</span>
+                        <strong>{systemStatus.counts?.bookings ?? "—"}</strong>
+                        <span className="muted">
+                          {systemStatus.counts?.bookings_paid ?? 0} betalda ·{" "}
+                          {systemStatus.counts?.bookings_pending ?? 0} väntande
+                        </span>
+                      </div>
+                      <div className="admin-system-stat-card">
+                        <span className="admin-system-stat-label">Sidvisningar</span>
+                        <strong>
+                          {systemStatus.counts?.total_page_views != null
+                            ? systemStatus.counts.total_page_views.toLocaleString("sv-SE")
+                            : "—"}
+                        </strong>
+                        <span className="muted">
+                          {systemStatus.counts?.events_with_page_views ?? 0} event med visningar
+                        </span>
+                      </div>
+                      <div className="admin-system-stat-card">
+                        <span className="admin-system-stat-label">Programpunkter</span>
+                        <strong>{systemStatus.counts?.program_items ?? "—"}</strong>
+                      </div>
+                      <div className="admin-system-stat-card">
+                        <span className="admin-system-stat-label">Rabattkoder</span>
+                        <strong>{systemStatus.counts?.discount_codes ?? "—"}</strong>
+                      </div>
+                      <div className="admin-system-stat-card">
+                        <span className="admin-system-stat-label">Utbetalningsbegäran</span>
+                        <strong>{systemStatus.counts?.payout_requests ?? "—"}</strong>
+                      </div>
+                    </div>
+
+                    <h3 className="admin-subsection-title">Drift</h3>
+                    <div className="admin-system-status-grid">
+                      <div className="admin-system-stat-card">
+                        <span className="admin-system-stat-label">Databas</span>
+                        <span
+                          className={`admin-system-pill ${
+                            systemStatus.database?.ok ? "admin-system-pill--ok" : "admin-system-pill--bad"
+                          }`}
+                        >
+                          {systemStatus.database?.ok ? "OK" : "Fel"}
+                        </span>
+                        {systemStatus.database?.latencyMs != null ? (
+                          <span className="muted">{systemStatus.database.latencyMs} ms svarstid</span>
+                        ) : null}
+                      </div>
+                      <div className="admin-system-stat-card">
+                        <span className="admin-system-stat-label">Server upptid</span>
+                        <strong>{formatUptime(systemStatus.runtime?.uptimeSeconds)}</strong>
+                      </div>
+                      <div className="admin-system-stat-card">
+                        <span className="admin-system-stat-label">Miljö</span>
+                        <strong>{systemStatus.runtime?.environment ?? "—"}</strong>
+                        <span className="muted">{systemStatus.runtime?.nodeVersion ?? ""}</span>
+                      </div>
+                      <div className="admin-system-stat-card">
+                        <span className="admin-system-stat-label">Uppladdningsmapp</span>
+                        <span className="muted admin-status-path">{systemStatus.uploads?.uploadDir ?? "—"}</span>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <p className="muted">Kunde inte hämta systemstatus.</p>
+                )}
               </div>
             ) : null}
 
@@ -9254,6 +9530,8 @@ const AdminPage = () => {
                 </div>
                 <p className="muted" style={{ marginTop: 0 }}>
                   Ladda upp bilder och välj hur galleriet visas på eventsidan — stilla rutnät, bildspel eller flytande karusell.
+                  Max {MAX_GALLERY_IMAGES_PER_EVENT} bilder per event ({galleryImages.length}/{MAX_GALLERY_IMAGES_PER_EVENT}).
+                  Bilder komprimeras automatiskt vid uppladdning.
                 </p>
                 <fieldset className="gallery-mode-picker">
                   <legend className="field-label">Presentation</legend>
@@ -9292,13 +9570,18 @@ const AdminPage = () => {
                 </fieldset>
                 <div className="field">
                   <span className="field-label">Ladda upp bild</span>
-                  <label className="file-upload">
+                  <label
+                    className={`file-upload${
+                      galleryImages.length >= MAX_GALLERY_IMAGES_PER_EVENT ? " file-upload--disabled" : ""
+                    }`}
+                  >
                     <input
                       ref={galleryImageInputRef}
                       className="file-upload-input"
                       type="file"
                       accept="image/*"
                       aria-label="Välj bild till galleriet"
+                      disabled={galleryImages.length >= MAX_GALLERY_IMAGES_PER_EVENT}
                       onChange={handleGalleryUpload}
                     />
                     <span className="file-upload-face" aria-hidden="true">
@@ -9311,7 +9594,9 @@ const AdminPage = () => {
                   </label>
                 </div>
                 <p className="muted" style={{ marginTop: "-0.25rem" }}>
-                  Bilder kan vara upp till 8&nbsp;MB (JPG, PNG m.m.).
+                  {galleryImages.length >= MAX_GALLERY_IMAGES_PER_EVENT
+                    ? "Galleriet är fullt. Ta bort en bild om du vill ladda upp en ny."
+                    : "Upp till 8 MB per fil före komprimering (JPG, PNG, HEIC m.m.)."}
                 </p>
                 {galleryImages.length > 0 ? (
                   <>
