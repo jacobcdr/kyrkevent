@@ -187,13 +187,48 @@ if (!fs.existsSync(UPLOAD_DIR)) {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 }
 
+const ALLOWED_IMAGE_EXTENSIONS = new Set([
+  ".jpg",
+  ".jpeg",
+  ".png",
+  ".gif",
+  ".webp",
+  ".avif",
+  ".heic",
+  ".heif",
+  ".bmp"
+]);
+
 const imageFileFilter = (_req, file, cb) => {
-  if (file.mimetype && file.mimetype.startsWith("image/")) {
+  const mime = String(file.mimetype || "").toLowerCase();
+  if (mime.startsWith("image/")) {
+    cb(null, true);
+    return;
+  }
+  // Browsers/OS (t.ex. iPhone HEIC) skickar ibland application/octet-stream eller tom mimetype
+  const ext = path.extname(file.originalname || "").toLowerCase();
+  if (ALLOWED_IMAGE_EXTENSIONS.has(ext)) {
     cb(null, true);
     return;
   }
   cb(new Error("Only image uploads are allowed"));
 };
+
+const handleMulterUpload =
+  (middleware) =>
+  (req, res, next) => {
+    middleware(req, res, (err) => {
+      if (!err) {
+        next();
+        return;
+      }
+      const message =
+        err.code === "LIMIT_FILE_SIZE"
+          ? "Bilden är för stor."
+          : err.message || "Uppladdningen misslyckades.";
+      res.status(400).json({ ok: false, error: message });
+    });
+  };
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
@@ -5986,7 +6021,11 @@ app.post("/admin/partners/reorder", requireAdmin, async (req, res) => {
   }
 });
 
-app.post("/admin/gallery", requireAdmin, galleryUpload.single("image"), async (req, res) => {
+app.post(
+  "/admin/gallery",
+  requireAdmin,
+  handleMulterUpload(galleryUpload.single("image")),
+  async (req, res) => {
   const { eventId } = req.body || {};
   const parsedEventId = await ensureEventOwnership(eventId, req.userId, res);
   if (!parsedEventId) {
