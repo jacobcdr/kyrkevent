@@ -14,6 +14,7 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "./App.css";
 import { EventGallery } from "./EventGallery";
+import { EventAnalytics } from "./EventAnalytics";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 const API_BASE_NORMALIZED = API_BASE.replace(/\/+$/, "");
@@ -9694,6 +9695,7 @@ const AdminPage = () => {
                   </p>
                 );
               })()}
+              <EventAnalytics apiBase={API_BASE} token={token} eventId={selectedEventId} />
               {(() => {
                 const startRaw = selectedEvent?.event_start_date;
                 const endRaw = selectedEvent?.event_end_date;
@@ -10901,7 +10903,11 @@ function App() {
         const guardKey = `__kyrkevent_view_tracked__:${String(eventSlug)}`;
         if (!window[guardKey]) {
           window[guardKey] = true;
-          await fetch(`${API_BASE}/events/${eventSlug}/view`, { method: "POST" });
+          await fetch(`${API_BASE}/events/${eventSlug}/view`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ referrer: document.referrer || "" })
+          });
         }
       } catch {
         // ignore tracking errors

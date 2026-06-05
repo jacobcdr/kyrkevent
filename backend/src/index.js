@@ -25,6 +25,17 @@ import QRCode from "qrcode";
 import { startHealthMonitor, sendDbMonitorAlert } from "./healthMonitor.js";
 import { optimizeImageFile } from "./imageOptimize.js";
 import { getUploadDirectoryStats, getVolumeStats } from "./uploadStats.js";
+import {
+  ANALYTICS_TZ,
+  buildFilterSql,
+  fillDailySeries,
+  fillHourlySeries,
+  normalizeDeviceFilter,
+  normalizeReferrerFilter,
+  parseDeviceType,
+  parseReferrer,
+  resolveAnalyticsRange
+} from "./analyticsUtils.js";
 
 const MAX_GALLERY_IMAGES_PER_EVENT = 10;
 const DEFAULT_UPLOAD_DISK_LIMIT_BYTES = 1024 * 1024 * 1024;
@@ -1112,6 +1123,7 @@ app.get("/events/:slug", async (req, res) => {
 
 app.post("/events/:slug/view", async (req, res) => {
   const { slug } = req.params;
+  const referrerBody = typeof req.body?.referrer === "string" ? req.body.referrer : "";
   if (!slug) {
     res.status(400).json({ ok: false, error: "Missing slug" });
     return;
@@ -1123,6 +1135,12 @@ app.post("/events/:slug/view", async (req, res) => {
       return;
     }
     const eventId = eventResult.rows[0].id;
+    const userAgent = req.headers["user-agent"] || "";
+    const referrerHeader = req.headers.referer || req.headers.referrer || "";
+    const referrer = referrerBody || referrerHeader;
+    const deviceType = parseDeviceType(userAgent);
+    const referrerInfo = parseReferrer(referrer);
+
     const result = await pool.query(
       `
         INSERT INTO event_page_views (event_id, view_count, updated_at)
@@ -1133,6 +1151,13 @@ app.post("/events/:slug/view", async (req, res) => {
         RETURNING view_count
       `,
       [eventId]
+    );
+    await pool.query(
+      `
+        INSERT INTO event_page_view_hits (event_id, device_type, referrer_type, referrer_host)
+        VALUES ($1, $2, $3, $4)
+      `,
+      [eventId, deviceType, referrerInfo.type, referrerInfo.host || ""]
     );
     res.json({ ok: true, viewCount: result.rows[0]?.view_count ?? null });
   } catch (error) {
@@ -5201,6 +5226,8 @@ app.delete("/admin/events/:id", requireAdmin, async (req, res) => {
     await client.query("DELETE FROM discount_codes WHERE event_id = $1", [eventId]);
     await client.query("DELETE FROM place_settings WHERE event_id = $1", [eventId]);
     await client.query("DELETE FROM hero_section WHERE event_id = $1", [eventId]);
+    await client.query("DELETE FROM event_page_view_hits WHERE event_id = $1", [eventId]);
+    await client.query("DELETE FROM event_page_views WHERE event_id = $1", [eventId]);
     const result = await client.query(
       "DELETE FROM events WHERE id = $1 AND user_id = $2",
       [eventId, req.userId]
@@ -6930,6 +6957,129 @@ app.get("/admin/event-views", requireAdmin, async (req, res) => {
   }
 });
 
+app.get("/admin/event-analytics", requireAdmin, async (req, res) => {
+  try {
+    const eventId = await ensureEventOwnership(req.query.eventId, req.userId, res);
+    if (!eventId) {
+      return;
+    }
+
+    const range = resolveAnalyticsRange({
+      from: req.query.from,
+      to: req.query.to,
+      preset: req.query.preset
+    });
+    if (!range.from || !range.to) {
+      res.status(400).json({ ok: false, error: "Ogiltigt datumintervall." });
+      return;
+    }
+
+    const deviceFilter = normalizeDeviceFilter(req.query.device);
+    const referrerFilter = normalizeReferrerFilter(req.query.referrer);
+    const isSingleDay = range.from === range.to;
+    const granularity = isSingleDay ? "hour" : "day";
+
+    const filter = buildFilterSql(deviceFilter, referrerFilter, isSingleDay ? 3 : 4);
+    const dateWhere = isSingleDay
+      ? `(viewed_at AT TIME ZONE '${ANALYTICS_TZ}')::date = $2::date`
+      : `(viewed_at AT TIME ZONE '${ANALYTICS_TZ}')::date >= $2::date AND (viewed_at AT TIME ZONE '${ANALYTICS_TZ}')::date <= $3::date`;
+    const baseParams = isSingleDay
+      ? [eventId, range.from, ...filter.params]
+      : [eventId, range.from, range.to, ...filter.params];
+
+    const seriesQuery = isSingleDay
+      ? `
+          SELECT
+            EXTRACT(HOUR FROM viewed_at AT TIME ZONE '${ANALYTICS_TZ}')::int AS bucket,
+            COUNT(*)::int AS count
+          FROM event_page_view_hits
+          WHERE event_id = $1
+            AND ${dateWhere}
+            ${filter.sql}
+          GROUP BY 1
+          ORDER BY 1
+        `
+      : `
+          SELECT
+            TO_CHAR((viewed_at AT TIME ZONE '${ANALYTICS_TZ}')::date, 'YYYY-MM-DD') AS bucket,
+            COUNT(*)::int AS count
+          FROM event_page_view_hits
+          WHERE event_id = $1
+            AND ${dateWhere}
+            ${filter.sql}
+          GROUP BY 1
+          ORDER BY 1
+        `;
+
+    const breakdownQuery = (column) => `
+      SELECT ${column} AS type, COUNT(*)::int AS count
+      FROM event_page_view_hits
+      WHERE event_id = $1
+        AND ${dateWhere}
+        ${filter.sql}
+      GROUP BY 1
+      ORDER BY count DESC
+    `;
+
+    const [seriesResult, deviceResult, referrerResult, totalResult, lifetimeResult] = await Promise.all([
+      pool.query(seriesQuery, baseParams),
+      pool.query(breakdownQuery("device_type"), baseParams),
+      pool.query(breakdownQuery("referrer_type"), baseParams),
+      pool.query(
+        `
+          SELECT COUNT(*)::int AS count
+          FROM event_page_view_hits
+          WHERE event_id = $1
+            AND ${dateWhere}
+            ${filter.sql}
+        `,
+        baseParams
+      ),
+      pool.query("SELECT view_count FROM event_page_views WHERE event_id = $1", [eventId])
+    ]);
+
+    const series = isSingleDay
+      ? fillHourlySeries(seriesResult.rows)
+      : fillDailySeries(range.from, range.to, seriesResult.rows);
+
+    const totalViews = totalResult.rows[0]?.count ?? 0;
+    const withPercents = (rows) => {
+      const total = rows.reduce((sum, row) => sum + (Number(row.count) || 0), 0) || 0;
+      return rows.map((row) => ({
+        type: row.type,
+        count: Number(row.count) || 0,
+        percent: total > 0 ? Math.round((Number(row.count) / total) * 100) : 0
+      }));
+    };
+
+    const peak = series.reduce(
+      (best, row) => (row.count > (best?.count ?? 0) ? row : best),
+      null
+    );
+
+    res.json({
+      ok: true,
+      analytics: {
+        granularity,
+        from: range.from,
+        to: range.to,
+        totalViews,
+        lifetimeViews: Number(lifetimeResult.rows[0]?.view_count) || 0,
+        series,
+        devices: withPercents(deviceResult.rows),
+        referrers: withPercents(referrerResult.rows),
+        peak: peak && peak.count > 0 ? { label: peak.label, count: peak.count } : null,
+        filters: {
+          device: deviceFilter,
+          referrer: referrerFilter
+        }
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Failed to load analytics" });
+  }
+});
+
 const EVENT_UPDATED_AT_CHILD_TABLES = [
   "event_sections",
   "program_items",
@@ -7217,6 +7367,20 @@ const ensureBookingsTable = async () => {
       view_count INTEGER NOT NULL DEFAULT 0,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS event_page_view_hits (
+      id BIGSERIAL PRIMARY KEY,
+      event_id INTEGER NOT NULL,
+      viewed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      device_type TEXT NOT NULL DEFAULT 'unknown',
+      referrer_type TEXT NOT NULL DEFAULT 'direct',
+      referrer_host TEXT NOT NULL DEFAULT ''
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_event_page_view_hits_event_viewed
+      ON event_page_view_hits (event_id, viewed_at DESC)
   `);
   await pool.query(`
     ALTER TABLE bookings

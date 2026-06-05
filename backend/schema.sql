@@ -191,6 +191,18 @@ CREATE TABLE IF NOT EXISTS event_page_views (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS event_page_view_hits (
+  id BIGSERIAL PRIMARY KEY,
+  event_id INTEGER NOT NULL,
+  viewed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  device_type TEXT NOT NULL DEFAULT 'unknown',
+  referrer_type TEXT NOT NULL DEFAULT 'direct',
+  referrer_host TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_event_page_view_hits_event_viewed
+  ON event_page_view_hits (event_id, viewed_at DESC);
+
 ALTER TABLE bookings
   ADD COLUMN IF NOT EXISTS event_id INTEGER,
   ADD COLUMN IF NOT EXISTS last_name TEXT NOT NULL DEFAULT '',

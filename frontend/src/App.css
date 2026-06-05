@@ -4000,3 +4000,130 @@ select.goog-te-combo {
   word-break: break-all;
   line-height: 1.35;
 }
+
+.event-analytics-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.event-analytics-preset {
+  padding: 0.4rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.event-analytics-preset.is-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--card));
+  color: var(--accent);
+}
+
+.event-analytics-preset--back {
+  border-style: dashed;
+}
+
+.event-analytics-dates {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.event-analytics-dates .field {
+  margin: 0;
+  min-width: 10rem;
+}
+
+.event-analytics-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-bottom: 1rem;
+}
+
+.event-analytics-filter-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.event-analytics-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.35rem;
+}
+
+.event-analytics-chip {
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.event-analytics-chip.is-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--card));
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.event-analytics-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.event-analytics-summary-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 8rem;
+}
+
+.event-analytics-chart-wrap {
+  margin-bottom: 1.25rem;
+}
+
+.event-analytics-hint {
+  margin: 0.35rem 0 0;
+  font-size: 0.85rem;
+}
+
+.event-analytics-breakdown {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+}
+
+.event-analytics-breakdown-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.event-analytics-breakdown-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.45rem 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.92rem;
+}
+
+.event-analytics-breakdown-list li:last-child {
+  border-bottom: none;
+}
