@@ -391,6 +391,29 @@ const ADMIN_EVENT_LINKS_SORT_OPTIONS = [
   { value: "updatedAt:asc", label: "Senast uppdaterad (äldst först)" }
 ];
 
+const BOOKING_COLUMN_OPTIONS = [
+  { key: "name", label: "Namn" },
+  { key: "email", label: "Email" },
+  { key: "city", label: "Ort" },
+  { key: "phone", label: "Telnr" },
+  { key: "organization", label: "Organisation" },
+  { key: "ticket", label: "Biljett" },
+  { key: "terms", label: "Villkor" },
+  { key: "payment_status", label: "Betalning" },
+  { key: "pris", label: "Pris" },
+  { key: "order_number", label: "Ordernummer" },
+  { key: "checked_in", label: "Incheckad" },
+  { key: "created_at", label: "Skapad" },
+  { key: "actions", label: "Åtgärd" }
+];
+
+const DEFAULT_BOOKING_COLUMN_VISIBILITY = Object.fromEntries(
+  BOOKING_COLUMN_OPTIONS.map((col) => [
+    col.key,
+    ["name", "ticket", "order_number", "checked_in", "created_at"].includes(col.key)
+  ])
+);
+
 const EVENT_VAT_RATE_OPTIONS = [
   {
     percent: 6,
@@ -1735,6 +1758,7 @@ const AdminPage = () => {
   const [statusMessage, setStatusMessage] = useState("");
   const [adminSection, setAdminSection] = useState("bookings");
   const [adminPanelTab, setAdminPanelTab] = useState("start");
+  const [eventSettingsTab, setEventSettingsTab] = useState("general");
   const [adminMenuOpen, setAdminMenuOpen] = useState(false);
   const adminMenuTimerRef = useRef(null);
   const adminUsername = useMemo(() => {
@@ -1748,20 +1772,9 @@ const AdminPage = () => {
   }, [token]);
   const isAdminUser = adminUsername === "admin";
   const selectedEvent = events.find((item) => String(item.id) === String(selectedEventId));
-  const [bookingColumnVisibility, setBookingColumnVisibility] = useState({
-    name: true,
-    email: true,
-    city: true,
-    phone: true,
-    organization: true,
-    ticket: true,
-    terms: true,
-    payment_status: true,
-    pris: true,
-    order_number: true,
-    checked_in: true,
-    created_at: true
-  });
+  const [bookingColumnVisibility, setBookingColumnVisibility] = useState(() => ({
+    ...DEFAULT_BOOKING_COLUMN_VISIBILITY
+  }));
   const [bookingColumnModalOpen, setBookingColumnModalOpen] = useState(false);
   const [bookingCustomFieldVisibility, setBookingCustomFieldVisibility] = useState({});
   const [adminSectionVisibility, setAdminSectionVisibility] = useState({
@@ -1860,6 +1873,9 @@ const AdminPage = () => {
     setEventVatRateInput([6, 12, 25].includes(n) ? n : 25);
   }, [selectedEventId, selectedEvent?.vat_rate_percent]);
   useEffect(() => {
+    setEventSettingsTab("general");
+  }, [selectedEventId]);
+  useEffect(() => {
     if (!token || !selectedEventId || adminSection !== "settings") {
       setParticipantCount(null);
       return;
@@ -1942,11 +1958,11 @@ const AdminPage = () => {
     setBookingCustomFieldVisibility((prev) => {
       const next = { ...prev };
       const ids = new Set(customFieldsAdmin.map((field) => String(field.id)));
-      // Lägg till nya fält med default true
+      // Lägg till nya fält med default false (visas via Visa/dölj kolumner)
       customFieldsAdmin.forEach((field) => {
         const key = String(field.id);
         if (!(key in next)) {
-          next[key] = true;
+          next[key] = false;
         }
       });
       // Ta bort fält som inte längre finns
@@ -3621,6 +3637,36 @@ const AdminPage = () => {
       await loadAdminDiscounts(token, selectedEventId);
     };
     removeDiscount().catch(() => setError("Kunde inte ta bort rabattkoden."));
+  };
+
+  const listableCustomFieldsAdmin = customFieldsAdmin.filter(
+    (field) => field.field_type !== "paragraph" && field.field_type !== "linebreak"
+  );
+
+  const handleShowAllBookingColumns = () => {
+    setBookingColumnVisibility(
+      Object.fromEntries(BOOKING_COLUMN_OPTIONS.map((col) => [col.key, true]))
+    );
+    setBookingCustomFieldVisibility((prev) => {
+      const next = { ...prev };
+      listableCustomFieldsAdmin.forEach((field) => {
+        next[String(field.id)] = true;
+      });
+      return next;
+    });
+  };
+
+  const handleHideAllBookingColumns = () => {
+    setBookingColumnVisibility(
+      Object.fromEntries(BOOKING_COLUMN_OPTIONS.map((col) => [col.key, false]))
+    );
+    setBookingCustomFieldVisibility((prev) => {
+      const next = { ...prev };
+      listableCustomFieldsAdmin.forEach((field) => {
+        next[String(field.id)] = false;
+      });
+      return next;
+    });
   };
 
   const handleExportBookings = () => {
@@ -8443,14 +8489,6 @@ const AdminPage = () => {
                         <th>Ordernummer</th>
                       ) : null}
                       {bookingColumnVisibility.checked_in ? <th>Incheckad</th> : null}
-                      <th>Åtgärd</th>
-                      {customFieldsAdmin
-                        .filter((field) => field.field_type !== "paragraph" && field.field_type !== "linebreak")
-                        .map((field) =>
-                        bookingCustomFieldVisibility[String(field.id)] !== false ? (
-                          <th key={`custom-header-${field.id}`}>{field.label}</th>
-                        ) : null
-                      )}
                       {bookingColumnVisibility.created_at ? (
                         <th>
                           <button
@@ -8465,6 +8503,12 @@ const AdminPage = () => {
                           </button>
                         </th>
                       ) : null}
+                      {bookingColumnVisibility.actions ? <th>Åtgärd</th> : null}
+                      {listableCustomFieldsAdmin.map((field) =>
+                        bookingCustomFieldVisibility[String(field.id)] === true ? (
+                          <th key={`custom-header-${field.id}`}>{field.label}</th>
+                        ) : null
+                      )}
                     </tr>
                   </thead>
                   <tbody>
@@ -8473,12 +8517,9 @@ const AdminPage = () => {
                         <td
                           colSpan={
                             Object.values(bookingColumnVisibility).filter(Boolean).length +
-                            customFieldsAdmin.filter(
-                              (field) =>
-                                field.field_type !== "paragraph" &&
-                                field.field_type !== "linebreak" &&
-                                bookingCustomFieldVisibility[String(field.id)] !== false
-                            ).length + 1
+                            listableCustomFieldsAdmin.filter(
+                              (field) => bookingCustomFieldVisibility[String(field.id)] === true
+                            ).length
                           }
                           className="muted"
                         >
@@ -8530,38 +8571,6 @@ const AdminPage = () => {
                               ) : null}
                             </td>
                           ) : null}
-                          {customFieldsAdmin
-                            .filter((field) => field.field_type !== "paragraph" && field.field_type !== "linebreak")
-                            .map((field) =>
-                            bookingCustomFieldVisibility[String(field.id)] !== false ? (
-                              <td key={`custom-${booking.id}-${field.id}`}>
-                                {getBookingCustomFieldValue(booking, field)}
-                              </td>
-                            ) : null
-                          )}
-                          <td className="admin-booking-actions-cell">
-                            {canRefundBooking(booking) && selectedEventRefundLockedByPayout ? (
-                              <span className="muted" style={{ fontSize: "0.82rem" }} title="Utbetalning är begärd eller genomförd för eventet">
-                                Låst
-                              </span>
-                            ) : canRefundBooking(booking) ? (
-                              <button
-                                type="button"
-                                className="button button-outline button-small"
-                                onClick={() => openRefundModal(booking)}
-                              >
-                                Återbetala
-                              </button>
-                            ) : Number(booking.refund_amount) > 0 ? (
-                              <span className="muted" style={{ fontSize: "0.82rem" }}>
-                                {Number(booking.refund_amount).toLocaleString("sv-SE", {
-                                  minimumFractionDigits: 2,
-                                  maximumFractionDigits: 2
-                                })}{" "}
-                                SEK återbetalt
-                              </span>
-                            ) : null}
-                          </td>
                           {bookingColumnVisibility.created_at ? (
                             <td>
                               {booking.created_at
@@ -8569,6 +8578,38 @@ const AdminPage = () => {
                                 : ""}
                             </td>
                           ) : null}
+                          {bookingColumnVisibility.actions ? (
+                            <td className="admin-booking-actions-cell">
+                              {canRefundBooking(booking) && selectedEventRefundLockedByPayout ? (
+                                <span className="muted" style={{ fontSize: "0.82rem" }} title="Utbetalning är begärd eller genomförd för eventet">
+                                  Låst
+                                </span>
+                              ) : canRefundBooking(booking) ? (
+                                <button
+                                  type="button"
+                                  className="button button-outline button-small"
+                                  onClick={() => openRefundModal(booking)}
+                                >
+                                  Återbetala
+                                </button>
+                              ) : Number(booking.refund_amount) > 0 ? (
+                                <span className="muted" style={{ fontSize: "0.82rem" }}>
+                                  {Number(booking.refund_amount).toLocaleString("sv-SE", {
+                                    minimumFractionDigits: 2,
+                                    maximumFractionDigits: 2
+                                  })}{" "}
+                                  SEK återbetalt
+                                </span>
+                              ) : null}
+                            </td>
+                          ) : null}
+                          {listableCustomFieldsAdmin.map((field) =>
+                            bookingCustomFieldVisibility[String(field.id)] === true ? (
+                              <td key={`custom-${booking.id}-${field.id}`}>
+                                {getBookingCustomFieldValue(booking, field)}
+                              </td>
+                            ) : null
+                          )}
                         </tr>
                       ))
                     )}
@@ -8710,21 +8751,24 @@ const AdminPage = () => {
                     </button>
                   </div>
                   <div className="modal-body">
+                    <div className="booking-column-bulk-actions">
+                      <button
+                        type="button"
+                        className="button button-outline button-small"
+                        onClick={handleShowAllBookingColumns}
+                      >
+                        Visa alla
+                      </button>
+                      <button
+                        type="button"
+                        className="button button-outline button-small"
+                        onClick={handleHideAllBookingColumns}
+                      >
+                        Dölj alla
+                      </button>
+                    </div>
                     <div className="field-row">
-                      {[
-                        { key: "name", label: "Namn" },
-                        { key: "email", label: "Email" },
-                        { key: "city", label: "Ort" },
-                        { key: "phone", label: "Telnr" },
-                        { key: "organization", label: "Organisation" },
-                        { key: "ticket", label: "Biljett" },
-                        { key: "terms", label: "Villkor" },
-                        { key: "payment_status", label: "Betalning" },
-                        { key: "pris", label: "Pris" },
-                        { key: "order_number", label: "Ordernummer" },
-                        { key: "checked_in", label: "Incheckad" },
-                        { key: "created_at", label: "Skapad" }
-                      ].map((col) => (
+                      {BOOKING_COLUMN_OPTIONS.map((col) => (
                         <label key={col.key} className="field checkbox-field">
                           <span className="field-label">{col.label}</span>
                           <input
@@ -8740,20 +8784,16 @@ const AdminPage = () => {
                         </label>
                       ))}
                     </div>
-                    {customFieldsAdmin.filter(
-                      (field) => field.field_type !== "paragraph" && field.field_type !== "linebreak"
-                    ).length > 0 ? (
+                    {listableCustomFieldsAdmin.length > 0 ? (
                       <>
                         <h4>Extra fält</h4>
                         <div className="field-row">
-                          {customFieldsAdmin
-                            .filter((field) => field.field_type !== "paragraph" && field.field_type !== "linebreak")
-                            .map((field) => (
+                          {listableCustomFieldsAdmin.map((field) => (
                             <label key={field.id} className="field checkbox-field">
                               <span className="field-label">{field.label}</span>
                               <input
                                 type="checkbox"
-                                checked={bookingCustomFieldVisibility[String(field.id)] !== false}
+                                checked={bookingCustomFieldVisibility[String(field.id)] === true}
                                 onChange={(event) =>
                                   setBookingCustomFieldVisibility((prev) => ({
                                     ...prev,
@@ -9695,7 +9735,50 @@ const AdminPage = () => {
           ) : null}
 
           {token && selectedEventId && adminSection === "settings" ? (
-            <>
+            <div className="section admin-tabbed-frame">
+              <div className="admin-tabbed-frame__bar">
+                <nav className="admin-main-tabs" role="tablist" aria-label="Eventinställningar">
+                  <button
+                    type="button"
+                    role="tab"
+                    className={`admin-main-tab ${eventSettingsTab === "general" ? "is-active" : ""}`}
+                    aria-selected={eventSettingsTab === "general"}
+                    onClick={() => setEventSettingsTab("general")}
+                  >
+                    Inställningar
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    className={`admin-main-tab ${eventSettingsTab === "tickets" ? "is-active" : ""}`}
+                    aria-selected={eventSettingsTab === "tickets"}
+                    onClick={() => setEventSettingsTab("tickets")}
+                  >
+                    Biljetter
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    className={`admin-main-tab ${eventSettingsTab === "form" ? "is-active" : ""}`}
+                    aria-selected={eventSettingsTab === "form"}
+                    onClick={() => setEventSettingsTab("form")}
+                  >
+                    Formulär
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    className={`admin-main-tab ${eventSettingsTab === "statistics" ? "is-active" : ""}`}
+                    aria-selected={eventSettingsTab === "statistics"}
+                    onClick={() => setEventSettingsTab("statistics")}
+                  >
+                    Statistik
+                  </button>
+                </nav>
+              </div>
+              <div className="admin-tabbed-frame__body">
+                {eventSettingsTab === "general" ? (
+                  <>
               {(() => {
                 const startRaw = selectedEvent?.event_start_date;
                 const endRaw = selectedEvent?.event_end_date;
@@ -9736,7 +9819,6 @@ const AdminPage = () => {
                   </p>
                 );
               })()}
-              <EventAnalytics apiBase={API_BASE} token={token} eventId={selectedEventId} />
               {(() => {
                 const startRaw = selectedEvent?.event_start_date;
                 const endRaw = selectedEvent?.event_end_date;
@@ -10109,6 +10191,9 @@ const AdminPage = () => {
                   {themeSaving ? "Sparar..." : "Spara"}
                 </button>
               </div>
+                  </>
+                ) : null}
+                {eventSettingsTab === "form" ? (
               <div className="section">
                 <h2>Formulärfält</h2>
                 <p className="muted" style={{ marginTop: 0 }}>
@@ -10261,6 +10346,9 @@ const AdminPage = () => {
                   </p>
                 ) : null}
               </div>
+                ) : null}
+                {eventSettingsTab === "tickets" ? (
+                  <>
               <div className="section">
                 <h2>Biljettpriser</h2>
                 {(profileForm.subscriptionPlan || "gratis").toLowerCase() === "gratis" ? (
@@ -10482,7 +10570,13 @@ const AdminPage = () => {
                   <p className="muted">Inga rabattkoder ännu.</p>
                 )}
               </div>
-            </>
+                  </>
+                ) : null}
+                {eventSettingsTab === "statistics" ? (
+                  <EventAnalytics apiBase={API_BASE} token={token} eventId={selectedEventId} />
+                ) : null}
+              </div>
+            </div>
           ) : null}
 
           {token && selectedEventId && adminSection === "bookings" ? (

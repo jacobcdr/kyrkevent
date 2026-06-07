@@ -3995,6 +3995,13 @@ select.goog-te-combo {
   margin-bottom: 0.65rem;
 }
 
+.booking-column-bulk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
 .admin-status-path {
   font-size: 0.75rem;
   word-break: break-all;
