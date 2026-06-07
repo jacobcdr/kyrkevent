@@ -197,11 +197,19 @@ CREATE TABLE IF NOT EXISTS event_page_view_hits (
   viewed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   device_type TEXT NOT NULL DEFAULT 'unknown',
   referrer_type TEXT NOT NULL DEFAULT 'direct',
-  referrer_host TEXT NOT NULL DEFAULT ''
+  referrer_host TEXT NOT NULL DEFAULT '',
+  country_code TEXT NOT NULL DEFAULT '',
+  latitude DOUBLE PRECISION,
+  longitude DOUBLE PRECISION
 );
 
 CREATE INDEX IF NOT EXISTS idx_event_page_view_hits_event_viewed
   ON event_page_view_hits (event_id, viewed_at DESC);
+
+ALTER TABLE event_page_view_hits
+  ADD COLUMN IF NOT EXISTS country_code TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION,
+  ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION;
 
 ALTER TABLE bookings
   ADD COLUMN IF NOT EXISTS event_id INTEGER,

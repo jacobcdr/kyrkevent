@@ -8,6 +8,24 @@ import {
   XAxis,
   YAxis
 } from "recharts";
+import { EventAnalyticsMap } from "./EventAnalyticsMap";
+
+const countryDisplayNames =
+  typeof Intl !== "undefined" && Intl.DisplayNames
+    ? new Intl.DisplayNames(["sv"], { type: "region" })
+    : null;
+
+function countryLabel(code) {
+  const normalized = String(code || "").trim().toUpperCase();
+  if (!normalized || normalized === "XX") {
+    return "Okänd plats";
+  }
+  try {
+    return countryDisplayNames?.of(normalized) || normalized;
+  } catch {
+    return normalized;
+  }
+}
 
 const DEVICE_LABELS = {
   mobile: "Mobil",
@@ -131,6 +149,16 @@ export function EventAnalytics({ apiBase, token, eventId }) {
     }));
   }, [data]);
 
+  const locationRows = useMemo(() => {
+    if (!data?.locations?.length) return [];
+    const total = data.locations.reduce((sum, row) => sum + (Number(row.count) || 0), 0);
+    return data.locations.map((row) => ({
+      ...row,
+      label: countryLabel(row.countryCode),
+      percent: total > 0 ? Math.round((Number(row.count) / total) * 100) : 0
+    }));
+  }, [data]);
+
   const handleBarClick = (bar) => {
     if (!bar?.payload || data?.granularity !== "day") return;
     const day = bar.payload.label;
@@ -151,7 +179,8 @@ export function EventAnalytics({ apiBase, token, eventId }) {
       <h2>Besöksstatistik</h2>
       <p className="muted" style={{ marginTop: 0 }}>
         Antal besök på eventsidan. Klicka på en dag i diagrammet för att se fördelning per timme.
-        Historik samlas in från och med att denna funktion är aktiv.
+        Historik samlas in från och med att denna funktion är aktiv. Plats på kartan baseras på ungefärlig
+        IP-geolokalisering och följer samma filter som diagrammet.
       </p>
 
       <div className="event-analytics-presets">
@@ -316,6 +345,26 @@ export function EventAnalytics({ apiBase, token, eventId }) {
           )}
 
           <div className="event-analytics-breakdown">
+            <div className="event-analytics-breakdown-col event-analytics-breakdown-col--wide">
+              <h3 className="admin-subsection-title">Besökares plats</h3>
+              {locationRows.length > 0 ? (
+                <>
+                  <EventAnalyticsMap locations={locationRows} />
+                  <ul className="event-analytics-breakdown-list event-analytics-location-list">
+                    {locationRows.map((row) => (
+                      <li key={row.countryCode}>
+                        <span>{row.label}</span>
+                        <span>
+                          {row.count} ({row.percent}%)
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              ) : (
+                <p className="muted">Ingen platsdata för valt filter ännu.</p>
+              )}
+            </div>
             <div className="event-analytics-breakdown-col">
               <h3 className="admin-subsection-title">Enhet</h3>
               {data.devices?.length ? (

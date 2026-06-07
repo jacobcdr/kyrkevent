@@ -4002,6 +4002,25 @@ select.goog-te-combo {
   margin-bottom: 1rem;
 }
 
+.event-analytics-breakdown-col--wide {
+  grid-column: 1 / -1;
+}
+
+.event-analytics-map {
+  width: 100%;
+  height: 320px;
+  margin-bottom: 1rem;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  overflow: hidden;
+  background: #e2e8f0;
+}
+
+.event-analytics-location-list {
+  max-height: 220px;
+  overflow-y: auto;
+}
+
 .admin-status-path {
   font-size: 0.75rem;
   word-break: break-all;

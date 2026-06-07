@@ -1,3 +1,5 @@
+import geoip from "geoip-lite";
+
 const ANALYTICS_TZ = "Europe/Stockholm";
 
 const DEVICE_TYPES = new Set(["mobile", "tablet", "desktop", "bot", "unknown"]);
@@ -141,6 +143,67 @@ export function buildFilterSql(deviceFilter, referrerFilter, paramOffset = 3) {
     idx += 1;
   }
   return { sql: clauses.length ? ` AND ${clauses.join(" AND ")}` : "", params };
+}
+
+function normalizeIpAddress(ip) {
+  let value = String(ip || "").trim();
+  if (value.startsWith("::ffff:")) {
+    value = value.slice(7);
+  }
+  return value;
+}
+
+function isPrivateOrLocalIp(ip) {
+  const value = normalizeIpAddress(ip);
+  if (!value || value === "::1" || value === "127.0.0.1" || value === "localhost") {
+    return true;
+  }
+  if (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(value)) {
+    return true;
+  }
+  if (value.startsWith("fc") || value.startsWith("fd") || value.startsWith("fe80:")) {
+    return true;
+  }
+  return false;
+}
+
+export function resolveClientIp(req) {
+  const forwarded = req.headers["x-forwarded-for"];
+  if (forwarded) {
+    const first = String(forwarded).split(",")[0].trim();
+    if (first) {
+      return normalizeIpAddress(first);
+    }
+  }
+  const realIp = req.headers["x-real-ip"];
+  if (realIp) {
+    return normalizeIpAddress(realIp);
+  }
+  const cfIp = req.headers["cf-connecting-ip"];
+  if (cfIp) {
+    return normalizeIpAddress(cfIp);
+  }
+  return normalizeIpAddress(req.socket?.remoteAddress || "");
+}
+
+export function resolveGeoFromIp(ip) {
+  const normalized = normalizeIpAddress(ip);
+  if (!normalized || isPrivateOrLocalIp(normalized)) {
+    return { countryCode: "", latitude: null, longitude: null };
+  }
+  const geo = geoip.lookup(normalized);
+  if (!geo?.ll) {
+    return { countryCode: geo?.country || "", latitude: null, longitude: null };
+  }
+  return {
+    countryCode: geo.country || "",
+    latitude: Number(geo.ll[0]),
+    longitude: Number(geo.ll[1])
+  };
+}
+
+export function resolveGeoFromRequest(req) {
+  return resolveGeoFromIp(resolveClientIp(req));
 }
 
 export { ANALYTICS_TZ };

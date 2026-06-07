@@ -34,7 +34,8 @@ import {
   normalizeReferrerFilter,
   parseDeviceType,
   parseReferrer,
-  resolveAnalyticsRange
+  resolveAnalyticsRange,
+  resolveGeoFromRequest
 } from "./analyticsUtils.js";
 
 const MAX_GALLERY_IMAGES_PER_EVENT = 10;
@@ -1140,6 +1141,7 @@ app.post("/events/:slug/view", async (req, res) => {
     const referrer = referrerBody || referrerHeader;
     const deviceType = parseDeviceType(userAgent);
     const referrerInfo = parseReferrer(referrer);
+    const geo = resolveGeoFromRequest(req);
 
     const result = await pool.query(
       `
@@ -1154,10 +1156,20 @@ app.post("/events/:slug/view", async (req, res) => {
     );
     await pool.query(
       `
-        INSERT INTO event_page_view_hits (event_id, device_type, referrer_type, referrer_host)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO event_page_view_hits (
+          event_id, device_type, referrer_type, referrer_host, country_code, latitude, longitude
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
       `,
-      [eventId, deviceType, referrerInfo.type, referrerInfo.host || ""]
+      [
+        eventId,
+        deviceType,
+        referrerInfo.type,
+        referrerInfo.host || "",
+        geo.countryCode || "",
+        geo.latitude,
+        geo.longitude
+      ]
     );
     res.json({ ok: true, viewCount: result.rows[0]?.view_count ?? null });
   } catch (error) {
@@ -7021,10 +7033,29 @@ app.get("/admin/event-analytics", requireAdmin, async (req, res) => {
       ORDER BY count DESC
     `;
 
-    const [seriesResult, deviceResult, referrerResult, totalResult, lifetimeResult] = await Promise.all([
+    const [seriesResult, deviceResult, referrerResult, locationResult, totalResult, lifetimeResult] =
+      await Promise.all([
       pool.query(seriesQuery, baseParams),
       pool.query(breakdownQuery("device_type"), baseParams),
       pool.query(breakdownQuery("referrer_type"), baseParams),
+      pool.query(
+        `
+          SELECT
+            COALESCE(NULLIF(country_code, ''), 'XX') AS country_code,
+            AVG(latitude)::float AS latitude,
+            AVG(longitude)::float AS longitude,
+            COUNT(*)::int AS count
+          FROM event_page_view_hits
+          WHERE event_id = $1
+            AND ${dateWhere}
+            ${filter.sql}
+            AND latitude IS NOT NULL
+            AND longitude IS NOT NULL
+          GROUP BY COALESCE(NULLIF(country_code, ''), 'XX')
+          ORDER BY count DESC
+        `,
+        baseParams
+      ),
       pool.query(
         `
           SELECT COUNT(*)::int AS count
@@ -7068,6 +7099,14 @@ app.get("/admin/event-analytics", requireAdmin, async (req, res) => {
         series,
         devices: withPercents(deviceResult.rows),
         referrers: withPercents(referrerResult.rows),
+        locations: (locationResult.rows || [])
+          .map((row) => ({
+            countryCode: row.country_code || "XX",
+            count: Number(row.count) || 0,
+            latitude: row.latitude != null ? Number(row.latitude) : null,
+            longitude: row.longitude != null ? Number(row.longitude) : null
+          }))
+          .filter((row) => row.latitude != null && row.longitude != null),
         peak: peak && peak.count > 0 ? { label: peak.label, count: peak.count } : null,
         filters: {
           device: deviceFilter,
@@ -7381,6 +7420,12 @@ const ensureBookingsTable = async () => {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_event_page_view_hits_event_viewed
       ON event_page_view_hits (event_id, viewed_at DESC)
+  `);
+  await pool.query(`
+    ALTER TABLE event_page_view_hits
+      ADD COLUMN IF NOT EXISTS country_code TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION,
+      ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION
   `);
   await pool.query(`
     ALTER TABLE bookings
