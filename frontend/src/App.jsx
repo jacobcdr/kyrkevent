@@ -201,6 +201,46 @@ function normalizeTranslateDefaultLanguage(value) {
   return value === "en" ? "en" : "sv";
 }
 
+function normalizePublicPath(pathname = window.location.pathname) {
+  return pathname.replace(/\/+$/, "") || "/";
+}
+
+function isEnglishUrlPath(pathname = window.location.pathname) {
+  const pathNorm = normalizePublicPath(pathname);
+  return pathNorm === "/en" || pathNorm.endsWith("/en");
+}
+
+function withUrlLanguage(pathname, language) {
+  const pathNorm = normalizePublicPath(pathname);
+  const base =
+    pathNorm === "/en"
+      ? "/"
+      : pathNorm.endsWith("/en")
+        ? pathNorm.slice(0, -3)
+        : pathNorm;
+  if (language === "en") {
+    return base === "/" ? "/en" : `${base}/en`;
+  }
+  return base;
+}
+
+function bindGoogleTranslateUrlSync() {
+  const select = document.querySelector("select.goog-te-combo");
+  if (!select || select.dataset.urlSyncBound === "1") {
+    return false;
+  }
+  select.dataset.urlSyncBound = "1";
+  select.addEventListener("change", () => {
+    const nextLang = select.value === "en" ? "en" : "sv";
+    const nextPath = withUrlLanguage(window.location.pathname, nextLang);
+    const currentPath = normalizePublicPath(window.location.pathname);
+    if (nextPath !== currentPath) {
+      window.history.replaceState(null, "", `${nextPath}${window.location.search}${window.location.hash}`);
+    }
+  });
+  return true;
+}
+
 function clearGoogleTranslateCookies() {
   const expires = "expires=Thu, 01 Jan 1970 00:00:00 GMT";
   document.cookie = `googtrans=;path=/;${expires}`;
@@ -742,7 +782,8 @@ const resolveAssetUrl = (url) => {
 const buildStorageKey = (key, eventId) => (eventId ? `${key}:${eventId}` : key);
 
 const getEventSlugFromPath = () => {
-  const match = window.location.pathname.match(/^\/e\/([^/]+)/);
+  const pathNorm = normalizePublicPath(window.location.pathname);
+  const match = pathNorm.match(/^\/e\/([^/]+)(?:\/en)?$/);
   return match ? decodeURIComponent(match[1]) : null;
 };
 
@@ -9985,7 +10026,7 @@ const AdminPage = () => {
                   <label className="field admin-translate-default-field">
                     <span className="field-label">Standardspråk för besökare</span>
                     <p className="muted" style={{ marginTop: "0.25rem", marginBottom: "0.5rem" }}>
-                      Eventets innehåll skrivs på svenska. Välj om besökaren ska se svenska direkt eller engelsk översättning när sidan laddas. Besökaren kan fortfarande byta språk i menyn.
+                      Eventets innehåll skrivs på svenska. Välj om besökaren ska se svenska direkt eller engelsk översättning när sidan laddas. Besökaren kan fortfarande byta språk i menyn. Engelsk länk: lägg till <code>/en</code> i slutet av event-URL:en (t.ex. <code>/e/mitt-event/en</code>).
                     </p>
                     <select
                       value={adminTranslateDefaultLanguage}
@@ -10671,7 +10712,8 @@ function App() {
   const [cartDiscountPercent, setCartDiscountPercent] = useState(0);
   const [isEventInPast, setIsEventInPast] = useState(false);
 
-  const pathNorm = window.location.pathname.replace(/\/+$/, "") || "/";
+  const pathNorm = normalizePublicPath(window.location.pathname);
+  const urlRequestsEnglish = isEnglishUrlPath(window.location.pathname);
   const isCheckInRoute = pathNorm === "/admin/check-in";
   const isAdminRoute = window.location.pathname.startsWith("/admin");
   const isPaymentStatusRoute = window.location.pathname.startsWith("/payment-status");
@@ -10681,8 +10723,7 @@ function App() {
   const isResetPasswordRoute =
     window.location.pathname === "/reset-password" ||
     window.location.pathname.replace(/\/+$/, "") === "/reset-password";
-  const isLandingRoute =
-    window.location.pathname === "/" || window.location.pathname === "";
+  const isLandingRoute = pathNorm === "/" || pathNorm === "" || pathNorm === "/en";
   const eventSlug = getEventSlugFromPath();
   const [event, setEvent] = useState(null);
   const [eventError, setEventError] = useState("");
@@ -10789,7 +10830,9 @@ function App() {
       return undefined;
     }
 
-    const defaultLanguage = normalizeTranslateDefaultLanguage(sectionVisibility.translateDefaultLanguage);
+    const defaultLanguage = urlRequestsEnglish
+      ? "en"
+      : normalizeTranslateDefaultLanguage(sectionVisibility.translateDefaultLanguage);
     let cancelled = false;
     let waitTimer;
 
@@ -10829,6 +10872,7 @@ function App() {
         await waitForGoogleTranslateApplied();
       }
       await syncGoogleTranslateDropdownWhenReady(defaultLanguage);
+      bindGoogleTranslateUrlSync();
     };
 
     window.googleTranslateElementInit = () => {
@@ -10857,7 +10901,8 @@ function App() {
     event?.id,
     eventSectionsLoaded,
     sectionVisibility.showTranslate,
-    sectionVisibility.translateDefaultLanguage
+    sectionVisibility.translateDefaultLanguage,
+    urlRequestsEnglish
   ]);
 
   useEffect(() => {
@@ -10879,7 +10924,8 @@ function App() {
         const data = await response.json();
         const firstEvent = data.events?.[0];
         if (firstEvent?.slug) {
-          window.location.replace(`/e/${firstEvent.slug}`);
+          const enSuffix = urlRequestsEnglish ? "/en" : "";
+          window.location.replace(`/e/${firstEvent.slug}${enSuffix}`);
           return;
         }
         setEventError("Inga event tillgängliga ännu.");
