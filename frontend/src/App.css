@@ -2499,6 +2499,20 @@ h2 {
   border: 1px solid #7dd3fc;
 }
 
+.payout-status-badge-partial {
+  background: color-mix(in srgb, #d97706 14%, var(--card));
+  color: #b45309;
+  border: 1px solid color-mix(in srgb, #d97706 35%, var(--border));
+}
+
+.admin-partial-payout-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+  align-items: end;
+  margin-bottom: 1.5rem;
+}
+
 .payout-status-badge-utbetald {
   display: inline-block;
   border-radius: 999px;

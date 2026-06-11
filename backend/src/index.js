@@ -70,6 +70,10 @@ const PAYOUT_EMAIL = process.env.PAYOUT_EMAIL || "";
 const PAYOUT_DAYS_AFTER_EVENT = Math.max(0, parseInt(process.env.PAYOUT_DAYS_AFTER_EVENT || "1", 10) || 0);
 const PAYOUT_FEE_THRESHOLD = Math.max(0, Number(process.env.PAYOUT_FEE_THRESHOLD || "500") || 500);
 const PAYOUT_FEE_AMOUNT = Math.max(0, Number(process.env.PAYOUT_FEE_AMOUNT || "50") || 50);
+const PARTIAL_PAYOUT_MAX_PERCENT = Math.min(
+  100,
+  Math.max(1, Number(process.env.PARTIAL_PAYOUT_MAX_PERCENT || "70") || 70)
+);
 const GRATIS_MAX_ACTIVE_EVENTS = Math.max(
   1,
   parseInt(process.env.GRATIS_MAX_ACTIVE_EVENTS || "2", 10) || 2
@@ -3722,15 +3726,36 @@ app.get("/admin/payout-summary", requireAdmin, async (req, res) => {
         byEvent[row.event_id].paidCount += 1;
       }
     });
-    const eventsWithRevenue = events.map((e) => ({
-      id: e.id,
-      name: e.name,
-      slug: e.slug,
-      endDate: byEvent[e.id].endDate,
-      totalRevenue: Math.round(byEvent[e.id].totalRevenue * 100) / 100,
-      paidCount: byEvent[e.id].paidCount
-    }));
-    const grandTotal = eventsWithRevenue.reduce((s, e) => s + e.totalRevenue, 0);
+    const [disbursedByEvent, paidPayoutEventIds] = await Promise.all([
+      getDisbursedByEvent(pool, eventIds),
+      getPaidPayoutEventIds(pool, eventIds)
+    ]);
+    const eventsWithRevenue = events.map((e) => {
+      const totalRevenue = roundMoney(byEvent[e.id].totalRevenue);
+      const disbursed = disbursedByEvent[e.id] || { gross: 0, net: 0, count: 0 };
+      const remainingRevenue = roundMoney(Math.max(0, totalRevenue - disbursed.gross));
+      const hasPaidPayoutRequest = paidPayoutEventIds.has(e.id);
+      return {
+        id: e.id,
+        name: e.name,
+        slug: e.slug,
+        endDate: byEvent[e.id].endDate,
+        totalRevenue,
+        remainingRevenue,
+        disbursedGross: disbursed.gross,
+        disbursedNet: disbursed.net,
+        partialPayoutCount: disbursed.count,
+        hasPartialPayout: disbursed.count > 0,
+        hasPaidPayoutRequest,
+        isPartiallyPaid: disbursed.count > 0 && !hasPaidPayoutRequest && remainingRevenue > 0.009,
+        isFullyPaidOut: hasPaidPayoutRequest,
+        isFullyDisbursed: hasPaidPayoutRequest || (totalRevenue > 0 && remainingRevenue <= 0.009),
+        paidCount: byEvent[e.id].paidCount
+      };
+    });
+    const grandTotal = roundMoney(
+      eventsWithRevenue.reduce((s, e) => s + (e.remainingRevenue > 0 ? e.remainingRevenue : 0), 0)
+    );
     res.json({
       ok: true,
       events: eventsWithRevenue,
@@ -3748,6 +3773,181 @@ function computePayoutFee(grossAmount) {
   const fee = grossAmount > PAYOUT_FEE_THRESHOLD ? PAYOUT_FEE_AMOUNT : 0;
   const net = Math.round((grossAmount - fee) * 100) / 100;
   return { fee, net };
+}
+
+function computePartialPayoutMaxGross(totalRevenue) {
+  const total = roundMoney(totalRevenue);
+  if (total <= 0) return 0;
+  return roundMoney(total * (PARTIAL_PAYOUT_MAX_PERCENT / 100));
+}
+
+async function getPaidPayoutEventIds(queryable, eventIds) {
+  const ids = [...new Set((eventIds || []).map((id) => Number(id)).filter(Number.isFinite))];
+  if (ids.length === 0) {
+    return new Set();
+  }
+  const result = await queryable.query(
+    `
+      SELECT DISTINCT event_id
+      FROM payout_requests, UNNEST(event_ids) AS event_id
+      WHERE status = 'betald' AND event_ids && $1::int[]
+    `,
+    [ids]
+  );
+  return new Set((result.rows || []).map((row) => Number(row.event_id)).filter(Number.isFinite));
+}
+
+async function getActivePayoutRequestEventIds(queryable, eventIds) {
+  const ids = [...new Set((eventIds || []).map((id) => Number(id)).filter(Number.isFinite))];
+  if (ids.length === 0) {
+    return new Set();
+  }
+  const result = await queryable.query(
+    `
+      SELECT DISTINCT event_id
+      FROM payout_requests, UNNEST(event_ids) AS event_id
+      WHERE status = ANY($2::text[]) AND event_ids && $1::int[]
+    `,
+    [ids, ["pågår", "betald"]]
+  );
+  return new Set((result.rows || []).map((row) => Number(row.event_id)).filter(Number.isFinite));
+}
+
+async function assertCanCreatePartialPayout(client, eventId) {
+  const paidOrPending = await client.query(
+    `
+      SELECT status FROM payout_requests
+      WHERE $1 = ANY(event_ids) AND status = ANY($2::text[])
+      LIMIT 1
+    `,
+    [eventId, ["pågår", "betald"]]
+  );
+  if (paidOrPending.rowCount > 0) {
+    const status = paidOrPending.rows[0]?.status;
+    if (status === "betald") {
+      return "Eventet är redan fullt utbetalt och kan inte delutbetalas.";
+    }
+    return "Det finns en pågående utbetalningsbegäran för eventet.";
+  }
+  const partial = await client.query(
+    "SELECT 1 FROM event_payout_disbursements WHERE event_id = $1 LIMIT 1",
+    [eventId]
+  );
+  if (partial.rowCount > 0) {
+    return "Delutbetalning kan endast göras en gång per event.";
+  }
+  return null;
+}
+
+async function getDisbursedByEvent(queryable, eventIds) {
+  const ids = [...new Set((eventIds || []).map((id) => Number(id)).filter(Number.isFinite))];
+  const map = {};
+  ids.forEach((id) => {
+    map[id] = { gross: 0, net: 0, count: 0 };
+  });
+  if (ids.length === 0) {
+    return map;
+  }
+  const result = await queryable.query(
+    `
+      SELECT
+        event_id,
+        COALESCE(SUM(amount), 0)::float AS gross,
+        COALESCE(SUM(net_amount), 0)::float AS net,
+        COUNT(*)::int AS count
+      FROM event_payout_disbursements
+      WHERE event_id = ANY($1::int[])
+      GROUP BY event_id
+    `,
+    [ids]
+  );
+  (result.rows || []).forEach((row) => {
+    map[row.event_id] = {
+      gross: Math.round((Number(row.gross) || 0) * 100) / 100,
+      net: Math.round((Number(row.net) || 0) * 100) / 100,
+      count: Number(row.count) || 0
+    };
+  });
+  return map;
+}
+
+function roundMoney(value) {
+  return Math.round((Number(value) || 0) * 100) / 100;
+}
+
+function computeVatFromInclusiveAmount(inclusiveAmount, vatRatePercent) {
+  const inclusive = roundMoney(inclusiveAmount);
+  if (inclusive <= 0) {
+    return { exclVat: 0, vatAmount: 0, inclusiveAmount: 0 };
+  }
+  const rate = Number(vatRatePercent);
+  if (!Number.isFinite(rate) || rate <= 0) {
+    return { exclVat: inclusive, vatAmount: 0, inclusiveAmount: inclusive };
+  }
+  const vatRate = rate / 100;
+  const vatAmount = roundMoney((inclusive * vatRate) / (1 + vatRate));
+  const exclVat = roundMoney(inclusive - vatAmount);
+  return { exclVat, vatAmount, inclusiveAmount: inclusive };
+}
+
+async function computePayoutReceiptVat(eventIds, inclusiveAmount) {
+  const amount = roundMoney(inclusiveAmount);
+  const ids = [...new Set((eventIds || []).map((id) => Number(id)).filter(Number.isFinite))];
+  if (amount <= 0 || ids.length === 0) {
+    return { vatExempt: false, vatRatePercent: 25, exclVat: 0, vatAmount: 0, inclusiveAmount: amount };
+  }
+  if (ids.length === 1) {
+    const ctx = await getEventVatContext(ids[0]);
+    if (ctx.vatExempt) {
+      return {
+        vatExempt: true,
+        vatRatePercent: ctx.vatRatePercent,
+        exclVat: amount,
+        vatAmount: 0,
+        inclusiveAmount: amount
+      };
+    }
+    const vat = computeVatFromInclusiveAmount(amount, ctx.vatRatePercent);
+    return { vatExempt: false, vatRatePercent: ctx.vatRatePercent, ...vat };
+  }
+  const contexts = await Promise.all(ids.map((id) => getEventVatContext(id)));
+  if (contexts.every((ctx) => ctx.vatExempt)) {
+    return {
+      vatExempt: true,
+      vatRatePercent: contexts[0]?.vatRatePercent ?? 25,
+      exclVat: amount,
+      vatAmount: 0,
+      inclusiveAmount: amount
+    };
+  }
+  const nonExemptRates = [...new Set(contexts.filter((ctx) => !ctx.vatExempt).map((ctx) => ctx.vatRatePercent))];
+  if (nonExemptRates.length === 1) {
+    const vat = computeVatFromInclusiveAmount(amount, nonExemptRates[0]);
+    return { vatExempt: false, vatRatePercent: nonExemptRates[0], ...vat };
+  }
+  let totalVat = 0;
+  let totalExcl = 0;
+  const share = roundMoney(amount / ids.length);
+  let allocated = 0;
+  for (let i = 0; i < ids.length; i += 1) {
+    const slice = i === ids.length - 1 ? roundMoney(amount - allocated) : share;
+    allocated = roundMoney(allocated + slice);
+    const ctx = contexts[i];
+    if (ctx.vatExempt) {
+      totalExcl = roundMoney(totalExcl + slice);
+      continue;
+    }
+    const vat = computeVatFromInclusiveAmount(slice, ctx.vatRatePercent);
+    totalExcl = roundMoney(totalExcl + vat.exclVat);
+    totalVat = roundMoney(totalVat + vat.vatAmount);
+  }
+  return {
+    vatExempt: false,
+    vatRatePercent: null,
+    exclVat: totalExcl,
+    vatAmount: totalVat,
+    inclusiveAmount: amount
+  };
 }
 
 /** Serialiserar utbetalning/återbetalning per event respektive per bokning. */
@@ -3773,6 +3973,7 @@ async function computePayoutRevenueSnapshot(client, eventIds, eventsList) {
     `,
     [eventIds]
   );
+  const disbursedByEvent = await getDisbursedByEvent(client, eventIds);
   const byEvent = {};
   eventsList.filter((e) => eventIds.includes(e.id)).forEach((e) => {
     byEvent[e.id] = { name: e.name, totalRevenue: 0, paidCount: 0 };
@@ -3787,16 +3988,22 @@ async function computePayoutRevenueSnapshot(client, eventIds, eventsList) {
   const eventsWithRevenue = eventIds
     .map((id) => {
       const e = byEvent[id];
-      return e
-        ? {
-            name: e.name,
-            totalRevenue: Math.round(e.totalRevenue * 100) / 100,
-            paidCount: e.paidCount
-          }
-        : null;
+      if (!e) return null;
+      const totalRevenue = roundMoney(e.totalRevenue);
+      const disbursed = disbursedByEvent[id] || { gross: 0, net: 0, count: 0 };
+      const remainingRevenue = roundMoney(Math.max(0, totalRevenue - disbursed.gross));
+      return {
+        name: e.name,
+        totalRevenue,
+        remainingRevenue,
+        disbursedGross: disbursed.gross,
+        disbursedNet: disbursed.net,
+        partialPayoutCount: disbursed.count,
+        paidCount: e.paidCount
+      };
     })
     .filter(Boolean);
-  const grandTotal = Math.round(eventsWithRevenue.reduce((s, e) => s + e.totalRevenue, 0) * 100) / 100;
+  const grandTotal = roundMoney(eventsWithRevenue.reduce((s, e) => s + e.remainingRevenue, 0));
   return { eventsWithRevenue, grandTotal };
 }
 
@@ -4080,9 +4287,10 @@ app.get("/admin/payout-requests", requireAdmin, requireSuperAdmin, async (req, r
         }
       }
     }
+    const disbursedByEvent = await getDisbursedByEvent(pool, allEventIds);
     const today = todayDateStr();
     const rows = rawRows.map((row) => {
-      const eventIds = Array.isArray(row.event_ids) ? row.event_ids : [];
+      const eventIds = Array.isArray(row.event_ids) ? row.event_ids.map(Number) : [];
       const dateParts = eventIds.map((id) => eventDatesMap[id]).filter(Boolean);
       const eventDatesStr = dateParts.length > 0 ? dateParts.join("; ") : "–";
       let anonymizeAvailableFrom = null;
@@ -4100,12 +4308,32 @@ app.get("/admin/payout-requests", requireAdmin, requireSuperAdmin, async (req, r
       const amount = Number(row.amount) || 0;
       const payoutFee = Number(row.payout_fee) || 0;
       const netAmount = row.net_amount != null ? Number(row.net_amount) : amount - payoutFee;
+      const partialDisbursements = eventIds
+        .map((eventId) => {
+          const disbursed = disbursedByEvent[eventId];
+          if (!disbursed || disbursed.count === 0) return null;
+          return {
+            eventId,
+            grossAmount: disbursed.gross,
+            netAmount: disbursed.net
+          };
+        })
+        .filter(Boolean);
+      const partialGrossTotal = roundMoney(
+        partialDisbursements.reduce((sum, item) => sum + (Number(item.grossAmount) || 0), 0)
+      );
+      const partialNetTotal = roundMoney(
+        partialDisbursements.reduce((sum, item) => sum + (Number(item.netAmount) || 0), 0)
+      );
+      const hasPartialPayout = partialDisbursements.length > 0;
+      const status = row.status || "pågår";
       return {
+        kind: "request",
         id: row.id,
         profileId: row.profile_id || "",
         organization: row.organization || "",
         bgNumber: row.bg_number != null ? String(row.bg_number).trim() : "",
-        status: row.status || "pågår",
+        status,
         eventNames: row.event_names || "",
         eventDates: eventDatesStr,
         eventIds,
@@ -4115,10 +4343,88 @@ app.get("/admin/payout-requests", requireAdmin, requireSuperAdmin, async (req, r
         amount,
         payoutFee,
         netAmount,
-        requestedAt: row.requested_at
+        requestedAt: row.requested_at,
+        hasPartialPayout,
+        partialDisbursements,
+        partialGrossTotal,
+        partialNetTotal,
+        isFinalPayout: status === "betald" && hasPartialPayout,
+        combinedNetAmount: roundMoney(partialNetTotal + netAmount)
       };
     });
-    res.json({ ok: true, rows });
+    const coveredEventIds = new Set();
+    rawRows.forEach((row) => {
+      if (row.status === "pågår" || row.status === "betald") {
+        (Array.isArray(row.event_ids) ? row.event_ids : []).forEach((id) => coveredEventIds.add(Number(id)));
+      }
+    });
+    const partialOnlyResult = await pool.query(
+      `
+        SELECT d.id, d.event_id, d.amount, d.payout_fee, d.net_amount, d.created_at,
+               e.name AS event_name, e.event_start_date, e.event_end_date,
+               p.profile_id, p.organization, p.bg_number
+        FROM event_payout_disbursements d
+        INNER JOIN events e ON e.id = d.event_id
+        LEFT JOIN admin_user_profiles p ON p.user_id = d.user_id
+        ORDER BY d.created_at DESC
+      `
+    );
+    const partialOnlyRows = (partialOnlyResult.rows || [])
+      .filter((row) => !coveredEventIds.has(Number(row.event_id)))
+      .map((row) => {
+        const eventId = Number(row.event_id);
+        const start = row.event_start_date ? toDateOnlyString(row.event_start_date) : null;
+        const end = row.event_end_date ? toDateOnlyString(row.event_end_date) : null;
+        const startFmt = start
+          ? new Date(start + "T12:00:00").toLocaleDateString("sv-SE", {
+              day: "numeric",
+              month: "short",
+              year: "numeric"
+            })
+          : "–";
+        const endFmt =
+          end && end !== start
+            ? new Date(end + "T12:00:00").toLocaleDateString("sv-SE", {
+                day: "numeric",
+                month: "short",
+                year: "numeric"
+              })
+            : null;
+        const amount = Number(row.amount) || 0;
+        const payoutFee = Number(row.payout_fee) || 0;
+        const netAmount = row.net_amount != null ? Number(row.net_amount) : amount - payoutFee;
+        return {
+          kind: "partial_only",
+          id: `partial-${row.id}`,
+          disbursementId: row.id,
+          profileId: row.profile_id || "",
+          organization: row.organization || "",
+          bgNumber: row.bg_number != null ? String(row.bg_number).trim() : "",
+          status: "delutbetald",
+          eventNames: row.event_name || "",
+          eventDates: endFmt ? `${startFmt} – ${endFmt}` : startFmt,
+          eventIds: [eventId],
+          anonymizeAvailableFrom: null,
+          canAnonymize: false,
+          isAnonymized: false,
+          amount,
+          payoutFee,
+          netAmount,
+          requestedAt: row.created_at,
+          hasPartialPayout: true,
+          partialDisbursements: [{ eventId, grossAmount: amount, netAmount }],
+          partialGrossTotal: roundMoney(amount),
+          partialNetTotal: roundMoney(netAmount),
+          isFinalPayout: false,
+          combinedNetAmount: roundMoney(netAmount)
+        };
+      });
+    const allRows = [...rows, ...partialOnlyRows].sort((a, b) => {
+      const aTime = a.requestedAt ? new Date(a.requestedAt).getTime() : 0;
+      const bTime = b.requestedAt ? new Date(b.requestedAt).getTime() : 0;
+      return bTime - aTime;
+    });
+    res.json({ ok: true, rows: allRows });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to load payout requests" });
   }
@@ -4138,6 +4444,7 @@ app.patch("/admin/payout-requests/:id", requireAdmin, requireSuperAdmin, async (
       `SELECT pr.id,
               pr.user_id,
               pr.organization,
+              pr.event_ids,
               pr.event_names,
               pr.amount,
               pr.net_amount,
@@ -4164,6 +4471,17 @@ app.patch("/admin/payout-requests/:id", requireAdmin, requireSuperAdmin, async (
 
     const payoutRow = payoutResult.rows[0];
     const recipientEmail = (payoutRow.email || "").trim();
+    const payoutEventIds = Array.isArray(payoutRow.event_ids) ? payoutRow.event_ids.map(Number) : [];
+    const partialRowsResult =
+      payoutEventIds.length > 0
+        ? await pool.query(
+            "SELECT net_amount FROM event_payout_disbursements WHERE event_id = ANY($1::int[])",
+            [payoutEventIds]
+          )
+        : { rows: [] };
+    const priorPartialNet = roundMoney(
+      (partialRowsResult.rows || []).reduce((sum, item) => sum + (Number(item.net_amount) || 0), 0)
+    );
 
     if (resend && RESEND_FROM && recipientEmail) {
       const fullName = [payoutRow.first_name, payoutRow.last_name].filter(Boolean).join(" ");
@@ -4173,15 +4491,24 @@ app.patch("/admin/payout-requests/:id", requireAdmin, requireSuperAdmin, async (
         (payoutRow.net_amount != null ? Number(payoutRow.net_amount) : Number(payoutRow.amount)) ||
         0;
       const eventsText = payoutRow.event_names || "";
+      const isFinalPayout = priorPartialNet > 0;
 
       const lines = [
         `Hej ${displayName},`,
         "",
-        "Din begäran om utbetalning har nu markerats som utbetald av administratör.",
-        amount > 0 ? `Belopp: ${amount.toFixed(2)} SEK` : null,
+        isFinalPayout
+          ? "Din slututbetalning har nu markerats som utbetald av administratör. Eventet är därmed fullt utbetalt."
+          : "Din begäran om utbetalning har nu markerats som utbetald av administratör.",
+        isFinalPayout && priorPartialNet > 0
+          ? `Tidigare delutbetalning: ${priorPartialNet.toFixed(2)} SEK`
+          : null,
+        amount > 0
+          ? `${isFinalPayout ? "Slututbetalning" : "Belopp"}: ${amount.toFixed(2)} SEK`
+          : null,
+        isFinalPayout ? `Totalt utbetalt: ${roundMoney(priorPartialNet + amount).toFixed(2)} SEK` : null,
         eventsText ? `Gäller följande event: ${eventsText}` : null,
         "",
-        "Utbetalning är på väg och ett utbetalningskvitto finns att ladda ner under menyn Utbetalningar i Kyrkevent.",
+        "Utbetalning är på väg och kvitton finns att ladda ner under menyn Utbetalningar i Kyrkevent.",
         "",
         "Vänliga hälsningar,",
         "Kyrkevent.se"
@@ -4529,26 +4856,71 @@ app.delete("/admin/profiles/:profileId", requireAdmin, requireSuperAdmin, async 
 
 app.get("/admin/my-payout-requests", requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
-      "SELECT id, status, event_ids, event_names, amount, payout_fee, net_amount, requested_at FROM payout_requests WHERE user_id = $1 ORDER BY requested_at DESC",
-      [req.userId]
+    const [requestsResult, disbursementsResult] = await Promise.all([
+      pool.query(
+        "SELECT id, status, event_ids, event_names, amount, payout_fee, net_amount, requested_at FROM payout_requests WHERE user_id = $1 ORDER BY requested_at DESC",
+        [req.userId]
+      ),
+      pool.query(
+        `
+          SELECT d.id, d.event_id, d.amount, d.payout_fee, d.net_amount, d.created_at, e.name AS event_name
+          FROM event_payout_disbursements d
+          INNER JOIN events e ON e.id = d.event_id
+          WHERE d.user_id = $1
+          ORDER BY d.created_at DESC
+        `,
+        [req.userId]
+      )
+    ]);
+    const paidEventIds = new Set(
+      (requestsResult.rows || [])
+        .filter((row) => row.status === "betald")
+        .flatMap((row) => (Array.isArray(row.event_ids) ? row.event_ids : []))
+        .map((id) => Number(id))
+        .filter(Number.isFinite)
     );
-    const rows = (result.rows || []).map((row) => {
+    const disbursements = (disbursementsResult.rows || []).map((row) => ({
+      id: row.id,
+      kind: "partial",
+      status: paidEventIds.has(Number(row.event_id)) ? "ingar_i_utbetalning" : "delutbetald",
+      eventId: row.event_id,
+      eventNames: row.event_name || "",
+      amount: Number(row.amount) || 0,
+      payoutFee: Number(row.payout_fee) || 0,
+      netAmount: Number(row.net_amount) || 0,
+      requestedAt: row.created_at,
+      eventFullyPaid: paidEventIds.has(Number(row.event_id))
+    }));
+    const disbursementsByEventId = new Map(
+      disbursements.map((row) => [Number(row.eventId), row])
+    );
+    const rows = (requestsResult.rows || []).map((row) => {
       const amount = Number(row.amount) || 0;
       const payoutFee = Number(row.payout_fee) || 0;
       const netAmount = row.net_amount != null ? Number(row.net_amount) : amount - payoutFee;
+      const eventIds = Array.isArray(row.event_ids) ? row.event_ids : [];
+      const partialDisbursements = eventIds
+        .map((eventId) => disbursementsByEventId.get(Number(eventId)))
+        .filter(Boolean);
+      const partialNetTotal = roundMoney(
+        partialDisbursements.reduce((sum, item) => sum + (Number(item.netAmount) || 0), 0)
+      );
       return {
         id: row.id,
+        kind: "request",
         status: row.status || "pågår",
-        eventIds: Array.isArray(row.event_ids) ? row.event_ids : [],
+        eventIds,
         eventNames: row.event_names || "",
         amount,
         payoutFee,
         netAmount,
-        requestedAt: row.requested_at
+        requestedAt: row.requested_at,
+        partialDisbursements,
+        isFinalPayout: row.status === "betald" && partialDisbursements.length > 0,
+        combinedNetAmount: roundMoney(partialNetTotal + netAmount)
       };
     });
-    res.json({ ok: true, rows });
+    res.json({ ok: true, rows, disbursements });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to load payout requests" });
   }
@@ -4634,6 +5006,399 @@ app.post("/admin/events/:eventId/anonymize-bookings", requireAdmin, async (req, 
   }
 });
 
+app.get("/admin/partial-payout-candidates", requireAdmin, requireSuperAdmin, async (req, res) => {
+  try {
+    const eventsResult = await pool.query(
+      `
+        SELECT e.id, e.name, e.user_id, e.event_start_date, e.event_end_date,
+               p.organization, p.profile_id, p.bg_number
+        FROM events e
+        LEFT JOIN admin_user_profiles p ON p.user_id = e.user_id
+        ORDER BY e.name ASC
+      `
+    );
+    const events = eventsResult.rows || [];
+    const eventIds = events.map((e) => e.id);
+    if (eventIds.length === 0) {
+      return res.json({ ok: true, rows: [] });
+    }
+    const [bookingsResult, disbursedByEvent, paidPayoutEventIds, activePayoutEventIds] = await Promise.all([
+      pool.query(
+        "SELECT event_id, pris, refund_amount, payment_status FROM bookings WHERE payment_status IN ('paid', 'refunded') AND event_id = ANY($1::int[])",
+        [eventIds]
+      ),
+      getDisbursedByEvent(pool, eventIds),
+      getPaidPayoutEventIds(pool, eventIds),
+      getActivePayoutRequestEventIds(pool, eventIds)
+    ]);
+    const revenueByEvent = {};
+    eventIds.forEach((id) => {
+      revenueByEvent[id] = 0;
+    });
+    (bookingsResult.rows || []).forEach((row) => {
+      const rev = getBookingNetTicketRevenue(row);
+      if (rev > 0 && revenueByEvent[row.event_id] != null) {
+        revenueByEvent[row.event_id] += rev;
+      }
+    });
+    const today = todayDateStr();
+    const rows = events
+      .map((e) => {
+        const totalRevenue = roundMoney(revenueByEvent[e.id] || 0);
+        const disbursed = disbursedByEvent[e.id] || { gross: 0, net: 0, count: 0 };
+        const remainingRevenue = roundMoney(Math.max(0, totalRevenue - disbursed.gross));
+        const endDate = toDateOnlyString(e.event_end_date ?? e.event_start_date);
+        const eventCompleted = endDate ? endDate <= today : false;
+        const maxPartialGross = computePartialPayoutMaxGross(totalRevenue);
+        return {
+          eventId: e.id,
+          eventName: e.name,
+          organization: e.organization || "",
+          profileId: e.profile_id || "",
+          bgNumber: e.bg_number || "",
+          totalRevenue,
+          disbursedGross: disbursed.gross,
+          remainingRevenue,
+          maxPartialGross,
+          partialPayoutMaxPercent: PARTIAL_PAYOUT_MAX_PERCENT,
+          partialPayoutCount: disbursed.count,
+          eventCompleted,
+          endDate
+        };
+      })
+      .filter(
+        (row) =>
+          !row.eventCompleted &&
+          row.remainingRevenue > 0.009 &&
+          row.partialPayoutCount === 0 &&
+          !paidPayoutEventIds.has(row.eventId) &&
+          !activePayoutEventIds.has(row.eventId)
+      );
+    res.json({ ok: true, rows });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Failed to load partial payout candidates" });
+  }
+});
+
+app.post("/admin/events/:eventId/partial-payout", requireAdmin, requireSuperAdmin, async (req, res) => {
+  const eventId = parseInt(req.params.eventId, 10);
+  if (!Number.isInteger(eventId) || eventId < 1) {
+    return res.status(400).json({ ok: false, error: "Ogiltigt event-id." });
+  }
+  const grossAmount = roundMoney(req.body?.amount);
+  const note = String(req.body?.note || "").trim().slice(0, 500);
+  if (!Number.isFinite(grossAmount) || grossAmount <= 0) {
+    return res.status(400).json({ ok: false, error: "Ange ett giltigt belopp större än 0." });
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await acquirePayoutEventAdvisoryLocks(client, [eventId]);
+    const eventResult = await client.query(
+      `
+        SELECT e.id, e.name, e.user_id, e.event_start_date, e.event_end_date,
+               p.organization, p.email, p.first_name, p.last_name
+        FROM events e
+        LEFT JOIN admin_user_profiles p ON p.user_id = e.user_id
+        WHERE e.id = $1
+      `,
+      [eventId]
+    );
+    if (eventResult.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ ok: false, error: "Eventet hittades inte." });
+    }
+    const event = eventResult.rows[0];
+    const eventEndDate = toDateOnlyString(event.event_end_date ?? event.event_start_date);
+    if (eventEndDate && eventEndDate <= todayDateStr()) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({
+        ok: false,
+        error: "Delutbetalning kan endast göras för pågående event. Avslutade event utbetalas i sin helhet."
+      });
+    }
+    const partialBlockReason = await assertCanCreatePartialPayout(client, eventId);
+    if (partialBlockReason) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ ok: false, error: partialBlockReason });
+    }
+    const revenue = await computePayoutRevenueSnapshot(client, [eventId], [{ id: eventId, name: event.name }]);
+    const snapshot = revenue.eventsWithRevenue[0];
+    const totalRevenue = snapshot?.totalRevenue ?? 0;
+    const remaining = snapshot?.remainingRevenue ?? 0;
+    const maxPartialGross = computePartialPayoutMaxGross(totalRevenue);
+    if (remaining <= 0.009) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ ok: false, error: "Det finns inget kvar att delutbetala för detta event." });
+    }
+    if (maxPartialGross <= 0.009) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ ok: false, error: "Eventet har inga intäkter att delutbetala." });
+    }
+    if (grossAmount > maxPartialGross + 0.009) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({
+        ok: false,
+        error: `Delutbetalning får högst vara ${PARTIAL_PAYOUT_MAX_PERCENT}% av intäkterna (max ${maxPartialGross.toFixed(2)} SEK).`
+      });
+    }
+    if (grossAmount > remaining + 0.009) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({
+        ok: false,
+        error: `Beloppet överstiger kvarvarande intäkter (${remaining.toFixed(2)} SEK).`
+      });
+    }
+    const { fee: payoutFee, net: netAmount } = computePayoutFee(grossAmount);
+    const insertResult = await client.query(
+      `
+        INSERT INTO event_payout_disbursements (
+          event_id, user_id, is_partial, amount, payout_fee, net_amount, note, created_by_admin_id
+        )
+        VALUES ($1, $2, TRUE, $3, $4, $5, $6, $7)
+        RETURNING id, created_at
+      `,
+      [eventId, event.user_id, grossAmount, payoutFee, netAmount, note, req.userId]
+    );
+    await client.query("COMMIT");
+    const disbursement = insertResult.rows[0];
+    const recipientEmail = (event.email || "").trim();
+    if (resend && RESEND_FROM && recipientEmail) {
+      const displayName = [event.first_name, event.last_name].filter(Boolean).join(" ") || event.organization || "kund";
+      const lines = [
+        `Hej ${displayName},`,
+        "",
+        `En delutbetalning på ${netAmount.toFixed(2)} SEK har registrerats för eventet "${event.name}".`,
+        `Bruttobelopp: ${grossAmount.toFixed(2)} SEK`,
+        payoutFee > 0 ? `Avgift: ${payoutFee.toFixed(2)} SEK` : null,
+        `Kvar att utbetala: ${roundMoney(remaining - grossAmount).toFixed(2)} SEK`,
+        "",
+        "Logga in på Kyrkevent och gå till Utbetalning för att ladda ner delutbetalningskvitto.",
+        "",
+        "Med vänlig hälsning,",
+        "Lonetec AB / Kyrkevent"
+      ].filter(Boolean);
+      try {
+        await resend.emails.send({
+          from: RESEND_FROM,
+          to: recipientEmail,
+          subject: `Delutbetalning registrerad – ${event.name}`,
+          text: lines.join("\n"),
+          html: lines.join("<br>")
+        });
+      } catch (emailError) {
+        console.error("Partial payout saved but email failed:", emailError);
+      }
+    }
+    res.json({
+      ok: true,
+      disbursement: {
+        id: disbursement.id,
+        eventId,
+        eventName: event.name,
+        amount: grossAmount,
+        payoutFee,
+        netAmount,
+        remainingRevenue: roundMoney(remaining - grossAmount),
+        createdAt: disbursement.created_at
+      }
+    });
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("POST partial-payout error:", error);
+    res.status(500).json({ ok: false, error: "Kunde inte registrera delutbetalning." });
+  } finally {
+    client.release();
+  }
+});
+
+function writePayoutReceiptPdf(doc, {
+  title,
+  receiptId,
+  receiptLabel,
+  organization,
+  orgNumber,
+  eventNames,
+  bookingCount,
+  eventDates,
+  paidAt,
+  netAmount,
+  grossAmount,
+  payoutFee,
+  isPartial,
+  isFinalPayout,
+  remainingRevenue,
+  priorPartialNet,
+  priorPartialGross,
+  combinedNetAmount,
+  vatExempt,
+  vatRatePercent,
+  vatExclAmount,
+  vatAmount,
+  vatInclusiveAmount
+}) {
+  const isVatExempt = vatExempt === true;
+  const logoPath = path.resolve(__dirname, "..", "..", "frontend", "public", "kyrkevent2.png");
+  if (fs.existsSync(logoPath)) {
+    doc.image(logoPath, 50, 50, { width: 120 });
+    doc.y = 50 + 55;
+    doc.moveDown(1);
+  }
+  doc.fontSize(20).text(title, { continued: false });
+  doc.moveDown();
+  doc.fontSize(11);
+  doc.text(`${receiptLabel}: ${receiptId}`);
+  doc.moveDown(0.5);
+  doc.text("Utbetalande organisation: Lonetec AB");
+  doc.text("Organisationsnummer: 556907-4189");
+  doc.text(`Mottagande organisation: ${organization || "–"}`);
+  if (orgNumber) {
+    doc.text(`Organisationsnummer (mottagare): ${orgNumber}`);
+  }
+  doc.moveDown(0.5);
+  doc.text(`Event: ${eventNames || "–"}`);
+  doc.text(`Antal bokningar: ${bookingCount}`);
+  doc.text("Betalmetod: online (swish/kort)");
+  if (eventDates.length > 0) {
+    doc.text("Eventdatum: " + eventDates.join("; "));
+  }
+  doc.text(
+    `Datum för utbetalning: ${paidAt ? new Date(paidAt).toLocaleString("sv-SE", { dateStyle: "medium", timeStyle: "short" }) : "–"}`
+  );
+  if (isPartial) {
+    doc.text("Typ: Delutbetalning");
+    if (grossAmount != null) {
+      doc.text(`Bruttobelopp (del): ${Number(grossAmount).toFixed(2)} SEK`);
+    }
+    if (payoutFee > 0) {
+      doc.text(`Avgift: ${Number(payoutFee).toFixed(2)} SEK`);
+    }
+    if (remainingRevenue != null) {
+      doc.text(`Kvar att utbetala: ${Number(remainingRevenue).toFixed(2)} SEK`);
+    }
+  } else if (isFinalPayout) {
+    doc.text("Typ: Slututbetalning");
+    if (priorPartialGross != null && Number(priorPartialGross) > 0) {
+      doc.text(`Tidigare delutbetalning: ${Number(priorPartialNet || 0).toFixed(2)} SEK (netto)`);
+    }
+    if (grossAmount != null) {
+      doc.text(`Bruttobelopp (slut): ${Number(grossAmount).toFixed(2)} SEK`);
+    }
+    if (payoutFee > 0) {
+      doc.text(`Avgift (slut): ${Number(payoutFee).toFixed(2)} SEK`);
+    }
+  }
+  doc.moveDown(0.5);
+  if (isFinalPayout && combinedNetAmount != null) {
+    doc.text(`Utbetalt belopp (denna utbetalning): ${Number(netAmount).toFixed(2)} SEK`);
+    doc.text(`Totalt utbetalt inkl. delutbetalning: ${Number(combinedNetAmount).toFixed(2)} SEK`);
+  } else {
+    doc.text(`Utbetalt belopp: ${Number(netAmount).toFixed(2)} SEK`);
+  }
+  doc.moveDown(0.5);
+  if (isVatExempt) {
+    doc.text("Moms: Ingen moms utgår (momsbefriad verksamhet)");
+  } else {
+    const vatLabel = vatRatePercent != null ? `${vatRatePercent}%` : "blandade satser";
+    doc.text(`Belopp exkl. moms: ${Number(vatExclAmount || 0).toFixed(2)} SEK`);
+    doc.text(`Moms (${vatLabel}): ${Number(vatAmount || 0).toFixed(2)} SEK`);
+    doc.text(`Belopp inkl. moms: ${Number(vatInclusiveAmount || 0).toFixed(2)} SEK`);
+  }
+  doc.moveDown();
+  doc.fontSize(9).fillColor("#666");
+  doc.text("Kontakt: kontakt@lonetec.se", { continued: false });
+  doc.text(`Lonetec AB - bokning - ${isPartial ? "delutbetalningskvitto" : "utbetalningskvitto"}`, {
+    continued: false
+  });
+}
+
+app.get("/admin/payout-disbursements/:id/receipt.pdf", requireAdmin, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id) || id < 1) {
+      return res.status(400).json({ ok: false, error: "Ogiltigt id" });
+    }
+    const result = await pool.query(
+      `
+        SELECT d.id, d.event_id, d.user_id, d.amount, d.payout_fee, d.net_amount, d.created_at,
+               e.name AS event_name, e.event_start_date, e.event_end_date
+        FROM event_payout_disbursements d
+        INNER JOIN events e ON e.id = d.event_id
+        WHERE d.id = $1
+      `,
+      [id]
+    );
+    const row = result.rows[0];
+    if (!row) {
+      return res.status(404).json({ ok: false, error: "Delutbetalningskvitto hittades inte." });
+    }
+    if (row.user_id !== req.userId) {
+      const adminRow = await pool.query("SELECT username FROM admin_users WHERE id = $1", [req.userId]);
+      const username = (adminRow.rows[0]?.username || "").toLowerCase();
+      if (username !== "admin") {
+        return res.status(403).json({ ok: false, error: "Du har inte behörighet att hämta detta kvitto." });
+      }
+    }
+    const [profileResult, bookingCountResult, disbursedMap] = await Promise.all([
+      pool.query(
+        "SELECT organization, org_number, COALESCE(vat_exempt, false) AS vat_exempt FROM admin_user_profiles WHERE user_id = $1",
+        [row.user_id]
+      ),
+      pool.query(
+        "SELECT id, pris, refund_amount, payment_status FROM bookings WHERE event_id = $1 AND payment_status IN ('paid', 'refunded')",
+        [row.event_id]
+      ),
+      getDisbursedByEvent(pool, [row.event_id])
+    ]);
+    const profile = profileResult.rows[0] || {};
+    const bookingCount = (bookingCountResult.rows || []).filter((r) => getBookingNetTicketRevenue(r) > 0).length;
+    const totalRevenue = roundMoney(
+      (bookingCountResult.rows || []).reduce((sum, r) => sum + Math.max(0, getBookingNetTicketRevenue(r)), 0)
+    );
+    const disbursedGross = disbursedMap[row.event_id]?.gross ?? 0;
+    const remainingRevenue = roundMoney(Math.max(0, totalRevenue - disbursedGross));
+    const start = row.event_start_date ? new Date(row.event_start_date).toLocaleDateString("sv-SE") : "–";
+    const end = row.event_end_date ? new Date(row.event_end_date).toLocaleDateString("sv-SE") : null;
+    const eventDates = [end && end !== start ? `${row.event_name}: ${start} – ${end}` : `${row.event_name}: ${start}`];
+    const netAmount = Number(row.net_amount) || 0;
+    const grossAmount = Number(row.amount) || 0;
+    const vatInclusiveAmount = grossAmount > 0 ? grossAmount : netAmount;
+    const payoutVat = await computePayoutReceiptVat([row.event_id], vatInclusiveAmount);
+    const filename = `delutbetalningskvitto-${id}.pdf`;
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    const doc = new PDFDocument({ margin: 50 });
+    doc.pipe(res);
+    writePayoutReceiptPdf(doc, {
+      title: "Delutbetalningskvitto",
+      receiptId: id,
+      receiptLabel: "Kvittonummer",
+      organization: profile.organization,
+      orgNumber:
+        profile.org_number != null && String(profile.org_number).trim() !== ""
+          ? String(profile.org_number).trim()
+          : "",
+      eventNames: row.event_name,
+      bookingCount,
+      eventDates,
+      paidAt: row.created_at,
+      netAmount,
+      grossAmount,
+      payoutFee: Number(row.payout_fee) || 0,
+      isPartial: true,
+      remainingRevenue,
+      vatExempt: payoutVat.vatExempt,
+      vatRatePercent: payoutVat.vatRatePercent,
+      vatExclAmount: payoutVat.exclVat,
+      vatAmount: payoutVat.vatAmount,
+      vatInclusiveAmount: payoutVat.inclusiveAmount
+    });
+    doc.end();
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Kunde inte skapa delutbetalningskvitto." });
+  }
+});
+
 app.get("/admin/payout-requests/:id/receipt.pdf", requireAdmin, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
@@ -4657,7 +5422,7 @@ app.get("/admin/payout-requests/:id/receipt.pdf", requireAdmin, async (req, res)
       }
     }
     const eventIds = Array.isArray(row.event_ids) ? row.event_ids : [];
-    const [profileResult, bookingCountResult, eventDatesResult] = await Promise.all([
+    const [profileResult, bookingCountResult, eventDatesResult, partialRowsResult] = await Promise.all([
       pool.query(
         "SELECT organization, org_number, COALESCE(vat_exempt, false) AS vat_exempt FROM admin_user_profiles WHERE user_id = $1",
         [ownerId]
@@ -4673,6 +5438,12 @@ app.get("/admin/payout-requests/:id/receipt.pdf", requireAdmin, async (req, res)
             "SELECT name, event_start_date, event_end_date FROM events WHERE id = ANY($1::int[]) ORDER BY event_start_date",
             [eventIds]
           )
+        : { rows: [] },
+      eventIds.length > 0
+        ? pool.query(
+            "SELECT amount, net_amount FROM event_payout_disbursements WHERE event_id = ANY($1::int[])",
+            [eventIds]
+          )
         : { rows: [] }
     ]);
     const profile = profileResult.rows[0] || {};
@@ -4682,57 +5453,59 @@ app.get("/admin/payout-requests/:id/receipt.pdf", requireAdmin, async (req, res)
       const end = e.event_end_date ? new Date(e.event_end_date).toLocaleDateString("sv-SE") : null;
       return end && end !== start ? `${e.name || "Event"}: ${start} – ${end}` : `${e.name || "Event"}: ${start}`;
     });
+    const priorPartialGross = roundMoney(
+      (partialRowsResult.rows || []).reduce((sum, item) => sum + (Number(item.amount) || 0), 0)
+    );
+    const priorPartialNet = roundMoney(
+      (partialRowsResult.rows || []).reduce((sum, item) => sum + (Number(item.net_amount) || 0), 0)
+    );
     const totalAmount = row.net_amount != null ? Number(row.net_amount) : Number(row.amount || 0);
-    const vatExempt = profile.vat_exempt === true;
-    const vatRate = 0.25;
-    const vatAmount = !vatExempt ? (totalAmount / (1 + vatRate)) * vatRate : 0;
-    const filename = `utbetalningskvitto-${id}.pdf`;
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    const doc = new PDFDocument({ margin: 50 });
-    doc.pipe(res);
-    const logoPath = path.resolve(__dirname, "..", "..", "frontend", "public", "kyrkevent2.png");
-    if (fs.existsSync(logoPath)) {
-      doc.image(logoPath, 50, 50, { width: 120 });
-      doc.y = 50 + 55;
-      doc.moveDown(1);
-    }
-    doc.fontSize(20).text("Utbetalningskvitto", { continued: false });
-    doc.moveDown();
-    doc.fontSize(11);
-    doc.text(`Kvittonummer: ${row.id}`);
-    doc.moveDown(0.5);
-    doc.text("Utbetalande organisation: Lonetec AB");
-    doc.text(`Organisationsnummer: 556907-4189`);
-    doc.text(`Mottagande organisation: ${row.organization || profile.organization || "–"}`);
+    const finalGrossAmount = Number(row.amount) || 0;
+    const isFinalPayout = priorPartialNet > 0;
+    const combinedNetAmount = roundMoney(priorPartialNet + totalAmount);
+    const combinedGrossAmount = roundMoney(priorPartialGross + finalGrossAmount);
+    const vatInclusiveAmount = isFinalPayout
+      ? combinedGrossAmount
+      : finalGrossAmount > 0
+        ? finalGrossAmount
+        : totalAmount;
+    const payoutVat = await computePayoutReceiptVat(eventIds, vatInclusiveAmount);
     const orgNumberValue =
       (row.org_number != null && String(row.org_number).trim() !== "")
         ? String(row.org_number).trim()
         : (profile.org_number != null && String(profile.org_number).trim() !== "")
           ? String(profile.org_number).trim()
-          : "–";
-
-    doc.moveDown(0.5);
-    doc.text(`Event: ${row.event_names || "–"}`);
-    doc.text(`Antal bokningar: ${bookingCount}`);
-    doc.text(`Betalmetod: online (swish/kort)`);
-    if (eventDates.length > 0) {
-      doc.text("Eventdatum: " + eventDates.join("; "));
-    }
-    doc.text(
-      `Datum för utbetalning: ${row.requested_at ? new Date(row.requested_at).toLocaleString("sv-SE", { dateStyle: "medium", timeStyle: "short" }) : "–"}`
-    );
-    doc.moveDown(0.5);
-    doc.text(`Totalbelopp: ${totalAmount.toFixed(2)} SEK`);
-    if (vatExempt) {
-      doc.text("Moms: Ingen moms utgår (momsbefriad verksamhet)");
-    } else {
-      doc.text(`Moms 25%: ${vatAmount.toFixed(2)} SEK`);
-    }
-    doc.moveDown();
-    doc.fontSize(9).fillColor("#666");
-    doc.text("Kontakt: kontakt@lonetec.se", { continued: false });
-    doc.text("Lonetec AB - bokning - utbetalningskvitto", { continued: false });
+          : "";
+    const filename = `utbetalningskvitto-${id}.pdf`;
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    const doc = new PDFDocument({ margin: 50 });
+    doc.pipe(res);
+    writePayoutReceiptPdf(doc, {
+      title: isFinalPayout ? "Utbetalningskvitto (slututbetalning)" : "Utbetalningskvitto",
+      receiptId: id,
+      receiptLabel: "Kvittonummer",
+      organization: row.organization || profile.organization,
+      orgNumber: orgNumberValue,
+      eventNames: row.event_names,
+      bookingCount,
+      eventDates,
+      paidAt: row.requested_at,
+      netAmount: totalAmount,
+      payoutFee: Number(row.payout_fee) || 0,
+      grossAmount: finalGrossAmount,
+      isPartial: false,
+      isFinalPayout,
+      remainingRevenue: null,
+      priorPartialNet,
+      priorPartialGross,
+      combinedNetAmount: isFinalPayout ? combinedNetAmount : null,
+      vatExempt: payoutVat.vatExempt,
+      vatRatePercent: payoutVat.vatRatePercent,
+      vatExclAmount: payoutVat.exclVat,
+      vatAmount: payoutVat.vatAmount,
+      vatInclusiveAmount: payoutVat.inclusiveAmount
+    });
     doc.end();
   } catch (error) {
     res.status(500).json({ ok: false, error: "Kunde inte skapa kvitto." });
@@ -7705,6 +8478,24 @@ const ensureBookingsTable = async () => {
   await pool.query("ALTER TABLE payout_requests ADD COLUMN IF NOT EXISTS org_number TEXT NOT NULL DEFAULT ''");
   await pool.query("ALTER TABLE payout_requests ADD COLUMN IF NOT EXISTS payout_fee NUMERIC(12, 2) NOT NULL DEFAULT 0");
   await pool.query("ALTER TABLE payout_requests ADD COLUMN IF NOT EXISTS net_amount NUMERIC(12, 2)");
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS event_payout_disbursements (
+      id SERIAL PRIMARY KEY,
+      event_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      is_partial BOOLEAN NOT NULL DEFAULT TRUE,
+      amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
+      payout_fee NUMERIC(12, 2) NOT NULL DEFAULT 0,
+      net_amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
+      note TEXT NOT NULL DEFAULT '',
+      created_by_admin_id INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_event_payout_disbursements_event
+      ON event_payout_disbursements (event_id, created_at DESC)
+  `);
 
   if (defaultEventId) {
     await pool.query("UPDATE bookings SET event_id = $1 WHERE event_id IS NULL", [

@@ -2011,6 +2011,7 @@ const AdminPage = () => {
   const [payoutTermsAccepted, setPayoutTermsAccepted] = useState(false);
   const [payoutLoading, setPayoutLoading] = useState(false);
   const [myPayoutRequests, setMyPayoutRequests] = useState([]);
+  const [myPayoutDisbursements, setMyPayoutDisbursements] = useState([]);
   const [payoutMessage, setPayoutMessage] = useState("");
   const [showPayoutTermsToaster, setShowPayoutTermsToaster] = useState(false);
   const [anonymizeEligibleEvents, setAnonymizeEligibleEvents] = useState([]);
@@ -2043,6 +2044,11 @@ const AdminPage = () => {
   const [adminPayoutRequestsPageSize, setAdminPayoutRequestsPageSize] = useState(10);
   const [adminPayoutRequestsPage, setAdminPayoutRequestsPage] = useState(1);
   const [adminPayoutAnonymizeInProgressId, setAdminPayoutAnonymizeInProgressId] = useState(null);
+  const [adminPartialCandidates, setAdminPartialCandidates] = useState([]);
+  const [adminPartialCandidatesLoading, setAdminPartialCandidatesLoading] = useState(false);
+  const [adminPartialForm, setAdminPartialForm] = useState({ eventId: "", amount: "" });
+  const [adminPartialSubmitting, setAdminPartialSubmitting] = useState(false);
+  const [adminPartialMessage, setAdminPartialMessage] = useState("");
   const [adminAnonymizeConfirmRequestId, setAdminAnonymizeConfirmRequestId] = useState(null);
   const [adminOrganizations, setAdminOrganizations] = useState([]);
   const [adminOrganizationsLoading, setAdminOrganizationsLoading] = useState(false);
@@ -2162,18 +2168,30 @@ const AdminPage = () => {
   }, [adminEventLinks]);
   const payoutEventsToShow = useMemo(
     () =>
-      (payoutSummary.events || []).filter((ev) => !payoutEventIdsWithPaidRequest.has(ev.id)),
+      (payoutSummary.events || []).filter((ev) => {
+        if (payoutEventIdsWithPaidRequest.has(ev.id)) return false;
+        const remaining = Number(ev.remainingRevenue ?? ev.totalRevenue) || 0;
+        return remaining > 0.009;
+      }),
     [payoutSummary.events, payoutEventIdsWithPaidRequest]
   );
   const payoutTotals = useMemo(() => {
     const selected = payoutEventsToShow.filter((e) => payoutSelectedEventIds.includes(e.id));
-    const selectedSum = selected.reduce((s, e) => s + e.totalRevenue, 0);
+    const selectedSum = selected.reduce(
+      (s, e) => s + (Number(e.remainingRevenue ?? e.totalRevenue) || 0),
+      0
+    );
     const threshold = payoutSummary.payoutFeeThreshold ?? 500;
     const feeAmount = payoutSummary.payoutFeeAmount ?? 50;
     const fee = selectedSum > threshold ? feeAmount : 0;
     const net = Math.round((selectedSum - fee) * 100) / 100;
     return { selectedSum, fee, net };
   }, [payoutEventsToShow, payoutSelectedEventIds, payoutSummary.payoutFeeThreshold, payoutSummary.payoutFeeAmount]);
+  const adminPartialSelectedCandidate = useMemo(
+    () => adminPartialCandidates.find((row) => String(row.eventId) === adminPartialForm.eventId) || null,
+    [adminPartialCandidates, adminPartialForm.eventId]
+  );
+  const adminPartialMaxGross = adminPartialSelectedCandidate?.maxPartialGross ?? null;
 
   const fetchCompanyByOrgNumber = async () => {
     const nr = (profileForm.orgNumber || "").toString().trim().replace(/\D/g, "");
@@ -2506,8 +2524,106 @@ const AdminPage = () => {
       if (!response.ok) throw new Error("Failed");
       const data = await response.json();
       setMyPayoutRequests(data.rows || []);
+      setMyPayoutDisbursements(data.disbursements || []);
     } catch {
       setMyPayoutRequests([]);
+      setMyPayoutDisbursements([]);
+    }
+  };
+
+  const loadAdminPartialCandidates = async () => {
+    if (!token) return;
+    setAdminPartialCandidatesLoading(true);
+    try {
+      const response = await fetch(`${API_BASE}/admin/partial-payout-candidates`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Kunde inte ladda event.");
+      setAdminPartialCandidates(data.rows || []);
+    } catch {
+      setAdminPartialCandidates([]);
+    } finally {
+      setAdminPartialCandidatesLoading(false);
+    }
+  };
+
+  const downloadPayoutReceipt = async (kind, id, filenamePrefix) => {
+    if (!token) return;
+    const url =
+      kind === "partial"
+        ? `${API_BASE}/admin/payout-disbursements/${id}/receipt.pdf`
+        : `${API_BASE}/admin/payout-requests/${id}/receipt.pdf`;
+    const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!response.ok) throw new Error("Kunde inte hämta kvitto");
+    const blob = await response.blob();
+    const blobUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = blobUrl;
+    link.download = `${filenamePrefix}-${id}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(blobUrl);
+  };
+
+  const handleAdminPartialPayout = async (event) => {
+    event.preventDefault();
+    if (!token || !adminPartialForm.eventId) return;
+    const amount = Number(String(adminPartialForm.amount).replace(",", "."));
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setAdminPartialMessage("Ange ett giltigt belopp.");
+      return;
+    }
+    const selectedCandidate = adminPartialCandidates.find(
+      (row) => String(row.eventId) === adminPartialForm.eventId
+    );
+    if (selectedCandidate?.maxPartialGross != null && amount > selectedCandidate.maxPartialGross + 0.009) {
+      setAdminPartialMessage(
+        `Delutbetalning får högst vara ${selectedCandidate.partialPayoutMaxPercent ?? 70}% av intäkterna (max ${selectedCandidate.maxPartialGross.toLocaleString("sv-SE", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2
+        })} SEK).`
+      );
+      return;
+    }
+    setAdminPartialSubmitting(true);
+    setAdminPartialMessage("");
+    try {
+      const response = await fetch(
+        `${API_BASE}/admin/events/${adminPartialForm.eventId}/partial-payout`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`
+          },
+          body: JSON.stringify({ amount })
+        }
+      );
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "Kunde inte registrera delutbetalning.");
+      }
+      setAdminPartialMessage(
+        `Delutbetalning registrerad: ${Number(data.disbursement?.netAmount || 0).toLocaleString("sv-SE", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2
+        })} SEK utbetalt.`
+      );
+      setAdminPartialForm({ eventId: "", amount: "" });
+      loadAdminPartialCandidates();
+      setAdminPayoutRequestsPage(1);
+      loadAdminPayoutRequests();
+      try {
+        await downloadPayoutReceipt("partial", data.disbursement.id, "delutbetalningskvitto");
+      } catch {
+        // kvitto valfritt
+      }
+    } catch (err) {
+      setAdminPartialMessage(err.message || "Kunde inte registrera delutbetalning.");
+    } finally {
+      setAdminPartialSubmitting(false);
     }
   };
 
@@ -2779,6 +2895,7 @@ const AdminPage = () => {
     if (token && isAdminUser && adminSection === "admin") {
       loadAdminPayments();
       loadAdminPayoutRequests();
+      loadAdminPartialCandidates();
       loadAdminOrganizations();
       loadAdminEventLinks();
     }
@@ -3344,7 +3461,10 @@ const AdminPage = () => {
     }
     const selectedTotal = (payoutSummary.events || [])
       .filter((ev) => payoutSelectedEventIds.includes(ev.id))
-      .reduce((sum, ev) => sum + (Number(ev.totalRevenue) || 0), 0);
+      .reduce(
+        (sum, ev) => sum + (Number(ev.remainingRevenue ?? ev.totalRevenue) || 0),
+        0
+      );
     if (selectedTotal <= 0) {
       setPayoutMessage("Beloppet är 0 SEK. Utbetalning kan inte begäras när det inte finns några intäkter att utbetala.");
       return;
@@ -6178,6 +6298,91 @@ const AdminPage = () => {
                 })()}
               </>
             ) : null}
+            <h3 className="admin-subsection-title admin-subsection-title-spaced">Delutbetalning</h3>
+            <p className="muted" style={{ marginBottom: "1rem" }}>
+              Registrera delutbetalning endast för pågående event med kvarvarande intäkter. Avslutade event utbetalas i sin helhet
+              via vanlig utbetalningsbegäran. Varje event kan endast delutbetalas en gång och högst med 70% av eventets totala intäkter.
+            </p>
+            {adminPartialCandidatesLoading ? (
+              <p className="muted">Laddar event...</p>
+            ) : (
+              <form className="admin-form admin-partial-payout-form" onSubmit={handleAdminPartialPayout}>
+                <label className="field">
+                  <span className="field-label">Event</span>
+                  <select
+                    value={adminPartialForm.eventId}
+                    onChange={(e) => setAdminPartialForm((prev) => ({ ...prev, eventId: e.target.value }))}
+                    required
+                  >
+                    <option value="">Välj event</option>
+                    {adminPartialCandidates.map((row) => (
+                      <option key={row.eventId} value={String(row.eventId)}>
+                        {row.eventName} ({row.organization || row.profileId || "–"}) – max{" "}
+                        {(row.maxPartialGross ?? 0).toLocaleString("sv-SE", {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2
+                        })}{" "}
+                        SEK ({row.partialPayoutMaxPercent ?? 70}%)
+                        {row.partialPayoutCount > 0 ? `, ${row.partialPayoutCount} delutb.` : ""}
+                        {" – pågående"}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span className="field-label">Belopp (brutto, SEK)</span>
+                  <input
+                    type="number"
+                    min="0.01"
+                    max={adminPartialMaxGross != null ? adminPartialMaxGross : undefined}
+                    step="0.01"
+                    value={adminPartialForm.amount}
+                    onChange={(e) => setAdminPartialForm((prev) => ({ ...prev, amount: e.target.value }))}
+                    placeholder={
+                      adminPartialMaxGross != null
+                        ? `Max ${adminPartialMaxGross.toLocaleString("sv-SE", {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2
+                          })}`
+                        : "T.ex. 2500"
+                    }
+                    required
+                  />
+                  {adminPartialMaxGross != null ? (
+                    <span className="muted" style={{ fontSize: "0.85rem" }}>
+                      Högst{" "}
+                      {adminPartialMaxGross.toLocaleString("sv-SE", {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2
+                      })}{" "}
+                      SEK ({adminPartialSelectedCandidate?.partialPayoutMaxPercent ?? 70}% av{" "}
+                      {(adminPartialSelectedCandidate?.totalRevenue ?? 0).toLocaleString("sv-SE", {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2
+                      })}{" "}
+                      SEK i intäkter)
+                    </span>
+                  ) : null}
+                </label>
+                <div className="admin-actions">
+                  <button type="submit" className="button" disabled={adminPartialSubmitting || adminPartialCandidates.length === 0}>
+                    {adminPartialSubmitting ? "Registrerar..." : "Registrera delutbetalning"}
+                  </button>
+                </div>
+                {adminPartialMessage ? (
+                  <p
+                    className={
+                      adminPartialMessage.startsWith("Delutbetalning registrerad")
+                        ? "admin-verification-sent"
+                        : "admin-error"
+                    }
+                    style={{ marginTop: "0.75rem" }}
+                  >
+                    {adminPartialMessage}
+                  </p>
+                ) : null}
+              </form>
+            )}
             <h3 className="admin-subsection-title admin-subsection-title-spaced">Förfrågar utbetalning</h3>
             {adminPayoutRequestsLoading ? (
               <p className="muted">Laddar...</p>
@@ -6232,9 +6437,28 @@ const AdminPage = () => {
                             <td>{r.bgNumber || "–"}</td>
                             <td>
                               {r.status === "betald" ? (
-                                <span className="payout-status-badge-utbetald">Utbetald</span>
+                                <>
+                                  <span className="payout-status-badge-utbetald">Utbetald</span>
+                                  {r.isFinalPayout ? (
+                                    <span className="muted" style={{ display: "block", fontSize: "0.8rem" }}>
+                                      Slututbetalning
+                                    </span>
+                                  ) : null}
+                                </>
                               ) : r.status === "pågår" ? (
-                                <span className="payout-status-badge">Begäran pågår</span>
+                                <>
+                                  <span className="payout-status-badge">Begäran pågår</span>
+                                  {r.hasPartialPayout ? (
+                                    <span
+                                      className="payout-status-badge payout-status-badge-partial"
+                                      style={{ display: "block", marginTop: "0.25rem" }}
+                                    >
+                                      Delutbetald
+                                    </span>
+                                  ) : null}
+                                </>
+                              ) : r.status === "delutbetald" || r.kind === "partial_only" ? (
+                                <span className="payout-status-badge payout-status-badge-partial">Delutbetald</span>
                               ) : (
                                 r.status || "–"
                               )}
@@ -6247,6 +6471,16 @@ const AdminPage = () => {
                                 maximumFractionDigits: 2
                               })}{" "}
                               SEK
+                              {r.kind === "request" && r.hasPartialPayout ? (
+                                <span className="muted" style={{ display: "block", fontSize: "0.8rem" }}>
+                                  Delutbetalt:{" "}
+                                  {(r.partialGrossTotal ?? 0).toLocaleString("sv-SE", {
+                                    minimumFractionDigits: 2,
+                                    maximumFractionDigits: 2
+                                  })}{" "}
+                                  SEK
+                                </span>
+                              ) : null}
                             </td>
                             <td>
                               {(r.netAmount != null ? r.netAmount : r.amount ?? 0).toLocaleString("sv-SE", {
@@ -6254,6 +6488,16 @@ const AdminPage = () => {
                                 maximumFractionDigits: 2
                               })}{" "}
                               SEK
+                              {r.kind === "request" && r.hasPartialPayout ? (
+                                <span className="muted" style={{ display: "block", fontSize: "0.8rem" }}>
+                                  Delutbetalt:{" "}
+                                  {(r.partialNetTotal ?? 0).toLocaleString("sv-SE", {
+                                    minimumFractionDigits: 2,
+                                    maximumFractionDigits: 2
+                                  })}{" "}
+                                  SEK
+                                </span>
+                              ) : null}
                             </td>
                             <td>
                               {r.requestedAt
@@ -6298,7 +6542,22 @@ const AdminPage = () => {
                               )}
                             </td>
                             <td>
-                              {r.status === "pågår" && r.id != null ? (
+                              {r.kind === "partial_only" && r.disbursementId != null ? (
+                                <button
+                                  type="button"
+                                  className="button button-outline"
+                                  onClick={async () => {
+                                    if (!token) return;
+                                    try {
+                                      await downloadPayoutReceipt("partial", r.disbursementId, "delutbetalningskvitto");
+                                    } catch (err) {
+                                      setPayoutMessage(err.message || "Kunde inte ladda ner kvitto.");
+                                    }
+                                  }}
+                                >
+                                  Kvitto (PDF)
+                                </button>
+                              ) : r.status === "pågår" && r.id != null ? (
                                 <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
                                   <button
                                     type="button"
@@ -7074,7 +7333,8 @@ const AdminPage = () => {
                     <th style={{ width: "2.5rem" }}>Välj</th>
                     <th>Event</th>
                     <th>Antal betalda</th>
-                    <th>Intäkter</th>
+                    <th>Intäkter totalt</th>
+                    <th>Kvar att utbetala</th>
                     <th>Utbetalning (exkl.avg.)</th>
                     <th>Status</th>
                   </tr>
@@ -7082,13 +7342,13 @@ const AdminPage = () => {
                 <tbody>
                   {payoutSummary.events.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="muted">
+                      <td colSpan={7} className="muted">
                         Inga event med betalda anmälningar.
                       </td>
                     </tr>
                   ) : payoutEventsToShow.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="muted">
+                      <td colSpan={7} className="muted">
                         Inga event kvar att begära utbetalning för (alla är utbetald eller pågår).
                       </td>
                     </tr>
@@ -7149,13 +7409,32 @@ const AdminPage = () => {
                             SEK
                           </td>
                           <td>
+                            {(Number(ev.remainingRevenue ?? ev.totalRevenue) || 0).toLocaleString("sv-SE", {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2
+                            })}{" "}
+                            SEK
+                            {ev.hasPartialPayout && !ev.hasPaidPayoutRequest ? (
+                              <span className="muted" style={{ display: "block", fontSize: "0.82rem" }}>
+                                Delutbetalt:{" "}
+                                {(Number(ev.disbursedGross) || 0).toLocaleString("sv-SE", {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2
+                                })}{" "}
+                                SEK
+                              </span>
+                            ) : null}
+                          </td>
+                          <td>
                             {payoutSelectedEventIds.includes(ev.id) && payoutTotals.selectedSum > 0
-                              ? `${(Math.round((ev.totalRevenue * payoutTotals.net / payoutTotals.selectedSum) * 100) / 100).toLocaleString("sv-SE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} SEK`
+                              ? `${(Math.round(((Number(ev.remainingRevenue ?? ev.totalRevenue) || 0) * payoutTotals.net / payoutTotals.selectedSum) * 100) / 100).toLocaleString("sv-SE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} SEK`
                               : "–"}
                           </td>
                           <td>
                             {isLocked ? (
                               <span className="payout-status-badge">Begäran pågår</span>
+                            ) : ev.hasPartialPayout && !ev.hasPaidPayoutRequest ? (
+                              <span className="payout-status-badge payout-status-badge-partial">Delutbetald</span>
                             ) : eligibleFromText ? (
                               <span className="muted" style={{ fontSize: "0.9rem" }}>{eligibleFromText}</span>
                             ) : !ev.endDate ? (
@@ -7176,6 +7455,7 @@ const AdminPage = () => {
                       <td>
                         <strong>Summa (valda)</strong>
                       </td>
+                      <td />
                       <td />
                       <td>
                         <strong>
@@ -7291,9 +7571,10 @@ const AdminPage = () => {
                 </p>
               ) : null}
             </form>
-            {(myPayoutRequests || []).filter((r) => r.status === "betald").length > 0 ? (
+            {(myPayoutRequests || []).filter((r) => r.status === "betald").length > 0 ||
+            (myPayoutDisbursements || []).length > 0 ? (
               <>
-                <h3 style={{ marginTop: "2rem", marginBottom: "0.75rem" }}>Utbetald</h3>
+                <h3 style={{ marginTop: "2rem", marginBottom: "0.75rem" }}>Utbetalningar</h3>
                 <div className="table-wrap">
                   <table className="table">
                     <thead>
@@ -7306,12 +7587,76 @@ const AdminPage = () => {
                       </tr>
                     </thead>
                     <tbody>
+                      {myPayoutDisbursements.map((r) => (
+                        <tr key={`partial-${r.id}`}>
+                          <td>
+                            <span className="payout-status-badge payout-status-badge-partial">Delutbetald</span>
+                            {r.eventFullyPaid ? (
+                              <span className="muted" style={{ display: "block", fontSize: "0.8rem" }}>
+                                Ingår i utbetalning
+                              </span>
+                            ) : null}
+                          </td>
+                          <td>{r.eventNames || "–"}</td>
+                          <td>
+                            {(r.netAmount ?? 0).toLocaleString("sv-SE", {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2
+                            })}{" "}
+                            SEK
+                          </td>
+                          <td>
+                            {r.requestedAt
+                              ? new Date(r.requestedAt).toLocaleString("sv-SE", {
+                                  dateStyle: "short",
+                                  timeStyle: "short"
+                                })
+                              : "–"}
+                          </td>
+                          <td style={{ textAlign: "right" }}>
+                            <button
+                              type="button"
+                              className="icon-button"
+                              title="Ladda ner delutbetalningskvitto (PDF)"
+                              onClick={async () => {
+                                try {
+                                  await downloadPayoutReceipt("partial", r.id, "delutbetalningskvitto");
+                                } catch (err) {
+                                  setPayoutMessage(err.message || "Kunde inte ladda ner kvitto.");
+                                }
+                              }}
+                              aria-label="Ladda ner delutbetalningskvitto PDF"
+                            >
+                              <svg
+                                width="18"
+                                height="18"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                aria-hidden="true"
+                              >
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                <polyline points="7 10 12 15 17 10" />
+                                <line x1="12" y1="15" x2="12" y2="3" />
+                              </svg>
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
                       {myPayoutRequests
                         .filter((r) => r.status === "betald")
                         .map((r) => (
-                          <tr key={r.id}>
+                          <tr key={`request-${r.id}`}>
                             <td>
                               <span className="payout-status-badge-utbetald">Utbetald</span>
+                              {r.isFinalPayout ? (
+                                <span className="muted" style={{ display: "block", fontSize: "0.8rem" }}>
+                                  Slututbetalning
+                                </span>
+                              ) : null}
                             </td>
                             <td>{r.eventNames || "–"}</td>
                             <td>
@@ -7335,22 +7680,8 @@ const AdminPage = () => {
                                 className="icon-button"
                                 title="Ladda ner kvitto (PDF)"
                                 onClick={async () => {
-                                  if (!token) return;
                                   try {
-                                    const response = await fetch(
-                                      `${API_BASE}/admin/payout-requests/${r.id}/receipt.pdf`,
-                                      { headers: { Authorization: `Bearer ${token}` } }
-                                    );
-                                    if (!response.ok) throw new Error("Kunde inte hämta kvitto");
-                                    const blob = await response.blob();
-                                    const url = window.URL.createObjectURL(blob);
-                                    const link = document.createElement("a");
-                                    link.href = url;
-                                    link.download = `utbetalningskvitto-${r.id}.pdf`;
-                                    document.body.appendChild(link);
-                                    link.click();
-                                    link.remove();
-                                    window.URL.revokeObjectURL(url);
+                                    await downloadPayoutReceipt("request", r.id, "utbetalningskvitto");
                                   } catch (err) {
                                     setPayoutMessage(err.message || "Kunde inte ladda ner kvitto.");
                                   }

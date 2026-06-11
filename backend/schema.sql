@@ -100,6 +100,22 @@ ALTER TABLE payout_requests
   ADD COLUMN IF NOT EXISTS payout_fee NUMERIC(12, 2) NOT NULL DEFAULT 0,
   ADD COLUMN IF NOT EXISTS net_amount NUMERIC(12, 2);
 
+CREATE TABLE IF NOT EXISTS event_payout_disbursements (
+  id SERIAL PRIMARY KEY,
+  event_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  is_partial BOOLEAN NOT NULL DEFAULT TRUE,
+  amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  payout_fee NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  net_amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  note TEXT NOT NULL DEFAULT '',
+  created_by_admin_id INTEGER,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_event_payout_disbursements_event
+  ON event_payout_disbursements (event_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS bookings (
   id SERIAL PRIMARY KEY,
   event_id INTEGER,
