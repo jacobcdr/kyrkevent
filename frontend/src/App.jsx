@@ -2028,6 +2028,8 @@ const AdminPage = () => {
     organization: "",
     eventName: ""
   });
+  const [adminPaymentsIncludeServiceFee, setAdminPaymentsIncludeServiceFee] = useState(false);
+  const [adminPaymentsMollieFee, setAdminPaymentsMollieFee] = useState("");
   const [adminPaymentsSort, setAdminPaymentsSort] = useState({ key: "created_at", dir: "desc" });
   const [adminPaymentsPageSize, setAdminPaymentsPageSize] = useState(10);
   const [adminPaymentsPage, setAdminPaymentsPage] = useState(1);
@@ -2110,7 +2112,8 @@ const AdminPage = () => {
     const byDate = {};
     let grandTotal = 0;
     for (const row of filtered) {
-      const amount = Number(row.amount) || 0;
+      const fee = adminPaymentsIncludeServiceFee ? Number(row.serviceFee) || 0 : 0;
+      const amount = (Number(row.amount) || 0) + fee;
       const d = row.created_at ? String(row.created_at).slice(0, 10) : "";
       if (!d) continue;
       if (!byDate[d]) byDate[d] = { date: d, total: 0, count: 0 };
@@ -2130,7 +2133,7 @@ const AdminPage = () => {
       grandTotal: Math.round(grandTotal * 100) / 100,
       rowCount: filtered.length
     };
-  }, [adminPaymentsRows, adminPaymentsChartFilters]);
+  }, [adminPaymentsRows, adminPaymentsChartFilters, adminPaymentsIncludeServiceFee]);
 
   const adminPaymentsChartFilterOptions = useMemo(() => {
     const rows = adminPaymentsRows || [];
@@ -2565,6 +2568,43 @@ const AdminPage = () => {
     link.click();
     link.remove();
     window.URL.revokeObjectURL(blobUrl);
+  };
+
+  const [adminPaymentsReportLoading, setAdminPaymentsReportLoading] = useState(false);
+  const downloadAdminPaymentsReport = async () => {
+    if (!token || !isAdminUser) return;
+    setAdminPaymentsReportLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (adminPaymentsFrom) params.set("fromDate", adminPaymentsFrom);
+      if (adminPaymentsTo) params.set("toDate", adminPaymentsTo);
+      if (adminPaymentsChartFilters.organization)
+        params.set("organization", adminPaymentsChartFilters.organization);
+      if (adminPaymentsChartFilters.eventName)
+        params.set("eventName", adminPaymentsChartFilters.eventName);
+      if (adminPaymentsIncludeServiceFee) params.set("includeServiceFee", "true");
+      const mollieFeeNum = Number(String(adminPaymentsMollieFee).replace(",", "."));
+      if (Number.isFinite(mollieFeeNum) && mollieFeeNum > 0) {
+        params.set("mollieFee", String(mollieFeeNum));
+      }
+      const response = await fetch(`${API_BASE}/admin/admin-payments/report.pdf?${params}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!response.ok) throw new Error("Kunde inte skapa intäktsrapport");
+      const blob = await response.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = `intaktsrapport-${adminPaymentsFrom || "start"}-${adminPaymentsTo || "slut"}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(blobUrl);
+    } catch (error) {
+      window.alert("Kunde inte skapa intäktsrapport. Försök igen.");
+    } finally {
+      setAdminPaymentsReportLoading(false);
+    }
   };
 
   const handleAdminPartialPayout = async (event) => {
@@ -5862,6 +5902,38 @@ const AdminPage = () => {
               <button type="submit" className="button" disabled={adminPaymentsLoading}>
                 {adminPaymentsLoading ? "Laddar..." : "Visa"}
               </button>
+              <label className="field" style={{ flexDirection: "row", alignItems: "center", gap: "0.5rem", marginBottom: 0 }}>
+                <input
+                  type="checkbox"
+                  checked={adminPaymentsIncludeServiceFee}
+                  onChange={(e) => setAdminPaymentsIncludeServiceFee(e.target.checked)}
+                  style={{ width: "auto", margin: 0 }}
+                />
+                <span className="field-label" style={{ marginBottom: 0 }}>Inkludera serviceavgift</span>
+              </label>
+              <label className="field" style={{ marginBottom: 0 }}>
+                <span className="field-label">Mollie-avgifter (SEK)</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  value={adminPaymentsMollieFee}
+                  onChange={(e) => setAdminPaymentsMollieFee(e.target.value)}
+                  title="Mollies avgifter för vald period som dras av i rapporten"
+                  style={{ maxWidth: "10rem" }}
+                />
+              </label>
+              <button
+                type="button"
+                className="button button-outline"
+                onClick={downloadAdminPaymentsReport}
+                disabled={adminPaymentsReportLoading || adminPaymentsRows.length === 0}
+                title="Exportera intäktsrapport som PDF för vald period och filtrering"
+              >
+                {adminPaymentsReportLoading ? "Skapar PDF..." : "Exportera PDF"}
+              </button>
             </form>
             {adminPaymentsRows.length > 0 ? (
               <div
@@ -5978,7 +6050,7 @@ const AdminPage = () => {
                   </ResponsiveContainer>
                 </div>
                 <p style={{ margin: 0, fontSize: "1.1rem" }}>
-                  <strong>Totalt i valt intervall:</strong>{" "}
+                  <strong>Totalt i valt intervall{adminPaymentsIncludeServiceFee ? " (inkl. serviceavgift)" : ""}:</strong>{" "}
                   {adminPaymentsChartData.grandTotal.toLocaleString("sv-SE", {
                     minimumFractionDigits: 2,
                     maximumFractionDigits: 2
@@ -9222,11 +9294,14 @@ const AdminPage = () => {
                 </div>
                 <form className="admin-form" onSubmit={handleProgramSubmit}>
                   <label className="field">
-                    <span className="field-label">Tid</span>
+                    <span className="field-label">Tid eller Rubrik</span>
+                    <span className="field-hint">
+                      (Vid endast rubrik, hoppa över Beskrivning för att texten inte skall se ihoptryckt ut.)
+                    </span>
                     <input
                       name="time"
                       type="text"
-                      placeholder="09:00"
+                      placeholder="09:00 eller Rubrik"
                       value={programForm.time}
                       onChange={handleProgramChange}
                     />

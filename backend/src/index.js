@@ -4236,10 +4236,40 @@ app.get("/admin/admin-payments", requireAdmin, requireSuperAdmin, async (req, re
           organization: row.profile_organization || "",
           eventName: row.event_name || "",
           amount: Math.round(amount * 100) / 100,
+          serviceFee: 0,
           created_at: row.created_at
         };
       })
       .filter(Boolean);
+
+    // Serviceavgiften tas ut per order (inte per biljett). Hämta avgiften från
+    // payment_orders och fördela den till en representativ bokning per order så
+    // att den inte dubbelräknas men ändå följer med vid filtrering på org/event.
+    const rowIds = rows.map((r) => r.id);
+    if (rowIds.length > 0) {
+      const rowsById = new Map(rows.map((r) => [r.id, r]));
+      const ordersResult = await pool.query(
+        `SELECT payload, booking_id, booking_ids FROM payment_orders
+         WHERE status = 'paid' AND (booking_id = ANY($1::int[]) OR booking_ids && $1::int[])`,
+        [rowIds]
+      );
+      for (const order of ordersResult.rows || []) {
+        const serviceFee = Number(order.payload?.serviceFee);
+        if (!Number.isFinite(serviceFee) || serviceFee <= 0) continue;
+        const orderBookingIds = Array.isArray(order.booking_ids) && order.booking_ids.length > 0
+          ? order.booking_ids
+          : order.booking_id != null
+            ? [order.booking_id]
+            : [];
+        const presentIds = orderBookingIds
+          .map(Number)
+          .filter((id) => rowsById.has(id))
+          .sort((a, b) => a - b);
+        if (presentIds.length === 0) continue;
+        const target = rowsById.get(presentIds[0]);
+        target.serviceFee = Math.round((target.serviceFee + serviceFee) * 100) / 100;
+      }
+    }
     const series = Object.keys(byDate)
       .sort()
       .map((d) => ({
@@ -5311,6 +5341,349 @@ function writePayoutReceiptPdf(doc, {
     continued: false
   });
 }
+
+function writeRevenueReportPdf(doc, {
+  fromDate,
+  toDate,
+  filterOrg,
+  filterEvent,
+  includeServiceFee,
+  mollieFee,
+  transactions,
+  totals
+}) {
+  const left = doc.page.margins.left;
+  const right = doc.page.width - doc.page.margins.right;
+  const usableWidth = right - left;
+  const formatSekValue = (n) =>
+    `${(Math.round((Number(n) || 0) * 100) / 100).toLocaleString("sv-SE", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    })} SEK`;
+
+  const logoPath = path.resolve(__dirname, "..", "..", "frontend", "public", "kyrkevent2.png");
+  if (fs.existsSync(logoPath)) {
+    doc.image(logoPath, left, 40, { width: 110 });
+    doc.y = 40 + 50;
+  }
+  doc.fillColor("#000").font("Helvetica-Bold").fontSize(20).text("Intäktsrapport", left, doc.y);
+  doc.moveDown(0.4);
+  doc.font("Helvetica").fontSize(10).fillColor("#333");
+  doc.text(`Period: ${fromDate || "–"} – ${toDate || "–"}`);
+  doc.text(`Organisation: ${filterOrg || "Alla"}`);
+  doc.text(`Event: ${filterEvent || "Alla"}`);
+  doc.text(`Serviceavgift: ${includeServiceFee ? "Inkluderad i belopp" : "Ej inkluderad"}`);
+  doc.text(
+    `Genererad: ${new Date().toLocaleString("sv-SE", { dateStyle: "medium", timeStyle: "short" })}`
+  );
+  doc.text(`Antal transaktioner: ${transactions.length}`);
+  doc.moveDown(0.8);
+
+  const columns = includeServiceFee
+    ? [
+        { key: "orderNumber", label: "Ordernr", width: 0.13, align: "left" },
+        { key: "date", label: "Datum", width: 0.15, align: "left" },
+        { key: "organization", label: "Organisation", width: 0.17, align: "left" },
+        { key: "eventName", label: "Event", width: 0.19, align: "left" },
+        { key: "ticketCount", label: "Biljetter", width: 0.07, align: "right" },
+        { key: "amount", label: "Biljettbelopp", width: 0.1, align: "right" },
+        { key: "serviceFee", label: "Serviceavgift", width: 0.09, align: "right" },
+        { key: "total", label: "Totalt", width: 0.1, align: "right" }
+      ]
+    : [
+        { key: "orderNumber", label: "Ordernr", width: 0.14, align: "left" },
+        { key: "date", label: "Datum", width: 0.16, align: "left" },
+        { key: "organization", label: "Organisation", width: 0.23, align: "left" },
+        { key: "eventName", label: "Event", width: 0.27, align: "left" },
+        { key: "ticketCount", label: "Biljetter", width: 0.08, align: "right" },
+        { key: "amount", label: "Belopp", width: 0.12, align: "right" }
+      ];
+  const colX = [];
+  let acc = left;
+  for (const c of columns) {
+    c.px = c.width * usableWidth;
+    colX.push(acc);
+    acc += c.px;
+  }
+  const rowHeight = 16;
+  const bottomLimit = doc.page.height - doc.page.margins.bottom - 30;
+
+  const drawHeaderRow = () => {
+    const y = doc.y;
+    doc.font("Helvetica-Bold").fontSize(9).fillColor("#000");
+    columns.forEach((c, i) => {
+      doc.text(c.label, colX[i] + 2, y, {
+        width: c.px - 4,
+        align: c.align,
+        lineBreak: false,
+        ellipsis: true
+      });
+    });
+    doc.y = y + rowHeight;
+    doc
+      .moveTo(left, doc.y - 3)
+      .lineTo(right, doc.y - 3)
+      .strokeColor("#999")
+      .lineWidth(0.5)
+      .stroke();
+  };
+
+  const drawRow = (values, opts = {}) => {
+    if (doc.y + rowHeight > bottomLimit) {
+      doc.addPage();
+      doc.y = doc.page.margins.top;
+      drawHeaderRow();
+    }
+    const y = doc.y;
+    doc
+      .font(opts.bold ? "Helvetica-Bold" : "Helvetica")
+      .fontSize(9)
+      .fillColor("#000");
+    columns.forEach((c, i) => {
+      const raw = values[c.key];
+      const text = raw == null ? "" : String(raw);
+      doc.text(text, colX[i] + 2, y, {
+        width: c.px - 4,
+        align: c.align,
+        lineBreak: false,
+        ellipsis: true
+      });
+    });
+    doc.y = y + rowHeight;
+  };
+
+  drawHeaderRow();
+
+  if (transactions.length === 0) {
+    doc.moveDown(0.5);
+    doc.font("Helvetica").fontSize(10).fillColor("#666");
+    doc.text("Inga transaktioner i vald period och filtrering.", left, doc.y);
+  } else {
+    for (const t of transactions) {
+      drawRow({
+        orderNumber: t.orderNumber,
+        date: t.date,
+        organization: t.organization || "–",
+        eventName: t.eventName || "–",
+        ticketCount: t.ticketCount,
+        amount: formatSekValue(t.amount),
+        serviceFee: formatSekValue(t.serviceFee),
+        total: formatSekValue(t.amount + t.serviceFee)
+      });
+    }
+    doc
+      .moveTo(left, doc.y + 1)
+      .lineTo(right, doc.y + 1)
+      .strokeColor("#999")
+      .lineWidth(0.5)
+      .stroke();
+    doc.y += 4;
+    drawRow(
+      {
+        orderNumber: "Totalt",
+        date: "",
+        organization: "",
+        eventName: "",
+        ticketCount: totals.ticketCount,
+        amount: formatSekValue(totals.amount),
+        serviceFee: formatSekValue(totals.serviceFee),
+        total: formatSekValue(totals.amount + totals.serviceFee)
+      },
+      { bold: true }
+    );
+  }
+
+  const grossTotal = includeServiceFee ? totals.amount + totals.serviceFee : totals.amount;
+  const mollieFeeAmount = Number.isFinite(Number(mollieFee)) ? Math.max(0, Number(mollieFee)) : 0;
+  const netTotal = Math.round((grossTotal - mollieFeeAmount) * 100) / 100;
+
+  doc.moveDown(1.2);
+  if (doc.y + 70 > doc.page.height - doc.page.margins.bottom) {
+    doc.addPage();
+    doc.y = doc.page.margins.top;
+  }
+  const summaryLabelX = right - 320;
+  const summaryValueWidth = 160;
+  const summaryValueX = right - summaryValueWidth;
+  const drawSummaryLine = (label, value, opts = {}) => {
+    const y = doc.y;
+    doc
+      .font(opts.bold ? "Helvetica-Bold" : "Helvetica")
+      .fontSize(opts.bold ? 11 : 10)
+      .fillColor("#000");
+    doc.text(label, summaryLabelX, y, { width: 160, align: "left", lineBreak: false });
+    doc.text(value, summaryValueX, y, { width: summaryValueWidth, align: "right", lineBreak: false });
+    doc.y = y + (opts.bold ? 18 : 15);
+  };
+  drawSummaryLine(
+    includeServiceFee ? "Bruttobelopp (inkl. serviceavgift)" : "Bruttobelopp",
+    formatSekValue(grossTotal)
+  );
+  drawSummaryLine("Mollie-avgifter", `-${formatSekValue(mollieFeeAmount)}`);
+  doc
+    .moveTo(summaryLabelX, doc.y)
+    .lineTo(right, doc.y)
+    .strokeColor("#999")
+    .lineWidth(0.5)
+    .stroke();
+  doc.y += 4;
+  drawSummaryLine("Netto efter Mollie-avgifter", formatSekValue(netTotal), { bold: true });
+
+  doc.moveDown(1.5);
+  doc.font("Helvetica").fontSize(9).fillColor("#666");
+  doc.text("Lonetec AB - bokning - intäktsrapport", left, doc.y);
+}
+
+app.get("/admin/admin-payments/report.pdf", requireAdmin, requireSuperAdmin, async (req, res) => {
+  const fromDate = (req.query.fromDate || "").toString().trim() || null;
+  const toDate = (req.query.toDate || "").toString().trim() || null;
+  const filterOrg = (req.query.organization || "").toString().trim();
+  const filterEvent = (req.query.eventName || "").toString().trim();
+  const includeServiceFee =
+    String(req.query.includeServiceFee || "").toLowerCase() === "true" ||
+    String(req.query.includeServiceFee) === "1";
+  const mollieFee = Math.max(
+    0,
+    Number(String(req.query.mollieFee || "").replace(",", ".")) || 0
+  );
+  try {
+    let query =
+      "SELECT b.id, b.created_at, b.pris, b.refund_amount, b.payment_status, b.event_id, b.order_number, e.name AS event_name, p.organization AS profile_organization FROM bookings b LEFT JOIN events e ON e.id = b.event_id LEFT JOIN admin_user_profiles p ON p.user_id = e.user_id WHERE b.payment_status IN ('paid', 'refunded')";
+    const params = [];
+    if (fromDate) {
+      params.push(fromDate);
+      query += ` AND b.created_at::date >= $${params.length}`;
+    }
+    if (toDate) {
+      params.push(toDate);
+      query += ` AND b.created_at::date <= $${params.length}`;
+    }
+    query += " ORDER BY b.created_at ASC";
+    const result = await pool.query(query, params);
+
+    const rows = (result.rows || [])
+      .map((row) => {
+        const amount = getBookingNetTicketRevenue(row);
+        if (amount < 0.01) return null;
+        const organization = row.profile_organization || "";
+        const eventName = row.event_name || "";
+        if (filterOrg && String(organization || "–").trim() !== filterOrg) return null;
+        if (filterEvent && String(eventName || "–").trim() !== filterEvent) return null;
+        return {
+          id: row.id,
+          orderNumber: row.order_number || "",
+          organization,
+          eventName,
+          amount: Math.round(amount * 100) / 100,
+          serviceFee: 0,
+          created_at: row.created_at
+        };
+      })
+      .filter(Boolean);
+
+    const rowIds = rows.map((r) => r.id);
+    if (rowIds.length > 0) {
+      const rowsById = new Map(rows.map((r) => [r.id, r]));
+      const ordersResult = await pool.query(
+        `SELECT payload, booking_id, booking_ids FROM payment_orders
+         WHERE status = 'paid' AND (booking_id = ANY($1::int[]) OR booking_ids && $1::int[])`,
+        [rowIds]
+      );
+      for (const order of ordersResult.rows || []) {
+        const serviceFee = Number(order.payload?.serviceFee);
+        if (!Number.isFinite(serviceFee) || serviceFee <= 0) continue;
+        const orderBookingIds =
+          Array.isArray(order.booking_ids) && order.booking_ids.length > 0
+            ? order.booking_ids
+            : order.booking_id != null
+              ? [order.booking_id]
+              : [];
+        const presentIds = orderBookingIds
+          .map(Number)
+          .filter((id) => rowsById.has(id))
+          .sort((a, b) => a - b);
+        if (presentIds.length === 0) continue;
+        const target = rowsById.get(presentIds[0]);
+        target.serviceFee = Math.round((target.serviceFee + serviceFee) * 100) / 100;
+      }
+    }
+
+    const byOrder = new Map();
+    for (const r of rows) {
+      const key = r.orderNumber ? `o:${r.orderNumber}` : `b:${r.id}`;
+      let group = byOrder.get(key);
+      if (!group) {
+        group = {
+          orderNumber: r.orderNumber || `#${r.id}`,
+          organization: r.organization,
+          eventName: r.eventName,
+          ticketCount: 0,
+          amount: 0,
+          serviceFee: 0,
+          created_at: r.created_at
+        };
+        byOrder.set(key, group);
+      }
+      group.ticketCount += 1;
+      group.amount = Math.round((group.amount + r.amount) * 100) / 100;
+      group.serviceFee = Math.round((group.serviceFee + r.serviceFee) * 100) / 100;
+      if (r.created_at && (!group.created_at || r.created_at < group.created_at)) {
+        group.created_at = r.created_at;
+      }
+    }
+
+    const transactions = [...byOrder.values()]
+      .sort((a, b) => {
+        const da = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const db = b.created_at ? new Date(b.created_at).getTime() : 0;
+        return da - db;
+      })
+      .map((g) => ({
+        orderNumber: g.orderNumber,
+        date: g.created_at
+          ? new Date(g.created_at).toLocaleString("sv-SE", { dateStyle: "short", timeStyle: "short" })
+          : "–",
+        organization: g.organization,
+        eventName: g.eventName,
+        ticketCount: g.ticketCount,
+        amount: g.amount,
+        serviceFee: g.serviceFee
+      }));
+
+    const totals = transactions.reduce(
+      (acc, t) => {
+        acc.ticketCount += t.ticketCount;
+        acc.amount = Math.round((acc.amount + t.amount) * 100) / 100;
+        acc.serviceFee = Math.round((acc.serviceFee + t.serviceFee) * 100) / 100;
+        return acc;
+      },
+      { ticketCount: 0, amount: 0, serviceFee: 0 }
+    );
+
+    const filename = `intaktsrapport-${fromDate || "start"}-${toDate || "slut"}.pdf`;
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    const doc = new PDFDocument({ margin: 40, size: "A4", layout: "landscape" });
+    doc.pipe(res);
+    writeRevenueReportPdf(doc, {
+      fromDate,
+      toDate,
+      filterOrg,
+      filterEvent,
+      includeServiceFee,
+      mollieFee,
+      transactions,
+      totals
+    });
+    doc.end();
+  } catch (error) {
+    if (!res.headersSent) {
+      res.status(500).json({ ok: false, error: "Kunde inte skapa intäktsrapport" });
+    } else {
+      res.end();
+    }
+  }
+});
 
 app.get("/admin/payout-disbursements/:id/receipt.pdf", requireAdmin, async (req, res) => {
   try {
