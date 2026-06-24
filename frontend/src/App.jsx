@@ -403,8 +403,7 @@ const BOOKING_COLUMN_OPTIONS = [
   { key: "pris", label: "Pris" },
   { key: "order_number", label: "Ordernummer" },
   { key: "checked_in", label: "Incheckad" },
-  { key: "created_at", label: "Skapad" },
-  { key: "actions", label: "Åtgärd" }
+  { key: "created_at", label: "Skapad" }
 ];
 
 const DEFAULT_BOOKING_COLUMN_VISIBILITY = Object.fromEntries(
@@ -1739,6 +1738,9 @@ const AdminPage = () => {
   const [bookingsRefreshLoading, setBookingsRefreshLoading] = useState(false);
   const [refundModal, setRefundModal] = useState(null);
   const [refundSubmitting, setRefundSubmitting] = useState(false);
+  const [voidModal, setVoidModal] = useState(null);
+  const [voidSubmitting, setVoidSubmitting] = useState(false);
+  const [bookingsInfoModalOpen, setBookingsInfoModalOpen] = useState(false);
   const [sort, setSort] = useState({ key: "created_at", dir: "desc" });
   const [error, setError] = useState("");
   const [toastMessage, setToastMessage] = useState("");
@@ -5084,9 +5086,24 @@ const AdminPage = () => {
     return String(match.value ?? "");
   };
 
+  const getBookingRefundAmount = (booking) => {
+    const refunded = Number(booking?.refund_amount);
+    return Number.isFinite(refunded) && refunded > 0 ? refunded : 0;
+  };
+
+  const getBookingRefundState = (booking) => {
+    const refundAmt = getBookingRefundAmount(booking);
+    if (refundAmt <= 0) return "none";
+    const ticket = parsePriceFromText(booking?.pris);
+    if (ticket == null || ticket < 0.01) return "none";
+    return refundAmt >= ticket - 0.001 ? "full" : "partial";
+  };
+
   const getPaymentStatusVariant = (status, booking) => {
+    const refundState = getBookingRefundState(booking);
+    if (refundState === "partial") return "partial";
+    if (refundState === "full") return "pending";
     const s = String(status || "").toLowerCase();
-    if (s === "paid" && booking && Number(booking.refund_amount) > 0) return "partial";
     if (s === "paid") return "ok";
     if (s === "refunded") return "pending";
     if (s === "pending" || s === "open") return "pending";
@@ -5098,22 +5115,23 @@ const AdminPage = () => {
     if (status !== "paid" && status !== "refunded") return 0;
     const ticket = parsePriceFromText(booking?.pris);
     if (ticket == null || ticket < 0.01) return 0;
-    const refunded = Number(booking?.refund_amount) || 0;
+    const refunded = getBookingRefundAmount(booking);
     return Math.max(0, Math.round((ticket - refunded) * 100) / 100);
   };
   const canRefundBooking = (booking) => {
+    if (booking?.voided_at) return false;
     const status = String(booking?.payment_status || "").toLowerCase();
     if (status !== "paid") return false;
-    if (Number(booking?.refund_amount) > 0.001) return false;
+    if (getBookingRefundAmount(booking) > 0.001) return false;
     const ticket = parsePriceFromText(booking?.pris);
     return ticket != null && ticket > 0.001;
   };
 
   const getPaymentStatusLabel = (status, booking) => {
+    const refundState = getBookingRefundState(booking);
+    if (refundState === "partial") return "Delåterbetald";
+    if (refundState === "full") return "Återbetald";
     const s = String(status || "").toLowerCase();
-    if (s === "paid" && booking && Number(booking.refund_amount) > 0) {
-      return "Delåterbetald";
-    }
     const labels = {
       paid: "Betald",
       refunded: "Återbetald",
@@ -5126,6 +5144,31 @@ const AdminPage = () => {
       manual: "Gratis/manuell"
     };
     return labels[s] || (status || "–");
+  };
+
+  const getBookingStatusBadges = (booking) => {
+    const voided = !!booking?.voided_at;
+    const refundAmt = getBookingRefundAmount(booking);
+    const badges = [];
+    badges.push({
+      label: getPaymentStatusLabel(booking?.payment_status, booking),
+      variant: getPaymentStatusVariant(booking?.payment_status, booking),
+      title:
+        refundAmt > 0
+          ? `${refundAmt.toLocaleString("sv-SE", {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2
+            })} SEK återbetalt`
+          : undefined
+    });
+    if (voided) {
+      badges.push({
+        label: "Makulerad",
+        variant: "void",
+        title: "Makulerad"
+      });
+    }
+    return badges;
   };
 
   const openRefundModal = async (booking) => {
@@ -5196,6 +5239,40 @@ const AdminPage = () => {
       setRefundModal((prev) => ({ ...prev, error: err?.message || "Återbetalning misslyckades." }));
     } finally {
       setRefundSubmitting(false);
+    }
+  };
+
+  const handleVoidBooking = (booking, shouldVoid = true) => {
+    if (!token || !booking?.id) return;
+    setVoidModal({ booking, shouldVoid });
+  };
+
+  const confirmVoidBooking = async () => {
+    if (!token || !voidModal?.booking?.id) return;
+    const { booking, shouldVoid } = voidModal;
+    setVoidSubmitting(true);
+    try {
+      const response = await fetch(`${API_BASE}/admin/bookings/${booking.id}/void`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ voided: shouldVoid })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error || "Kunde inte uppdatera makulering.");
+      }
+      setVoidModal(null);
+      showToast(data.message || (shouldVoid ? "Anmälan makulerad." : "Makulering ångrad."));
+      if (selectedEventId) {
+        await loadAdminBookings(token, selectedEventId);
+      }
+    } catch (err) {
+      showToast(err?.message || "Kunde inte uppdatera makulering.");
+    } finally {
+      setVoidSubmitting(false);
     }
   };
 
@@ -8718,7 +8795,18 @@ const AdminPage = () => {
                   </div>
                 </label>
               </div>
-              <h2>Bokningar</h2>
+              <div className="admin-bookings-heading-row">
+                <h2>Bokningar</h2>
+                <button
+                  type="button"
+                  className="icon-button admin-bookings-info-button"
+                  onClick={() => setBookingsInfoModalOpen(true)}
+                  aria-label="Visa information om betalning, återbetalning och makulering"
+                  title="Hur fungerar betalning, återbetalning och makulering?"
+                >
+                  ℹ
+                </button>
+              </div>
               <div className="admin-summary">
                 <div className="summary-item">
                   <span>Antal betalande</span>
@@ -8906,12 +8994,14 @@ const AdminPage = () => {
                           </button>
                         </th>
                       ) : null}
-                      {bookingColumnVisibility.actions ? <th>Åtgärd</th> : null}
                       {listableCustomFieldsAdmin.map((field) =>
                         bookingCustomFieldVisibility[String(field.id)] === true ? (
                           <th key={`custom-header-${field.id}`}>{field.label}</th>
                         ) : null
                       )}
+                      <th className="admin-booking-void-header" aria-label="Åtgärd">
+                        Åtgärd
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -8922,7 +9012,8 @@ const AdminPage = () => {
                             Object.values(bookingColumnVisibility).filter(Boolean).length +
                             listableCustomFieldsAdmin.filter(
                               (field) => bookingCustomFieldVisibility[String(field.id)] === true
-                            ).length
+                            ).length +
+                            1
                           }
                           className="muted"
                         >
@@ -8931,7 +9022,7 @@ const AdminPage = () => {
                       </tr>
                     ) : (
                     pagedBookings.map((booking) => (
-                        <tr key={booking.id}>
+                        <tr key={booking.id} className={booking.voided_at ? "admin-booking-row-voided" : ""}>
                           {bookingColumnVisibility.name ? <td>{booking.name}</td> : null}
                           {bookingColumnVisibility.email ? <td>{booking.email}</td> : null}
                           {bookingColumnVisibility.city ? <td>{booking.city}</td> : null}
@@ -8941,26 +9032,32 @@ const AdminPage = () => {
                           {bookingColumnVisibility.terms ? <td>{booking.terms ? "Ja" : "Nej"}</td> : null}
                           {bookingColumnVisibility.payment_status ? (
                             <td className="admin-booking-payment-cell">
-                              <span
-                                className={`status-pill admin-booking-payment-pill status-payment-${getPaymentStatusVariant(
-                                  booking.payment_status,
-                                  booking
-                                )}`}
-                                title={
-                                  Number(booking.refund_amount) > 0
-                                    ? `${Number(booking.refund_amount).toLocaleString("sv-SE", {
-                                        minimumFractionDigits: 2,
-                                        maximumFractionDigits: 2
-                                      })} SEK återbetalt`
-                                    : undefined
-                                }
-                              >
-                                {getPaymentStatusLabel(booking.payment_status, booking)}
-                              </span>
+                              <div className="admin-booking-payment-badges">
+                                {getBookingStatusBadges(booking).map((badge, index) => (
+                                  <span
+                                    key={`${booking.id}-status-${index}`}
+                                    className={`status-pill admin-booking-payment-pill status-payment-${badge.variant}`}
+                                    title={badge.title}
+                                  >
+                                    {badge.label}
+                                  </span>
+                                ))}
+                              </div>
                             </td>
                           ) : null}
                           {bookingColumnVisibility.pris ? (
-                            <td>{formatPriceValue(booking.pris)}</td>
+                            <td>
+                              {formatPriceValue(booking.pris)}
+                              {getBookingRefundAmount(booking) > 0 ? (
+                                <div className="admin-booking-refunded-note">
+                                  {getBookingRefundAmount(booking).toLocaleString("sv-SE", {
+                                    minimumFractionDigits: 2,
+                                    maximumFractionDigits: 2
+                                  })}{" "}
+                                  SEK återbetalt
+                                </div>
+                              ) : null}
+                            </td>
                           ) : null}
                           {bookingColumnVisibility.order_number ? (
                             <td>{booking.order_number || "–"}</td>
@@ -8981,31 +9078,6 @@ const AdminPage = () => {
                                 : ""}
                             </td>
                           ) : null}
-                          {bookingColumnVisibility.actions ? (
-                            <td className="admin-booking-actions-cell">
-                              {canRefundBooking(booking) && selectedEventRefundLockedByPayout ? (
-                                <span className="muted" style={{ fontSize: "0.82rem" }} title="Utbetalning är begärd eller genomförd för eventet">
-                                  Låst
-                                </span>
-                              ) : canRefundBooking(booking) ? (
-                                <button
-                                  type="button"
-                                  className="button button-outline button-small"
-                                  onClick={() => openRefundModal(booking)}
-                                >
-                                  Återbetala
-                                </button>
-                              ) : Number(booking.refund_amount) > 0 ? (
-                                <span className="muted" style={{ fontSize: "0.82rem" }}>
-                                  {Number(booking.refund_amount).toLocaleString("sv-SE", {
-                                    minimumFractionDigits: 2,
-                                    maximumFractionDigits: 2
-                                  })}{" "}
-                                  SEK återbetalt
-                                </span>
-                              ) : null}
-                            </td>
-                          ) : null}
                           {listableCustomFieldsAdmin.map((field) =>
                             bookingCustomFieldVisibility[String(field.id)] === true ? (
                               <td key={`custom-${booking.id}-${field.id}`}>
@@ -9013,12 +9085,170 @@ const AdminPage = () => {
                               </td>
                             ) : null
                           )}
+                          <td className="admin-booking-void-cell">
+                            <div className="admin-booking-action-icons">
+                              {booking.voided_at ? (
+                                <button
+                                  type="button"
+                                  className="admin-booking-void-button is-voided"
+                                  title="Makulerad – klicka för att ångra"
+                                  aria-label="Ångra makulering"
+                                  onClick={() => handleVoidBooking(booking, false)}
+                                >
+                                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                    <polyline points="9 14 4 9 9 4" />
+                                    <path d="M20 20v-7a4 4 0 0 0-4-4H4" />
+                                  </svg>
+                                </button>
+                              ) : (
+                                <>
+                                  {canRefundBooking(booking) ? (
+                                    selectedEventRefundLockedByPayout ? (
+                                      <span
+                                        className="admin-booking-void-button is-locked"
+                                        title="Återbetalning låst – utbetalning är begärd eller genomförd för eventet"
+                                        aria-label="Återbetalning låst"
+                                      >
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                          <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                                          <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                                        </svg>
+                                      </span>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        className="admin-booking-refund-button"
+                                        title="Återbetala biljett (pengar tillbaka via Mollie, status sätts till Återbetald)"
+                                        aria-label="Återbetala biljett"
+                                        onClick={() => openRefundModal(booking)}
+                                      >
+                                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                          <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                                          <path d="M3 3v5h5" />
+                                          <text x="12.5" y="15.5" fontSize="8.5" fontWeight="700" textAnchor="middle" fill="currentColor" stroke="none">kr</text>
+                                        </svg>
+                                      </button>
+                                    )
+                                  ) : null}
+                                  <button
+                                    type="button"
+                                    className="admin-booking-void-button"
+                                    title="Makulera anmälan"
+                                    aria-label="Makulera anmälan"
+                                    onClick={() => handleVoidBooking(booking, true)}
+                                  >
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                      <circle cx="12" cy="12" r="10" />
+                                      <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+                                    </svg>
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          </td>
                         </tr>
                       ))
                     )}
                   </tbody>
                 </table>
               </div>
+            {bookingsInfoModalOpen ? (
+              <div className="modal-overlay" onClick={() => setBookingsInfoModalOpen(false)}>
+                <div
+                  className="modal admin-bookings-info-modal"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="bookings-info-title"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <div className="modal-header">
+                    <h3 id="bookings-info-title">Betalning, återbetalning och makulering</h3>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      onClick={() => setBookingsInfoModalOpen(false)}
+                      aria-label="Stäng"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <div className="modal-body admin-bookings-info-content">
+                    <section>
+                      <h4>Status i listan</h4>
+                      <ul>
+                        <li>
+                          <strong>Betald</strong> – biljetten är betald via Mollie och räknas med i intäkter och
+                          utbetalningar.
+                        </li>
+                        <li>
+                          <strong>Delåterbetald</strong> – en del av biljettpriset har återbetalats. Det återbetalda
+                          beloppet dras av i intäkter och utbetalningar.
+                        </li>
+                        <li>
+                          <strong>Återbetald</strong> – hela biljettpriset har återbetalats och räknas inte längre med
+                          i intäkter eller utbetalningar.
+                        </li>
+                        <li>
+                          <strong>Makulerad</strong> – administrativ markering i listan. Makulering påverkar inte
+                          intäkter eller utbetalningar.
+                        </li>
+                      </ul>
+                      <p className="field-hint">
+                        En post kan ha flera statusar samtidigt, till exempel <strong>Betald</strong> och{" "}
+                        <strong>Makulerad</strong>.
+                      </p>
+                    </section>
+                    <section>
+                      <h4>Åtgärdskolumnen längst till höger</h4>
+                      <ul>
+                        <li>
+                          <strong>Återbetala</strong> (ikon med cirkelpil och kr) – öppnar dialog där du anger belopp.
+                          Pengarna går tillbaka via Mollie till kundens betalsätt. Detta kan inte ångras i systemet.
+                        </li>
+                        <li>
+                          <strong>Makulera</strong> (förbudscirkel) – markerar anmälan som makulerad i listan. Posten
+                          ligger kvar men visas överstruken med statusen Makulerad.
+                        </li>
+                        <li>
+                          <strong>Ångra makulering</strong> (bakåtpil) – tar bort makuleringsmarkeringen. Visas bara
+                          på makulerade poster.
+                        </li>
+                      </ul>
+                    </section>
+                    <section>
+                      <h4>Intäkter och utbetalningar</h4>
+                      <ul>
+                        <li>
+                          Summeringen ovanför listan (<em>Antal betalande</em> och <em>Totala intäkter</em>) baseras på
+                          betalda biljetter minus eventuella återbetalningar.
+                        </li>
+                        <li>Makulering påverkar inte dessa siffror.</li>
+                        <li>
+                          Om utbetalning redan är begärd eller genomförd för eventet är återbetalning låst. Makulering
+                          går fortfarande att göra och ångra.
+                        </li>
+                      </ul>
+                    </section>
+                    <section>
+                      <h4>Pris-kolumnen</h4>
+                      <p>
+                        Under biljettpriset visas texten <em>X,XX SEK återbetalt</em> om en hel- eller delåterbetalning
+                        har gjorts.
+                      </p>
+                    </section>
+                  </div>
+                  <div className="modal-footer">
+                    <button
+                      type="button"
+                      className="button"
+                      onClick={() => setBookingsInfoModalOpen(false)}
+                    >
+                      Stäng
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
             {refundModal ? (
               <div className="toaster-overlay" onClick={() => !refundSubmitting && setRefundModal(null)}>
                 <div
@@ -9104,6 +9334,54 @@ const AdminPage = () => {
                       onClick={submitRefund}
                     >
                       {refundSubmitting ? "Skickar…" : "Bekräfta återbetalning"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+            {voidModal ? (
+              <div className="toaster-overlay" onClick={() => !voidSubmitting && setVoidModal(null)}>
+                <div
+                  className="toaster admin-refund-toaster"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="void-dialog-title"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <h3 id="void-dialog-title" className="toaster-title">
+                    {voidModal.shouldVoid ? "Makulera anmälan" : "Ångra makulering"}
+                  </h3>
+                  <p className="toaster-message">
+                    <strong>{voidModal.booking.name}</strong>
+                    {voidModal.booking.email ? ` (${voidModal.booking.email})` : ""}
+                    <br />
+                    Biljett: {voidModal.booking.ticket || "–"}
+                  </p>
+                  <p className="field-hint">
+                    {voidModal.shouldVoid
+                      ? "Posten ligger kvar i listan men markeras som Makulerad. Makulering påverkar inte intäkter eller utbetalningar."
+                      : "Makuleringsmarkeringen tas bort från posten."}
+                  </p>
+                  <div className="toaster-actions">
+                    <button
+                      type="button"
+                      className="button button-outline"
+                      disabled={voidSubmitting}
+                      onClick={() => setVoidModal(null)}
+                    >
+                      Avbryt
+                    </button>
+                    <button
+                      type="button"
+                      className="button button-danger"
+                      disabled={voidSubmitting}
+                      onClick={confirmVoidBooking}
+                    >
+                      {voidSubmitting
+                        ? "Sparar…"
+                        : voidModal.shouldVoid
+                        ? "Bekräfta makulering"
+                        : "Ångra makulering"}
                     </button>
                   </div>
                 </div>

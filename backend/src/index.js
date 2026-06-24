@@ -7667,7 +7667,7 @@ app.get("/admin/bookings", requireAdmin, async (req, res) => {
     }
     const result = await pool.query(
       `SELECT b.id, b.event_id, b.name, b.email, b.city, b.phone, b.organization, b.ticket, b.terms, b.payment_status, b.pris, b.custom_fields, b.created_at, b.checked_in_at,
-        b.refunded_at, b.refund_amount, b.mollie_refund_id,
+        b.refunded_at, b.refund_amount, b.mollie_refund_id, b.voided_at, b.voided_by_user_id,
         COALESCE(b.order_number,
           (SELECT po.payload->>'orderNumber' FROM payment_orders po
            WHERE po.booking_id = b.id OR b.id = ANY(COALESCE(po.booking_ids, ARRAY[]::integer[]))
@@ -7852,6 +7852,60 @@ app.post("/admin/bookings/:bookingId/refund", requireAdmin, refundLimiter, async
       ok: false,
       error: error?.message || "Återbetalning misslyckades."
     });
+  }
+});
+
+app.post("/admin/bookings/:bookingId/void", requireAdmin, async (req, res) => {
+  const bookingId = Number(req.params.bookingId);
+  if (!Number.isFinite(bookingId) || bookingId <= 0) {
+    res.status(400).json({ ok: false, error: "Ogiltigt boknings-id." });
+    return;
+  }
+  // Default till makulering; tillåt att ångra via { voided: false }.
+  const shouldVoid = req.body?.voided === false ? false : true;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const bookingResult = await client.query(
+      `
+        SELECT b.id
+        FROM bookings b
+        INNER JOIN events e ON e.id = b.event_id AND e.user_id = $2
+        WHERE b.id = $1
+        FOR UPDATE
+      `,
+      [bookingId, req.userId]
+    );
+    if (bookingResult.rowCount === 0) {
+      await client.query("ROLLBACK");
+      res.status(404).json({ ok: false, error: "Bokning hittades inte." });
+      return;
+    }
+    if (shouldVoid) {
+      await client.query(
+        `UPDATE bookings SET voided_at = NOW(), voided_by_user_id = $2 WHERE id = $1`,
+        [bookingId, req.userId]
+      );
+    } else {
+      await client.query(
+        `UPDATE bookings SET voided_at = NULL, voided_by_user_id = NULL WHERE id = $1`,
+        [bookingId]
+      );
+    }
+    await client.query("COMMIT");
+    res.json({
+      ok: true,
+      voided: shouldVoid,
+      message: shouldVoid
+        ? "Anmälan har makulerats."
+        : "Makuleringen har ångrats."
+    });
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("POST void booking error:", error);
+    res.status(500).json({ ok: false, error: "Kunde inte uppdatera makulering." });
+  } finally {
+    client.release();
   }
 });
 
@@ -8586,7 +8640,9 @@ const ensureBookingsTable = async () => {
       ADD COLUMN IF NOT EXISTS checked_in_at TIMESTAMPTZ,
       ADD COLUMN IF NOT EXISTS refunded_at TIMESTAMPTZ,
       ADD COLUMN IF NOT EXISTS refund_amount NUMERIC(10, 2),
-      ADD COLUMN IF NOT EXISTS mollie_refund_id TEXT
+      ADD COLUMN IF NOT EXISTS mollie_refund_id TEXT,
+      ADD COLUMN IF NOT EXISTS voided_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS voided_by_user_id INTEGER
   `);
 
   await pool.query(`
