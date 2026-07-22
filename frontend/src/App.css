@@ -515,7 +515,7 @@ h2 {
 
 .program-time {
   font-weight: 400;
-  color: var(--accent-dark);
+  color: var(--text);
   min-width: 80px;
 }
 
