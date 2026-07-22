@@ -171,6 +171,100 @@ function SpeakerBio({ bio }) {
   );
 }
 
+function stripHtmlText(html) {
+  const div = document.createElement("div");
+  div.innerHTML = String(html || "");
+  return div.textContent || div.innerText || "";
+}
+
+function normalizeProgramHtml(html) {
+  const trimmed = String(html || "").trim();
+  if (!stripHtmlText(trimmed).trim()) {
+    return "";
+  }
+  return trimmed;
+}
+
+const PROGRAM_DIVIDER_MARKER = "__evento_divider__";
+
+function isProgramDivider(item) {
+  return String(item?.time_text || "").trim() === PROGRAM_DIVIDER_MARKER;
+}
+
+function ProgramFormattedInput({ editorRef, onChange, placeholder }) {
+  const applyCommand = (command) => {
+    const el = editorRef.current;
+    if (!el) {
+      return;
+    }
+    el.focus();
+    const selection = window.getSelection();
+    // Formatera bara om något faktiskt är markerat inuti fältet.
+    if (
+      !selection ||
+      selection.rangeCount === 0 ||
+      selection.isCollapsed ||
+      !el.contains(selection.getRangeAt(0).commonAncestorContainer)
+    ) {
+      return;
+    }
+    try {
+      document.execCommand("styleWithCSS", false, false);
+    } catch {
+      /* ignoreras – stöds inte i alla webbläsare */
+    }
+    document.execCommand(command, false);
+    onChange(el.innerHTML);
+  };
+
+  const handleInput = () => {
+    if (editorRef.current) {
+      onChange(editorRef.current.innerHTML);
+    }
+  };
+
+  const handleKeyDown = (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      return;
+    }
+    // Blockera webbläsarens egna formaterings-kortkommandon så att
+    // formatering bara sker via knapparna.
+    if ((event.ctrlKey || event.metaKey) && ["b", "i", "u"].includes(event.key.toLowerCase())) {
+      event.preventDefault();
+    }
+  };
+
+  const formatButtonProps = (command) => ({
+    type: "button",
+    className: "icon-button",
+    // onMouseDown + preventDefault behåller markeringen i fältet.
+    onMouseDown: (event) => {
+      event.preventDefault();
+      applyCommand(command);
+    }
+  });
+
+  return (
+    <>
+      <div className="editor-toolbar editor-toolbar--compact">
+        <button {...formatButtonProps("bold")}>Fet</button>
+        <button {...formatButtonProps("italic")}>Kursiv</button>
+        <button {...formatButtonProps("underline")}>Understryk</button>
+      </div>
+      <div
+        className="program-field-editor"
+        contentEditable
+        ref={editorRef}
+        onInput={handleInput}
+        onKeyDown={handleKeyDown}
+        data-placeholder={placeholder}
+        suppressContentEditableWarning
+      />
+    </>
+  );
+}
+
 function formatAdminProfileDisplayValue(value) {
   const text = (value ?? "").toString().trim();
   return text || "–";
@@ -1719,6 +1813,8 @@ const AdminPage = () => {
   const [heroImageUrl, setHeroImageUrl] = useState("");
   const heroEditorRef = useRef(null);
   const faqEditorRef = useRef(null);
+  const programTimeEditorRef = useRef(null);
+  const programDescriptionEditorRef = useRef(null);
   const speakerImageInputRef = useRef(null);
   const partnerImageInputRef = useRef(null);
   const galleryImageInputRef = useRef(null);
@@ -1947,6 +2043,29 @@ const AdminPage = () => {
       faqEditorRef.current.innerHTML = adminFaqText || "";
     }
   }, [adminSection, selectedEventId]);
+  useEffect(() => {
+    const el = programTimeEditorRef.current;
+    if (adminSection !== "frontpage" || !el) {
+      return;
+    }
+    const nextHtml = programForm.time || "";
+    // Skriv bara över när fältet inte är fokuserat, annars hoppar markören
+    // medan man skriver. Detta synkar vid redigering, byte av event och
+    // rensar fältet efter att en programpunkt sparats.
+    if (document.activeElement !== el && el.innerHTML !== nextHtml) {
+      el.innerHTML = nextHtml;
+    }
+  }, [adminSection, selectedEventId, editingId, programForm.time]);
+  useEffect(() => {
+    const el = programDescriptionEditorRef.current;
+    if (adminSection !== "frontpage" || !el) {
+      return;
+    }
+    const nextHtml = programForm.description || "";
+    if (document.activeElement !== el && el.innerHTML !== nextHtml) {
+      el.innerHTML = nextHtml;
+    }
+  }, [adminSection, selectedEventId, editingId, programForm.description]);
   useEffect(() => () => {
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
   }, []);
@@ -3628,8 +3747,8 @@ const AdminPage = () => {
         },
         body: JSON.stringify({
           eventId: Number(selectedEventId),
-          time: programForm.time.trim(),
-          description: programForm.description.trim()
+          time: normalizeProgramHtml(programForm.time),
+          description: normalizeProgramHtml(programForm.description)
         })
       });
       if (!response.ok) {
@@ -3914,6 +4033,38 @@ const AdminPage = () => {
     setEditingId(null);
   };
 
+  const handleAddProgramDivider = () => {
+    if (!token) {
+      setError("Logga in för att lägga till avgränsare.");
+      return;
+    }
+    if (!selectedEventId) {
+      setError("Välj ett event först.");
+      return;
+    }
+    setError("");
+    const saveDivider = async () => {
+      const response = await fetch(`${API_BASE}/admin/program`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          eventId: Number(selectedEventId),
+          time: PROGRAM_DIVIDER_MARKER,
+          description: ""
+        })
+      });
+      if (!response.ok) {
+        throw new Error("Program divider save failed");
+      }
+      await loadProgramItems(selectedEventId);
+      localStorage.setItem(buildStorageKey("programUpdatedAt", selectedEventId), String(Date.now()));
+    };
+    saveDivider().catch(() => setError("Kunde inte lägga till avgränsare."));
+  };
+
   const handleProgramDelete = (item) => {
     if (!token) {
       setError("Logga in för att ta bort program.");
@@ -3923,7 +4074,10 @@ const AdminPage = () => {
       setError("Välj ett event först.");
       return;
     }
-    if (!window.confirm(`Ta bort "${item.time_text} - ${item.description}"?`)) {
+    const confirmMessage = isProgramDivider(item)
+      ? "Ta bort avgränsaren?"
+      : `Ta bort "${stripHtmlText(item.time_text)} - ${stripHtmlText(item.description)}"?`;
+    if (!window.confirm(confirmMessage)) {
       return;
     }
     const removeProgram = async () => {
@@ -9571,29 +9725,28 @@ const AdminPage = () => {
                   </label>
                 </div>
                 <form className="admin-form" onSubmit={handleProgramSubmit}>
-                  <label className="field">
+                  <div className="field">
                     <span className="field-label">Tid eller Rubrik</span>
                     <span className="field-hint">
-                      (Vid endast rubrik, hoppa över Beskrivning för att texten inte skall se ihoptryckt ut.)
+                      (Vid endast rubrik, hoppa över Beskrivning för att texten inte skall se ihoptryckt ut.
+                      Markera text och klicka Fet, Kursiv eller Understryk.)
                     </span>
-                    <input
-                      name="time"
-                      type="text"
+                    <ProgramFormattedInput
+                      editorRef={programTimeEditorRef}
                       placeholder="09:00 eller Rubrik"
-                      value={programForm.time}
-                      onChange={handleProgramChange}
+                      onChange={(html) => setProgramForm((prev) => ({ ...prev, time: html }))}
                     />
-                  </label>
-                  <label className="field">
+                  </div>
+                  <div className="field">
                     <span className="field-label">Beskrivning</span>
-                    <input
-                      name="description"
-                      type="text"
+                    <ProgramFormattedInput
+                      editorRef={programDescriptionEditorRef}
                       placeholder="Registrering"
-                      value={programForm.description}
-                      onChange={handleProgramChange}
+                      onChange={(html) =>
+                        setProgramForm((prev) => ({ ...prev, description: html }))
+                      }
                     />
-                  </label>
+                  </div>
                   <div className="admin-actions">
                     <button className="button" type="submit">
                       {editingId ? "Spara" : "Lägg till"}
@@ -9602,7 +9755,15 @@ const AdminPage = () => {
                       <button className="button button-outline" type="button" onClick={handleProgramCancel}>
                         Avbryt
                       </button>
-                    ) : null}
+                    ) : (
+                      <button
+                        className="button button-outline"
+                        type="button"
+                        onClick={handleAddProgramDivider}
+                      >
+                        Lägg till avgränsare
+                      </button>
+                    )}
                   </div>
                 </form>
                 {programItems.length > 0 ? (
@@ -9610,8 +9771,8 @@ const AdminPage = () => {
                     {programItems.map((item) => (
                       <div
                         className={`program-item program-admin-item ${
-                          draggingId === item.id ? "is-dragging" : ""
-                        }`}
+                          isProgramDivider(item) ? "program-divider-item " : ""
+                        }${draggingId === item.id ? "is-dragging" : ""}`}
                         key={item.id}
                         draggable
                         onDragStart={() => handleDragStart(item.id)}
@@ -9622,17 +9783,34 @@ const AdminPage = () => {
                           <span className="drag-handle" aria-hidden="true">
                             ≡
                           </span>
-                          <span className="program-time">{item.time_text}</span>
-                          <span className="program-title">{item.description}</span>
+                          {isProgramDivider(item) ? (
+                            <>
+                              <hr className="program-divider" />
+                              <span className="program-divider-label">Avgränsare</span>
+                            </>
+                          ) : (
+                            <>
+                              <span
+                                className="program-time"
+                                dangerouslySetInnerHTML={{ __html: item.time_text }}
+                              />
+                              <span
+                                className="program-title"
+                                dangerouslySetInnerHTML={{ __html: item.description }}
+                              />
+                            </>
+                          )}
                         </div>
                         <div className="program-actions">
-                          <button
-                            type="button"
-                            className="icon-button edit"
-                            onClick={() => handleProgramEdit(item)}
-                          >
-                            Redigera
-                          </button>
+                          {isProgramDivider(item) ? null : (
+                            <button
+                              type="button"
+                              className="icon-button edit"
+                              onClick={() => handleProgramEdit(item)}
+                            >
+                              Redigera
+                            </button>
+                          )}
                           <button
                             type="button"
                             className="icon-button danger"
@@ -12291,12 +12469,24 @@ function App() {
               <h2>{sectionLabels.program.trim() || "Program"}</h2>
               {programItems.length > 0 ? (
                 <div className="program">
-                  {programItems.map((item) => (
-                    <div className="program-item" key={item.id}>
-                      <span className="program-time">{item.time_text}</span>
-                      <span className="program-title">{item.description}</span>
-                    </div>
-                  ))}
+                  {programItems.map((item) =>
+                    isProgramDivider(item) ? (
+                      <div className="program-item program-divider-row" key={item.id}>
+                        <hr className="program-divider" />
+                      </div>
+                    ) : (
+                      <div className="program-item" key={item.id}>
+                        <span
+                          className="program-time"
+                          dangerouslySetInnerHTML={{ __html: item.time_text }}
+                        />
+                        <span
+                          className="program-title"
+                          dangerouslySetInnerHTML={{ __html: item.description }}
+                        />
+                      </div>
+                    )
+                  )}
                 </div>
               ) : (
                 <p className="muted">Programmet uppdateras snart.</p>

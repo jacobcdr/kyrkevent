@@ -514,7 +514,7 @@ h2 {
 }
 
 .program-time {
-  font-weight: 700;
+  font-weight: 400;
   color: var(--accent-dark);
   min-width: 80px;
 }
@@ -532,6 +532,33 @@ h2 {
 .program-item:not(.program-admin-item) .program-title {
   grid-column: 2;
   min-width: 0;
+}
+
+.program-divider {
+  flex: 1;
+  width: 100%;
+  height: 0;
+  margin: 0;
+  border: none;
+  border-top: 1px solid var(--border);
+  opacity: 0.7;
+}
+
+.program-details .program-divider {
+  min-width: 40px;
+}
+
+.program-divider-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-style: italic;
+  white-space: nowrap;
+}
+
+.program-item.program-divider-row {
+  display: block;
+  grid-column: 1 / -1;
+  padding: 0.5rem 0;
 }
 
 .speakers {
@@ -2754,6 +2781,53 @@ select.goog-te-combo {
   flex-wrap: wrap;
   gap: 0.5rem;
   align-items: center;
+}
+
+.editor-toolbar--compact {
+  margin-bottom: 0.35rem;
+}
+
+.program-field-editor {
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 0.95rem;
+  font-weight: 400;
+  line-height: 1.25;
+  min-height: 0;
+  background: var(--card);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.program-field-editor:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(102, 120, 141, 0.2);
+}
+
+.program-field-editor:empty::before {
+  content: attr(data-placeholder);
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.program-time b,
+.program-time strong,
+.program-title b,
+.program-title strong {
+  font-weight: 800;
+}
+
+.program-time i,
+.program-time em,
+.program-title i,
+.program-title em {
+  font-style: italic;
+}
+
+.program-time u,
+.program-title u {
+  text-decoration: underline;
 }
 
 .editor-select {
