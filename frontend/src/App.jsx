@@ -191,6 +191,28 @@ function isProgramDivider(item) {
   return String(item?.time_text || "").trim() === PROGRAM_DIVIDER_MARKER;
 }
 
+function mergeSectionOrder(order, defaults) {
+  if (!Array.isArray(order)) {
+    return [...defaults];
+  }
+  const valid = new Set(defaults);
+  const result = order.filter((key) => valid.has(key));
+  // Lägg till nycklar som saknas på sin standardposition (t.ex. efter
+  // den föregående standardsektionen) istället för sist.
+  defaults.forEach((key, defIndex) => {
+    if (result.includes(key)) {
+      return;
+    }
+    const preceding = defaults
+      .slice(0, defIndex)
+      .filter((prevKey) => result.includes(prevKey));
+    const insertAt =
+      preceding.length > 0 ? result.indexOf(preceding[preceding.length - 1]) + 1 : 0;
+    result.splice(insertAt, 0, key);
+  });
+  return result;
+}
+
 function ProgramFormattedInput({ editorRef, onChange, placeholder }) {
   const applyCommand = (command) => {
     const el = editorRef.current;
@@ -1889,20 +1911,22 @@ const AdminPage = () => {
     showTranslate: true,
     showDiscountCode: true,
     showFaq: false,
-    showGallery: false
+    showGallery: false,
+    showFormButton: false
   });
   const [adminSectionLabels, setAdminSectionLabels] = useState({
     program: "",
     speakers: "",
     partners: "",
     faq: "",
-    gallery: ""
+    gallery: "",
+    formButton: ""
   });
   const [adminFaqText, setAdminFaqText] = useState("");
   const [adminSpeakersLayout, setAdminSpeakersLayout] = useState("grid");
   const [adminGalleryMode, setAdminGalleryMode] = useState("grid");
   const [adminTranslateDefaultLanguage, setAdminTranslateDefaultLanguage] = useState("sv");
-  const DEFAULT_SECTION_ORDER = ["text", "program", "faq", "form", "speakers", "partners", "gallery", "place"];
+  const DEFAULT_SECTION_ORDER = ["text", "formButton", "program", "faq", "form", "speakers", "partners", "gallery", "place"];
   const [adminSectionOrder, setAdminSectionOrder] = useState([...DEFAULT_SECTION_ORDER]);
   const [adminFormFieldOrder, setAdminFormFieldOrder] = useState([]);
   const [pendingTheme, setPendingTheme] = useState("default");
@@ -2517,20 +2541,17 @@ const AdminPage = () => {
       showTranslate: data.sections?.showTranslate !== false,
       showDiscountCode: data.sections?.showDiscountCode !== false,
       showFaq: data.sections?.showFaq || false,
-      showGallery: data.sections?.showGallery === true
+      showGallery: data.sections?.showGallery === true,
+      showFormButton: data.sections?.showFormButton === true
     });
-    const order = data.sections?.sectionOrder;
-    setAdminSectionOrder(
-      Array.isArray(order) && order.length === DEFAULT_SECTION_ORDER.length
-        ? order
-        : [...DEFAULT_SECTION_ORDER]
-    );
+    setAdminSectionOrder(mergeSectionOrder(data.sections?.sectionOrder, DEFAULT_SECTION_ORDER));
     setAdminSectionLabels({
       program: data.sections?.sectionLabelProgram ?? "",
       speakers: data.sections?.sectionLabelSpeakers ?? "",
       partners: data.sections?.sectionLabelPartners ?? "",
       faq: data.sections?.sectionLabelFaq ?? "",
-      gallery: data.sections?.sectionLabelGallery ?? ""
+      gallery: data.sections?.sectionLabelGallery ?? "",
+      formButton: data.sections?.sectionLabelFormButton ?? ""
     });
     setAdminFaqText(data.sections?.faqText || "");
     setAdminSpeakersLayout(data.sections?.speakersLayout === "list" ? "list" : "grid");
@@ -4359,6 +4380,7 @@ const AdminPage = () => {
           sectionLabelPartners: adminSectionLabels.partners,
           sectionLabelFaq: adminSectionLabels.faq,
           sectionLabelGallery: adminSectionLabels.gallery,
+          sectionLabelFormButton: adminSectionLabels.formButton,
           faqText: adminFaqText,
           speakersLayout: adminSpeakersLayout,
           galleryMode: adminGalleryMode,
@@ -4395,6 +4417,7 @@ const AdminPage = () => {
           sectionLabelPartners: adminSectionLabels.partners,
           sectionLabelFaq: adminSectionLabels.faq,
           sectionLabelGallery: adminSectionLabels.gallery,
+          sectionLabelFormButton: adminSectionLabels.formButton,
           faqText: adminFaqText,
           speakersLayout: adminSpeakersLayout,
           galleryMode: adminGalleryMode,
@@ -4431,6 +4454,7 @@ const AdminPage = () => {
           sectionLabelPartners: adminSectionLabels.partners,
           sectionLabelFaq: adminSectionLabels.faq,
           sectionLabelGallery: adminSectionLabels.gallery,
+          sectionLabelFormButton: adminSectionLabels.formButton,
           faqText: adminFaqText,
           speakersLayout: next,
           galleryMode: adminGalleryMode,
@@ -4467,6 +4491,7 @@ const AdminPage = () => {
           sectionLabelPartners: adminSectionLabels.partners,
           sectionLabelFaq: adminSectionLabels.faq,
           sectionLabelGallery: adminSectionLabels.gallery,
+          sectionLabelFormButton: adminSectionLabels.formButton,
           faqText: adminFaqText,
           speakersLayout: adminSpeakersLayout,
           galleryMode: next,
@@ -4499,6 +4524,7 @@ const AdminPage = () => {
           sectionLabelPartners: adminSectionLabels.partners,
           sectionLabelFaq: adminSectionLabels.faq,
           sectionLabelGallery: adminSectionLabels.gallery,
+          sectionLabelFormButton: adminSectionLabels.formButton,
           faqText: adminFaqText,
           speakersLayout: adminSpeakersLayout,
           galleryMode: adminGalleryMode,
@@ -4516,6 +4542,7 @@ const AdminPage = () => {
 
   const sectionOrderLabels = {
     text: "Text",
+    formButton: "Knapp till anmälan",
     program: "Program",
     faq: "FAQ",
     form: "Anmäl dig här",
@@ -4551,6 +4578,7 @@ const AdminPage = () => {
           sectionLabelPartners: adminSectionLabels.partners,
           sectionLabelFaq: adminSectionLabels.faq,
           sectionLabelGallery: adminSectionLabels.gallery,
+          sectionLabelFormButton: adminSectionLabels.formButton,
           faqText: adminFaqText,
           speakersLayout: adminSpeakersLayout,
           galleryMode: adminGalleryMode,
@@ -9691,6 +9719,36 @@ const AdminPage = () => {
                 </ul>
               </div>
               <div className="section">
+                <div className="section-header">
+                  <div style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
+                    <h2>Knapp till anmälan</h2>
+                    <label className="field" style={{ marginBottom: 0, maxWidth: "260px" }}>
+                      <input
+                        type="text"
+                        value={adminSectionLabels.formButton}
+                        onChange={(e) => handleSectionLabelChange("formButton", e.target.value)}
+                        onBlur={saveAdminSectionLabels}
+                        placeholder="Knapptext, t.ex. Anmäl dig"
+                        aria-label="Text på knappen till anmälan"
+                      />
+                    </label>
+                  </div>
+                  <label className="field checkbox-field section-toggle">
+                    <span className="field-label">Visa</span>
+                    <input
+                      name="showFormButton"
+                      type="checkbox"
+                      checked={adminSectionVisibility.showFormButton}
+                      onChange={handleSectionVisibilityChange}
+                    />
+                  </label>
+                </div>
+                <p className="muted">
+                  Visar en knapp på framsidan som tar besökaren direkt till anmälningsformuläret
+                  ("Anmäl dig här"). Flytta den i sektionsordningen ovan för att ändra var den hamnar.
+                </p>
+              </div>
+              <div className="section">
                 <div
                   className="section-header"
                   style={{
@@ -11705,12 +11763,13 @@ function App() {
     showOrganization: true,
     showTranslate: true,
     showDiscountCode: true,
+    showFormButton: false,
     translateDefaultLanguage: "sv"
   });
   const [eventSectionsLoaded, setEventSectionsLoaded] = useState(false);
   const translateMountedEventIdRef = useRef(null);
   const [formFieldOrder, setFormFieldOrder] = useState([]);
-  const publicDefaultSectionOrder = ["text", "program", "faq", "form", "speakers", "partners", "gallery", "place"];
+  const publicDefaultSectionOrder = ["text", "formButton", "program", "faq", "form", "speakers", "partners", "gallery", "place"];
   const [sectionOrder, setSectionOrder] = useState([...publicDefaultSectionOrder]);
   const [programItems, setProgramItems] = useState([]);
   const [sectionLabels, setSectionLabels] = useState({
@@ -11718,7 +11777,8 @@ function App() {
     speakers: "",
     partners: "",
     faq: "",
-    gallery: ""
+    gallery: "",
+    formButton: ""
   });
   const [speakersLayout, setSpeakersLayout] = useState("grid");
   const [faqText, setFaqText] = useState("");
@@ -11981,20 +12041,17 @@ function App() {
       showDiscountCode: data.sections?.showDiscountCode !== false,
       showFaq: data.sections?.showFaq || false,
       showGallery: data.sections?.showGallery === true,
+      showFormButton: data.sections?.showFormButton === true,
       translateDefaultLanguage: normalizeTranslateDefaultLanguage(data.sections?.translateDefaultLanguage)
     });
-    const order = data.sections?.sectionOrder;
-    setSectionOrder(
-      Array.isArray(order) && order.length === publicDefaultSectionOrder.length
-        ? order
-        : [...publicDefaultSectionOrder]
-    );
+    setSectionOrder(mergeSectionOrder(data.sections?.sectionOrder, publicDefaultSectionOrder));
     setSectionLabels({
       program: data.sections?.sectionLabelProgram ?? "",
       speakers: data.sections?.sectionLabelSpeakers ?? "",
       partners: data.sections?.sectionLabelPartners ?? "",
       faq: data.sections?.sectionLabelFaq ?? "",
-      gallery: data.sections?.sectionLabelGallery ?? ""
+      gallery: data.sections?.sectionLabelGallery ?? "",
+      formButton: data.sections?.sectionLabelFormButton ?? ""
     });
     const mode = data.sections?.galleryMode;
     setGalleryMode(mode === "slideshow" || mode === "marquee" ? mode : "grid");
@@ -12604,9 +12661,27 @@ function App() {
             </div>
           );
         }
+        if (key === "formButton" && sectionVisibility.showFormButton) {
+          return (
+            <div className="section section-form-button" key="formButton">
+              <button
+                type="button"
+                className="button full-width"
+                onClick={() => {
+                  const target = document.getElementById("form-section");
+                  if (target) {
+                    target.scrollIntoView({ behavior: "smooth", block: "start" });
+                  }
+                }}
+              >
+                {sectionLabels.formButton.trim() || "Anmäl dig här"}
+              </button>
+            </div>
+          );
+        }
         if (key === "form") {
           return (
-            <div className="section" key="form">
+            <div className="section" key="form" id="form-section">
               <h2>Anmäl dig här</h2>
               <form className="form" onSubmit={handleAddToCart} id="booking-form">
           {(() => {
