@@ -68,8 +68,13 @@ const ORDER_NUMBER_QR_CONTENT_ID = "order-number-qr";
 const BOLAGSAPI_KEY = process.env.BOLAGSAPI_KEY || "";
 const PAYOUT_EMAIL = process.env.PAYOUT_EMAIL || "";
 const PAYOUT_DAYS_AFTER_EVENT = Math.max(0, parseInt(process.env.PAYOUT_DAYS_AFTER_EVENT || "1", 10) || 0);
-const PAYOUT_FEE_THRESHOLD = Math.max(0, Number(process.env.PAYOUT_FEE_THRESHOLD || "500") || 500);
-const PAYOUT_FEE_AMOUNT = Math.max(0, Number(process.env.PAYOUT_FEE_AMOUNT || "50") || 50);
+const parseAmountEnv = (value, fallback) => {
+  if (value === undefined || value === null || String(value).trim() === "") return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : fallback;
+};
+const PAYOUT_FEE_THRESHOLD = parseAmountEnv(process.env.PAYOUT_FEE_THRESHOLD, 500);
+const PAYOUT_FEE_AMOUNT = parseAmountEnv(process.env.PAYOUT_FEE_AMOUNT, 50);
 const PARTIAL_PAYOUT_MAX_PERCENT = Math.min(
   100,
   Math.max(1, Number(process.env.PARTIAL_PAYOUT_MAX_PERCENT || "70") || 70)
