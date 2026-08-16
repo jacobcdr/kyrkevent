@@ -11826,7 +11826,11 @@ function App() {
           }
         });
       },
-      { threshold: 0.12, rootMargin: "0px 0px -8% 0px" }
+      // threshold 0 = tona in så snart någon del av sektionen kommer in i vyn.
+      // Viktigt för höga sektioner (t.ex. talare på mobil där korten staplas):
+      // en procent-tröskel av hela ytan kan annars aldrig nås och sektionen
+      // skulle förbli osynlig.
+      { threshold: 0, rootMargin: "0px 0px -10% 0px" }
     );
 
     sections.forEach((el) => {
