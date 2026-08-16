@@ -431,6 +431,32 @@ h2 {
   box-shadow: var(--shadow);
 }
 
+/* Publika eventsidan: slå ihop sektionerna till en enda sammanhängande yta.
+   Sektionerna renderas som en obruten följd av .section direkt i .page, så vi
+   tar bort mellanrum, inre kanter och hörn – och rundar bara de yttre hörnen
+   på den första och sista sektionen. */
+.page > .section {
+  margin-top: 0;
+  border-top: none;
+  border-bottom: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.page > .section:not(.section + .section) {
+  margin-top: 2rem;
+  border-top: 1px solid var(--border);
+  border-top-left-radius: 16px;
+  border-top-right-radius: 16px;
+}
+
+.page > .section:not(:has(~ .section)) {
+  border-bottom: 1px solid var(--border);
+  border-bottom-left-radius: 16px;
+  border-bottom-right-radius: 16px;
+  box-shadow: var(--shadow);
+}
+
 .program {
   display: grid;
   gap: 0.75rem;
@@ -1013,8 +1039,8 @@ h2 {
   align-items: center;
   padding: 1.5rem;
   border-radius: 18px;
-  border: 1px solid #f3d794;
-  background: #fffdf6;
+  border: 1px solid #d9dde3;
+  background: #ffffff;
   max-width: 680px;
   width: 100%;
   box-shadow: 0 12px 28px rgba(17, 24, 39, 0.08);
@@ -1058,7 +1084,7 @@ h2 {
   gap: 1rem;
   padding: 0.5rem 0.75rem;
   border-radius: 10px;
-  background: #fff7e1;
+  background: #98a6b9;
   font-size: 0.95rem;
 }
 
@@ -2653,8 +2679,8 @@ h2 {
   margin-top: 1rem;
   padding: 1rem;
   border-radius: 16px;
-  background: #fff7e8;
-  border: 1px solid #f2d3a6;
+  background: #ffffff;
+  border: 1px solid #d9dde3;
 }
 
 .receipt h3 {

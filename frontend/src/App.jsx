@@ -11787,6 +11787,75 @@ function App() {
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
   const markerRef = useRef(null);
+  const pageRef = useRef(null);
+
+  // Scroll-reveal: sektioner tonas in och glider uppåt när de rullas in i vyn.
+  // Styrs via inline-styles (inte className) så att React inte skriver över
+  // effekten vid täta omrenderingar (t.ex. när man skriver i anmälningsformuläret).
+  useLayoutEffect(() => {
+    const container = pageRef.current;
+    if (!container) return undefined;
+
+    const prefersReduced =
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    const sections = Array.from(
+      container.querySelectorAll(":scope > .hero, :scope > .section")
+    );
+    if (sections.length === 0) return undefined;
+
+    const reveal = (el) => {
+      el.dataset.revealDone = "1";
+      el.style.opacity = "1";
+      el.style.transform = "none";
+    };
+
+    if (prefersReduced || typeof IntersectionObserver === "undefined") {
+      sections.forEach(reveal);
+      return undefined;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            reveal(entry.target);
+            observer.unobserve(entry.target);
+          }
+        });
+      },
+      { threshold: 0.12, rootMargin: "0px 0px -8% 0px" }
+    );
+
+    sections.forEach((el) => {
+      if (el.dataset.revealDone === "1") return;
+      if (el.dataset.revealInit !== "1") {
+        el.dataset.revealInit = "1";
+        el.style.opacity = "0";
+        el.style.transform = "translateY(48px)";
+        el.style.transition =
+          "opacity 1.1s ease, transform 1.1s cubic-bezier(0.22, 1, 0.36, 1)";
+        el.style.willChange = "opacity, transform";
+      }
+      observer.observe(el);
+    });
+
+    return () => observer.disconnect();
+  }, [
+    eventSectionsLoaded,
+    sectionOrder,
+    sectionVisibility,
+    speakers,
+    partners,
+    galleryImages,
+    programItems,
+    hero,
+    faqText,
+    prices,
+    bookingCart
+  ]);
 
   useEffect(() => {
     if (isAdminRoute || isPaymentStatusRoute) {
@@ -12485,7 +12554,7 @@ function App() {
   }
 
   return (
-    <div className="page">
+    <div className="page" ref={pageRef}>
       {sectionVisibility.showTranslate && eventSectionsLoaded ? (
         <div className="translate-row notranslate">
           <span className="translate-label">Språk</span>
