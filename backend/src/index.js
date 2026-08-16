@@ -1971,11 +1971,15 @@ app.post("/payments/start", paymentLimiter, async (req, res) => {
       return;
     }
 
+    const verifyToken = crypto.randomBytes(32).toString("hex");
     await pool.query(
       `
-        INSERT INTO payment_orders (payment_id, payload, status)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (payment_id) DO UPDATE SET payload = EXCLUDED.payload, status = EXCLUDED.status
+        INSERT INTO payment_orders (payment_id, payload, status, verify_token)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (payment_id) DO UPDATE SET
+          payload = EXCLUDED.payload,
+          status = EXCLUDED.status,
+          verify_token = COALESCE(payment_orders.verify_token, EXCLUDED.verify_token)
       `,
       [
         payment.id,
@@ -1988,11 +1992,12 @@ app.post("/payments/start", paymentLimiter, async (req, res) => {
           chargeAmount,
           orderNumber
         },
-        payment.status
+        payment.status,
+        verifyToken
       ]
     );
 
-    res.json({ ok: true, checkoutUrl, paymentId: payment.id });
+    res.json({ ok: true, checkoutUrl, verifyToken });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to start payment" });
   }
@@ -2326,16 +2331,20 @@ app.post("/payments/start-cart", paymentLimiter, async (req, res) => {
       return;
     }
 
+    const verifyToken = crypto.randomBytes(32).toString("hex");
     await pool.query(
       `
-        INSERT INTO payment_orders (payment_id, payload, status)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (payment_id) DO UPDATE SET payload = EXCLUDED.payload, status = EXCLUDED.status
+        INSERT INTO payment_orders (payment_id, payload, status, verify_token)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (payment_id) DO UPDATE SET
+          payload = EXCLUDED.payload,
+          status = EXCLUDED.status,
+          verify_token = COALESCE(payment_orders.verify_token, EXCLUDED.verify_token)
       `,
-      [payment.id, { items: processedItems, serviceFee, chargeAmount, orderNumber }, payment.status]
+      [payment.id, { items: processedItems, serviceFee, chargeAmount, orderNumber }, payment.status, verifyToken]
     );
 
-    res.json({ ok: true, checkoutUrl, paymentId: payment.id });
+    res.json({ ok: true, checkoutUrl, verifyToken });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to start cart payment" });
   }
@@ -2346,17 +2355,16 @@ app.get("/payments/verify", async (req, res) => {
     res.status(500).json({ ok: false, error: "MOLLIE_API_KEY is not set" });
     return;
   }
-  const paymentId = req.query.paymentId;
-  if (!paymentId) {
-    res.status(400).json({ ok: false, error: "Missing paymentId" });
+  const token = String(req.query.token || "").trim();
+  if (!token) {
+    res.status(400).json({ ok: false, error: "Missing token" });
     return;
   }
 
   try {
-    const payment = await mollie.payments.get(paymentId);
     const orderResult = await pool.query(
-      "SELECT payment_id, payload, status, booking_id, booking_ids FROM payment_orders WHERE payment_id = $1",
-      [paymentId]
+      "SELECT payment_id, payload, status, booking_id, booking_ids FROM payment_orders WHERE verify_token = $1",
+      [token]
     );
     if (orderResult.rowCount === 0) {
       res.status(404).json({ ok: false, error: "Payment not found" });
@@ -2364,6 +2372,8 @@ app.get("/payments/verify", async (req, res) => {
     }
 
     const order = orderResult.rows[0];
+    const paymentId = order.payment_id;
+    const payment = await mollie.payments.get(paymentId);
     const status = payment.status || "unknown";
     const payload = order.payload || {};
     const isCart = Array.isArray(payload.items) && payload.items.length > 0;
@@ -3269,12 +3279,16 @@ app.post("/admin/payments/start-bas", requireAdmin, paymentLimiter, async (req, 
       res.status(500).json({ ok: false, error: "Missing checkout URL" });
       return;
     }
+    const verifyToken = crypto.randomBytes(32).toString("hex");
     await pool.query(
-      `INSERT INTO payment_orders (payment_id, payload, status) VALUES ($1, $2, $3)
-       ON CONFLICT (payment_id) DO UPDATE SET payload = EXCLUDED.payload, status = EXCLUDED.status`,
-      [payment.id, { type: "bas", profile_id: profileId, quantity }, payment.status]
+      `INSERT INTO payment_orders (payment_id, payload, status, verify_token) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (payment_id) DO UPDATE SET
+         payload = EXCLUDED.payload,
+         status = EXCLUDED.status,
+         verify_token = COALESCE(payment_orders.verify_token, EXCLUDED.verify_token)`,
+      [payment.id, { type: "bas", profile_id: profileId, quantity }, payment.status, verifyToken]
     );
-    res.json({ ok: true, checkoutUrl, paymentId: payment.id });
+    res.json({ ok: true, checkoutUrl, verifyToken });
   } catch (error) {
     res.status(500).json({ ok: false, error: error?.message || "Kunde inte starta betalning." });
   }
@@ -8773,6 +8787,15 @@ const ensureBookingsTable = async () => {
   await pool.query(`
     ALTER TABLE payment_orders
       ADD COLUMN IF NOT EXISTS booking_ids INTEGER[]
+  `);
+
+  await pool.query(`
+    ALTER TABLE payment_orders
+      ADD COLUMN IF NOT EXISTS verify_token TEXT
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS payment_orders_verify_token_key
+      ON payment_orders (verify_token)
   `);
 
   await pool.query(`

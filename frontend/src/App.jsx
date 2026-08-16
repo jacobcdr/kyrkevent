@@ -1108,19 +1108,19 @@ const PaymentStatusPage = () => {
       }
       return;
     }
-    const paymentId = params.get("paymentId") || localStorage.getItem("pendingPaymentId");
-    if (!paymentId) {
+    const verifyTokenValue = params.get("token") || localStorage.getItem("pendingVerifyToken");
+    if (!verifyTokenValue) {
       setStatus("missing");
       setMessage("Saknar betalnings-ID.");
       return;
     }
     const verify = async () => {
-      const response = await fetch(`${API_BASE}/payments/verify?paymentId=${paymentId}`);
+      const response = await fetch(`${API_BASE}/payments/verify?token=${encodeURIComponent(verifyTokenValue)}`);
       if (!response.ok) {
         throw new Error("Verify failed");
       }
       const data = await response.json();
-      localStorage.removeItem("pendingPaymentId");
+      localStorage.removeItem("pendingVerifyToken");
       if (data.status === "paid") {
         setStatus("paid");
         if (data.summary?.orderType === "bas") {
@@ -3583,7 +3583,7 @@ const AdminPage = () => {
         body: JSON.stringify({ quantity: basQuantity })
       });
       const data = await response.json();
-      if (!data.ok || !data.checkoutUrl || !data.paymentId) {
+      if (!data.ok || !data.checkoutUrl || !data.verifyToken) {
         const errMsg = data.error || "Kunde inte starta betalning.";
         setError(errMsg);
         if (errMsg.includes("förnamn") || errMsg.includes("organisation")) {
@@ -3591,7 +3591,7 @@ const AdminPage = () => {
         }
         return;
       }
-      localStorage.setItem("pendingPaymentId", data.paymentId);
+      localStorage.setItem("pendingVerifyToken", data.verifyToken);
       window.location.href = data.checkoutUrl;
     } catch (err) {
       setError(err?.message || "Kunde inte starta betalning.");
@@ -12443,11 +12443,11 @@ function App() {
         window.location.href = `${window.location.origin}/payment-status?direct=1`;
         return;
       }
-      if (!data.checkoutUrl || !data.paymentId) {
+      if (!data.checkoutUrl || !data.verifyToken) {
         throw new Error("Missing checkout URL");
       }
       setBookingCart([]);
-      localStorage.setItem("pendingPaymentId", data.paymentId);
+      localStorage.setItem("pendingVerifyToken", data.verifyToken);
       window.location.href = data.checkoutUrl;
     } catch (error) {
       setPaymentError(error?.message || "Kunde inte starta betalning.");
