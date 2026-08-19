@@ -412,13 +412,42 @@ const defaultSectionVisibility = {
   sectionLabelGallery: "",
   galleryMode: "grid",
   showFormButton: false,
-  sectionLabelFormButton: ""
+  sectionLabelFormButton: "",
+  showSocial: false,
+  sectionLabelSocial: "",
+  socialInstagramUrl: "",
+  socialFacebookUrl: "",
+  socialLinkedinUrl: "",
+  socialShowInstagram: true,
+  socialShowFacebook: true,
+  socialShowLinkedin: true,
+  socialIconStyle: "color",
+  socialIconShape: "rounded",
+  socialCaption: ""
 };
 
-const DEFAULT_SECTION_ORDER = ["text", "formButton", "program", "faq", "form", "speakers", "partners", "gallery", "place"];
+const DEFAULT_SECTION_ORDER = ["text", "formButton", "program", "faq", "form", "speakers", "partners", "gallery", "social", "place"];
 const VALID_SECTION_ORDER_KEYS = new Set(DEFAULT_SECTION_ORDER);
 const VALID_SPEAKERS_LAYOUTS = new Set(["grid", "list"]);
 const VALID_GALLERY_MODES = new Set(["grid", "slideshow", "marquee"]);
+const VALID_SOCIAL_ICON_STYLES = new Set(["color", "mono", "grayscale"]);
+const VALID_SOCIAL_ICON_SHAPES = new Set(["circle", "rounded", "square", "plain"]);
+
+function parseSocialIconStyle(value) {
+  const normalized = String(value || "color").toLowerCase();
+  return VALID_SOCIAL_ICON_STYLES.has(normalized) ? normalized : "color";
+}
+
+function parseSocialIconShape(value) {
+  const normalized = String(value || "rounded").toLowerCase();
+  return VALID_SOCIAL_ICON_SHAPES.has(normalized) ? normalized : "rounded";
+}
+
+function normalizeSocialUrl(value) {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  if (!trimmed) return "";
+  return trimmed.slice(0, 500);
+}
 
 function parseSpeakersLayout(value) {
   const normalized = String(value || "grid").toLowerCase();
@@ -443,7 +472,11 @@ const EVENT_SECTIONS_SELECT = `
   show_faq, show_gallery, section_order, form_field_order,
   section_label_program, section_label_speakers, section_label_partners, section_label_faq, section_label_gallery,
   faq_text, speakers_layout, translate_default_language, gallery_mode,
-  show_form_button, section_label_form_button
+  show_form_button, section_label_form_button,
+  show_social, section_label_social,
+  social_instagram_url, social_facebook_url, social_linkedin_url,
+  social_show_instagram, social_show_facebook, social_show_linkedin,
+  social_icon_style, social_icon_shape, social_caption
 `;
 
 function formatSectionsResponse(row, customIds = []) {
@@ -474,7 +507,18 @@ function formatSectionsResponse(row, customIds = []) {
     translateDefaultLanguage: parseTranslateDefaultLanguage(row.translate_default_language),
     galleryMode: parseGalleryMode(row.gallery_mode),
     showFormButton: row.show_form_button === true,
-    sectionLabelFormButton: row.section_label_form_button ?? ""
+    sectionLabelFormButton: row.section_label_form_button ?? "",
+    showSocial: row.show_social === true,
+    sectionLabelSocial: row.section_label_social ?? "",
+    socialInstagramUrl: row.social_instagram_url ?? "",
+    socialFacebookUrl: row.social_facebook_url ?? "",
+    socialLinkedinUrl: row.social_linkedin_url ?? "",
+    socialShowInstagram: row.social_show_instagram !== false,
+    socialShowFacebook: row.social_show_facebook !== false,
+    socialShowLinkedin: row.social_show_linkedin !== false,
+    socialIconStyle: parseSocialIconStyle(row.social_icon_style),
+    socialIconShape: parseSocialIconShape(row.social_icon_shape),
+    socialCaption: row.social_caption ?? ""
   };
 }
 
@@ -5984,7 +6028,18 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
     translateDefaultLanguage,
     galleryMode,
     showFormButton,
-    sectionLabelFormButton
+    sectionLabelFormButton,
+    showSocial,
+    sectionLabelSocial,
+    socialInstagramUrl,
+    socialFacebookUrl,
+    socialLinkedinUrl,
+    socialShowInstagram,
+    socialShowFacebook,
+    socialShowLinkedin,
+    socialIconStyle,
+    socialIconShape,
+    socialCaption
   } = req.body || {};
   const parsedEventId = await ensureEventOwnership(eventId, req.userId, res);
   if (!parsedEventId) {
@@ -6009,6 +6064,14 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
   const speakersLayoutNormalized = parseSpeakersLayout(speakersLayout);
   const translateDefaultLanguageNormalized = parseTranslateDefaultLanguage(translateDefaultLanguage);
   const galleryModeNormalized = parseGalleryMode(galleryMode);
+  const labelSocial = typeof sectionLabelSocial === "string" ? sectionLabelSocial.trim() : "";
+  const socialInstagramUrlNormalized = normalizeSocialUrl(socialInstagramUrl);
+  const socialFacebookUrlNormalized = normalizeSocialUrl(socialFacebookUrl);
+  const socialLinkedinUrlNormalized = normalizeSocialUrl(socialLinkedinUrl);
+  const socialIconStyleNormalized = parseSocialIconStyle(socialIconStyle);
+  const socialIconShapeNormalized = parseSocialIconShape(socialIconShape);
+  const socialCaptionNormalized =
+    typeof socialCaption === "string" ? socialCaption.trim().slice(0, 500) : "";
   try {
     const result = await pool.query(
       `
@@ -6016,9 +6079,12 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
           (event_id, show_program, show_place, show_text, show_speakers, show_partners,
            show_name, show_email, show_phone, show_city, show_organization, show_translate, show_discount_code, show_faq, show_gallery,
            section_order, form_field_order, section_label_program, section_label_speakers, section_label_partners, section_label_faq, section_label_gallery, faq_text, speakers_layout, translate_default_language, gallery_mode,
-           show_form_button, section_label_form_button)
+           show_form_button, section_label_form_button,
+           show_social, section_label_social, social_instagram_url, social_facebook_url, social_linkedin_url,
+           social_show_instagram, social_show_facebook, social_show_linkedin, social_icon_style, social_icon_shape, social_caption)
         VALUES
-          ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)
+          ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28,
+           $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39)
         ON CONFLICT (event_id) DO UPDATE SET
           show_program = EXCLUDED.show_program,
           show_place = EXCLUDED.show_place,
@@ -6046,7 +6112,18 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
           translate_default_language = EXCLUDED.translate_default_language,
           gallery_mode = EXCLUDED.gallery_mode,
           show_form_button = EXCLUDED.show_form_button,
-          section_label_form_button = EXCLUDED.section_label_form_button
+          section_label_form_button = EXCLUDED.section_label_form_button,
+          show_social = EXCLUDED.show_social,
+          section_label_social = EXCLUDED.section_label_social,
+          social_instagram_url = EXCLUDED.social_instagram_url,
+          social_facebook_url = EXCLUDED.social_facebook_url,
+          social_linkedin_url = EXCLUDED.social_linkedin_url,
+          social_show_instagram = EXCLUDED.social_show_instagram,
+          social_show_facebook = EXCLUDED.social_show_facebook,
+          social_show_linkedin = EXCLUDED.social_show_linkedin,
+          social_icon_style = EXCLUDED.social_icon_style,
+          social_icon_shape = EXCLUDED.social_icon_shape,
+          social_caption = EXCLUDED.social_caption
         RETURNING ${EVENT_SECTIONS_SELECT}
       `,
       [
@@ -6077,7 +6154,18 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
         translateDefaultLanguageNormalized,
         galleryModeNormalized,
         showFormButton === true,
-        labelFormButton
+        labelFormButton,
+        showSocial === true,
+        labelSocial,
+        socialInstagramUrlNormalized,
+        socialFacebookUrlNormalized,
+        socialLinkedinUrlNormalized,
+        socialShowInstagram !== false,
+        socialShowFacebook !== false,
+        socialShowLinkedin !== false,
+        socialIconStyleNormalized,
+        socialIconShapeNormalized,
+        socialCaptionNormalized
       ]
     );
     res.json({
@@ -8594,7 +8682,18 @@ const ensureBookingsTable = async () => {
       section_label_gallery TEXT DEFAULT '',
       gallery_mode TEXT NOT NULL DEFAULT 'grid',
       show_form_button BOOLEAN NOT NULL DEFAULT FALSE,
-      section_label_form_button TEXT DEFAULT ''
+      section_label_form_button TEXT DEFAULT '',
+      show_social BOOLEAN NOT NULL DEFAULT FALSE,
+      section_label_social TEXT DEFAULT '',
+      social_instagram_url TEXT DEFAULT '',
+      social_facebook_url TEXT DEFAULT '',
+      social_linkedin_url TEXT DEFAULT '',
+      social_show_instagram BOOLEAN NOT NULL DEFAULT TRUE,
+      social_show_facebook BOOLEAN NOT NULL DEFAULT TRUE,
+      social_show_linkedin BOOLEAN NOT NULL DEFAULT TRUE,
+      social_icon_style TEXT NOT NULL DEFAULT 'color',
+      social_icon_shape TEXT NOT NULL DEFAULT 'rounded',
+      social_caption TEXT DEFAULT ''
     )
   `);
   await pool.query(`
@@ -8620,7 +8719,18 @@ const ensureBookingsTable = async () => {
       ADD COLUMN IF NOT EXISTS section_label_gallery TEXT DEFAULT '',
       ADD COLUMN IF NOT EXISTS gallery_mode TEXT NOT NULL DEFAULT 'grid',
       ADD COLUMN IF NOT EXISTS show_form_button BOOLEAN NOT NULL DEFAULT FALSE,
-      ADD COLUMN IF NOT EXISTS section_label_form_button TEXT DEFAULT ''
+      ADD COLUMN IF NOT EXISTS section_label_form_button TEXT DEFAULT '',
+      ADD COLUMN IF NOT EXISTS show_social BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS section_label_social TEXT DEFAULT '',
+      ADD COLUMN IF NOT EXISTS social_instagram_url TEXT DEFAULT '',
+      ADD COLUMN IF NOT EXISTS social_facebook_url TEXT DEFAULT '',
+      ADD COLUMN IF NOT EXISTS social_linkedin_url TEXT DEFAULT '',
+      ADD COLUMN IF NOT EXISTS social_show_instagram BOOLEAN NOT NULL DEFAULT TRUE,
+      ADD COLUMN IF NOT EXISTS social_show_facebook BOOLEAN NOT NULL DEFAULT TRUE,
+      ADD COLUMN IF NOT EXISTS social_show_linkedin BOOLEAN NOT NULL DEFAULT TRUE,
+      ADD COLUMN IF NOT EXISTS social_icon_style TEXT NOT NULL DEFAULT 'color',
+      ADD COLUMN IF NOT EXISTS social_icon_shape TEXT NOT NULL DEFAULT 'rounded',
+      ADD COLUMN IF NOT EXISTS social_caption TEXT DEFAULT ''
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS event_gallery_images (

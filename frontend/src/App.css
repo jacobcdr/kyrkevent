@@ -4444,3 +4444,162 @@ button.admin-booking-void-button:hover {
 .event-analytics-breakdown-list li:last-child {
   border-bottom: none;
 }
+
+/* Sociala medier */
+.social-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.section-social {
+  text-align: center;
+}
+
+.section-social .social-links {
+  justify-content: center;
+}
+
+.social-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 3rem;
+  height: 3rem;
+  color: #ffffff;
+  text-decoration: none;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+}
+
+.social-link:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+  opacity: 0.95;
+}
+
+.social-link svg {
+  width: 1.5rem;
+  height: 1.5rem;
+  display: block;
+}
+
+.social-links--circle .social-link {
+  border-radius: 50%;
+}
+
+.social-links--rounded .social-link {
+  border-radius: 0.85rem;
+}
+
+.social-links--square .social-link {
+  border-radius: 0;
+}
+
+.social-links--plain .social-link {
+  width: auto;
+  height: auto;
+  background: transparent !important;
+  box-shadow: none;
+}
+
+.social-links--plain .social-link svg {
+  width: 2rem;
+  height: 2rem;
+}
+
+.social-links--plain .social-link:hover {
+  box-shadow: none;
+  transform: translateY(-2px);
+}
+
+/* Enfärgat läge använder temats accentfärg */
+.social-links--mono .social-link {
+  background: var(--accent, #1f2937);
+  color: #ffffff;
+}
+
+.social-links--mono.social-links--plain .social-link {
+  color: var(--accent, #1f2937);
+}
+
+/* Gråskala */
+.social-links--grayscale .social-link {
+  background: #4b5563;
+  color: #ffffff;
+}
+
+.social-links--grayscale.social-links--plain .social-link {
+  color: #4b5563;
+}
+
+/* Text under ikonerna */
+.social-links-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.section-social .social-links-wrap {
+  align-items: center;
+}
+
+.social-caption {
+  margin: 0;
+  color: var(--muted, #6b7280);
+  font-size: 0.95rem;
+}
+
+/* Admin: plattformskort i sociala medier-fliken */
+.social-admin-platforms {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  margin-top: 1rem;
+}
+
+.social-admin-platform {
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 1rem;
+  background: var(--card);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.social-admin-platform__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.social-admin-platform__name {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+}
+
+.social-admin-platform__icon {
+  display: inline-flex;
+}
+
+.social-admin-platform__icon svg {
+  width: 1.35rem;
+  height: 1.35rem;
+  display: block;
+}
+
+.social-admin-preview {
+  margin-top: 1.5rem;
+  padding: 1.25rem;
+  border: 1px dashed var(--border);
+  border-radius: 0.75rem;
+}
+
+.social-admin-preview .social-links {
+  margin-top: 0.75rem;
+}

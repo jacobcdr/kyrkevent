@@ -191,6 +191,93 @@ function isProgramDivider(item) {
   return String(item?.time_text || "").trim() === PROGRAM_DIVIDER_MARKER;
 }
 
+const SOCIAL_PLATFORMS = [
+  { key: "instagram", label: "Instagram" },
+  { key: "facebook", label: "Facebook" },
+  { key: "linkedin", label: "LinkedIn" }
+];
+
+const SOCIAL_BRAND_COLORS = {
+  instagram: "#E4405F",
+  facebook: "#1877F2",
+  linkedin: "#0A66C2"
+};
+
+const SOCIAL_BRAND_BACKGROUNDS = {
+  instagram:
+    "radial-gradient(circle at 30% 107%, #fdf497 0%, #fdf497 5%, #fd5949 45%, #d6249f 60%, #285AEB 90%)",
+  facebook: "#1877F2",
+  linkedin: "#0A66C2"
+};
+
+const SOCIAL_GLYPH_PATHS = {
+  instagram:
+    "M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z",
+  facebook:
+    "M9.101 23.691v-7.98H6.627v-3.667h2.474v-1.58c0-4.085 1.848-5.978 5.858-5.978.401 0 .955.042 1.468.103a8.68 8.68 0 0 1 1.141.195v3.325a8.623 8.623 0 0 0-.653-.036 26.805 26.805 0 0 0-.733-.009c-.707 0-1.259.096-1.675.309a1.686 1.686 0 0 0-.679.622c-.258.42-.374.995-.374 1.752v1.297h3.919l-.386 2.103-.287 1.564h-3.246v8.245C19.396 23.238 24 18.179 24 12.044c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.628 3.874 10.35 9.101 11.647Z",
+  linkedin:
+    "M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.225 0z"
+};
+
+function normalizeSocialHref(url) {
+  const trimmed = String(url || "").trim();
+  if (!trimmed) return "";
+  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+}
+
+function SocialGlyph({ platform }) {
+  const path = SOCIAL_GLYPH_PATHS[platform];
+  if (!path) return null;
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d={path} fill="currentColor" />
+    </svg>
+  );
+}
+
+function SocialLinks({ items, iconStyle, iconShape, caption }) {
+  const links = (items || []).filter((item) => item && item.url && item.url.trim());
+  if (links.length === 0) {
+    return null;
+  }
+  const style = ["color", "mono", "grayscale"].includes(iconStyle) ? iconStyle : "color";
+  const shape = ["circle", "rounded", "square", "plain"].includes(iconShape) ? iconShape : "rounded";
+  const hasBackground = shape !== "plain";
+  const captionText = typeof caption === "string" ? caption.trim() : "";
+  return (
+    <div className="social-links-wrap">
+      <div className={`social-links social-links--${shape} social-links--${style}`}>
+        {links.map((item) => {
+          const inlineStyle = {};
+          if (style === "color") {
+            if (hasBackground) {
+              inlineStyle.background = SOCIAL_BRAND_BACKGROUNDS[item.platform];
+              inlineStyle.color = "#ffffff";
+            } else {
+              inlineStyle.color = SOCIAL_BRAND_COLORS[item.platform];
+            }
+          }
+          return (
+            <a
+              key={item.platform}
+              className={`social-link social-link--${item.platform}`}
+              href={normalizeSocialHref(item.url)}
+              target="_blank"
+              rel="noreferrer"
+              style={inlineStyle}
+              aria-label={item.label}
+            >
+              <SocialGlyph platform={item.platform} />
+              <span className="sr-only">{item.label}</span>
+            </a>
+          );
+        })}
+      </div>
+      {captionText ? <p className="social-caption">{captionText}</p> : null}
+    </div>
+  );
+}
+
 function mergeSectionOrder(order, defaults) {
   if (!Array.isArray(order)) {
     return [...defaults];
@@ -1912,7 +1999,8 @@ const AdminPage = () => {
     showDiscountCode: true,
     showFaq: false,
     showGallery: false,
-    showFormButton: false
+    showFormButton: false,
+    showSocial: false
   });
   const [adminSectionLabels, setAdminSectionLabels] = useState({
     program: "",
@@ -1920,13 +2008,25 @@ const AdminPage = () => {
     partners: "",
     faq: "",
     gallery: "",
-    formButton: ""
+    formButton: "",
+    social: ""
   });
   const [adminFaqText, setAdminFaqText] = useState("");
   const [adminSpeakersLayout, setAdminSpeakersLayout] = useState("grid");
   const [adminGalleryMode, setAdminGalleryMode] = useState("grid");
   const [adminTranslateDefaultLanguage, setAdminTranslateDefaultLanguage] = useState("sv");
-  const DEFAULT_SECTION_ORDER = ["text", "formButton", "program", "faq", "form", "speakers", "partners", "gallery", "place"];
+  const [adminSocial, setAdminSocial] = useState({
+    instagramUrl: "",
+    facebookUrl: "",
+    linkedinUrl: "",
+    showInstagram: true,
+    showFacebook: true,
+    showLinkedin: true,
+    iconStyle: "color",
+    iconShape: "rounded",
+    caption: ""
+  });
+  const DEFAULT_SECTION_ORDER = ["text", "formButton", "program", "faq", "form", "speakers", "partners", "gallery", "social", "place"];
   const [adminSectionOrder, setAdminSectionOrder] = useState([...DEFAULT_SECTION_ORDER]);
   const [adminFormFieldOrder, setAdminFormFieldOrder] = useState([]);
   const [pendingTheme, setPendingTheme] = useState("default");
@@ -2542,7 +2642,8 @@ const AdminPage = () => {
       showDiscountCode: data.sections?.showDiscountCode !== false,
       showFaq: data.sections?.showFaq || false,
       showGallery: data.sections?.showGallery === true,
-      showFormButton: data.sections?.showFormButton === true
+      showFormButton: data.sections?.showFormButton === true,
+      showSocial: data.sections?.showSocial === true
     });
     setAdminSectionOrder(mergeSectionOrder(data.sections?.sectionOrder, DEFAULT_SECTION_ORDER));
     setAdminSectionLabels({
@@ -2551,7 +2652,23 @@ const AdminPage = () => {
       partners: data.sections?.sectionLabelPartners ?? "",
       faq: data.sections?.sectionLabelFaq ?? "",
       gallery: data.sections?.sectionLabelGallery ?? "",
-      formButton: data.sections?.sectionLabelFormButton ?? ""
+      formButton: data.sections?.sectionLabelFormButton ?? "",
+      social: data.sections?.sectionLabelSocial ?? ""
+    });
+    setAdminSocial({
+      instagramUrl: data.sections?.socialInstagramUrl ?? "",
+      facebookUrl: data.sections?.socialFacebookUrl ?? "",
+      linkedinUrl: data.sections?.socialLinkedinUrl ?? "",
+      showInstagram: data.sections?.socialShowInstagram !== false,
+      showFacebook: data.sections?.socialShowFacebook !== false,
+      showLinkedin: data.sections?.socialShowLinkedin !== false,
+      iconStyle: ["color", "mono", "grayscale"].includes(data.sections?.socialIconStyle)
+        ? data.sections.socialIconStyle
+        : "color",
+      iconShape: ["circle", "rounded", "square", "plain"].includes(data.sections?.socialIconShape)
+        ? data.sections.socialIconShape
+        : "rounded",
+      caption: data.sections?.socialCaption ?? ""
     });
     setAdminFaqText(data.sections?.faqText || "");
     setAdminSpeakersLayout(data.sections?.speakersLayout === "list" ? "list" : "grid");
@@ -4356,10 +4473,35 @@ const AdminPage = () => {
     removeImage().catch(() => setError("Kunde inte ta bort bilden."));
   };
 
-  const handleSectionVisibilityChange = (event) => {
-    const { name, checked } = event.target;
-    const next = { ...adminSectionVisibility, [name]: checked };
-    setAdminSectionVisibility(next);
+  const buildSectionsPayload = (overrides = {}) => ({
+    eventId: Number(selectedEventId),
+    ...adminSectionVisibility,
+    sectionOrder: adminSectionOrder,
+    formFieldOrder: adminMergedFormFieldOrder,
+    sectionLabelProgram: adminSectionLabels.program,
+    sectionLabelSpeakers: adminSectionLabels.speakers,
+    sectionLabelPartners: adminSectionLabels.partners,
+    sectionLabelFaq: adminSectionLabels.faq,
+    sectionLabelGallery: adminSectionLabels.gallery,
+    sectionLabelFormButton: adminSectionLabels.formButton,
+    sectionLabelSocial: adminSectionLabels.social,
+    faqText: adminFaqText,
+    speakersLayout: adminSpeakersLayout,
+    galleryMode: adminGalleryMode,
+    translateDefaultLanguage: adminTranslateDefaultLanguage,
+    socialInstagramUrl: adminSocial.instagramUrl,
+    socialFacebookUrl: adminSocial.facebookUrl,
+    socialLinkedinUrl: adminSocial.linkedinUrl,
+    socialShowInstagram: adminSocial.showInstagram,
+    socialShowFacebook: adminSocial.showFacebook,
+    socialShowLinkedin: adminSocial.showLinkedin,
+    socialIconStyle: adminSocial.iconStyle,
+    socialIconShape: adminSocial.iconShape,
+    socialCaption: adminSocial.caption,
+    ...overrides
+  });
+
+  const putSectionsPayload = (payload, errorMessage) => {
     if (!token || !selectedEventId) {
       return;
     }
@@ -4370,174 +4512,96 @@ const AdminPage = () => {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`
         },
-        body: JSON.stringify({
-          eventId: Number(selectedEventId),
-          ...next,
-          sectionOrder: adminSectionOrder,
-          formFieldOrder: adminMergedFormFieldOrder,
-          sectionLabelProgram: adminSectionLabels.program,
-          sectionLabelSpeakers: adminSectionLabels.speakers,
-          sectionLabelPartners: adminSectionLabels.partners,
-          sectionLabelFaq: adminSectionLabels.faq,
-          sectionLabelGallery: adminSectionLabels.gallery,
-          sectionLabelFormButton: adminSectionLabels.formButton,
-          faqText: adminFaqText,
-          speakersLayout: adminSpeakersLayout,
-          galleryMode: adminGalleryMode,
-          translateDefaultLanguage: adminTranslateDefaultLanguage
-        })
+        body: JSON.stringify(payload)
       });
       if (!response.ok) {
         throw new Error("Sections save failed");
       }
     };
-    saveSections().catch(() => setError("Kunde inte spara sektionerna."));
+    saveSections().catch(() => setError(errorMessage));
+  };
+
+  const handleSectionVisibilityChange = (event) => {
+    const { name, checked } = event.target;
+    const next = { ...adminSectionVisibility, [name]: checked };
+    setAdminSectionVisibility(next);
+    putSectionsPayload(buildSectionsPayload(next), "Kunde inte spara sektionerna.");
   };
 
   const handleTranslateDefaultLanguageChange = (event) => {
     const next = normalizeTranslateDefaultLanguage(event.target.value);
     setAdminTranslateDefaultLanguage(next);
-    if (!token || !selectedEventId) {
-      return;
-    }
-    const saveSections = async () => {
-      const response = await fetch(`${API_BASE}/admin/sections`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          eventId: Number(selectedEventId),
-          ...adminSectionVisibility,
-          sectionOrder: adminSectionOrder,
-          formFieldOrder: adminMergedFormFieldOrder,
-          sectionLabelProgram: adminSectionLabels.program,
-          sectionLabelSpeakers: adminSectionLabels.speakers,
-          sectionLabelPartners: adminSectionLabels.partners,
-          sectionLabelFaq: adminSectionLabels.faq,
-          sectionLabelGallery: adminSectionLabels.gallery,
-          sectionLabelFormButton: adminSectionLabels.formButton,
-          faqText: adminFaqText,
-          speakersLayout: adminSpeakersLayout,
-          galleryMode: adminGalleryMode,
-          translateDefaultLanguage: next
-        })
-      });
-      if (!response.ok) {
-        throw new Error("Sections save failed");
-      }
-    };
-    saveSections().catch(() => setError("Kunde inte spara standardspråk."));
+    putSectionsPayload(
+      buildSectionsPayload({ translateDefaultLanguage: next }),
+      "Kunde inte spara standardspråk."
+    );
   };
 
   const handleSpeakersLayoutChange = (layout) => {
     const next = layout === "list" ? "list" : "grid";
     setAdminSpeakersLayout(next);
-    if (!token || !selectedEventId) {
-      return;
-    }
-    const saveSections = async () => {
-      const response = await fetch(`${API_BASE}/admin/sections`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          eventId: Number(selectedEventId),
-          ...adminSectionVisibility,
-          sectionOrder: adminSectionOrder,
-          formFieldOrder: adminMergedFormFieldOrder,
-          sectionLabelProgram: adminSectionLabels.program,
-          sectionLabelSpeakers: adminSectionLabels.speakers,
-          sectionLabelPartners: adminSectionLabels.partners,
-          sectionLabelFaq: adminSectionLabels.faq,
-          sectionLabelGallery: adminSectionLabels.gallery,
-          sectionLabelFormButton: adminSectionLabels.formButton,
-          faqText: adminFaqText,
-          speakersLayout: next,
-          galleryMode: adminGalleryMode,
-          translateDefaultLanguage: adminTranslateDefaultLanguage
-        })
-      });
-      if (!response.ok) {
-        throw new Error("Sections save failed");
-      }
-    };
-    saveSections().catch(() => setError("Kunde inte spara talarlayout."));
+    putSectionsPayload(
+      buildSectionsPayload({ speakersLayout: next }),
+      "Kunde inte spara talarlayout."
+    );
   };
 
   const handleGalleryModeChange = (mode) => {
     const next = mode === "slideshow" || mode === "marquee" ? mode : "grid";
     setAdminGalleryMode(next);
-    if (!token || !selectedEventId) {
-      return;
-    }
-    const saveSections = async () => {
-      const response = await fetch(`${API_BASE}/admin/sections`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          eventId: Number(selectedEventId),
-          ...adminSectionVisibility,
-          sectionOrder: adminSectionOrder,
-          formFieldOrder: adminMergedFormFieldOrder,
-          sectionLabelProgram: adminSectionLabels.program,
-          sectionLabelSpeakers: adminSectionLabels.speakers,
-          sectionLabelPartners: adminSectionLabels.partners,
-          sectionLabelFaq: adminSectionLabels.faq,
-          sectionLabelGallery: adminSectionLabels.gallery,
-          sectionLabelFormButton: adminSectionLabels.formButton,
-          faqText: adminFaqText,
-          speakersLayout: adminSpeakersLayout,
-          galleryMode: next,
-          translateDefaultLanguage: adminTranslateDefaultLanguage
-        })
-      });
-      if (!response.ok) {
-        throw new Error("Sections save failed");
-      }
-    };
-    saveSections().catch(() => setError("Kunde inte spara galleriläge."));
+    putSectionsPayload(
+      buildSectionsPayload({ galleryMode: next }),
+      "Kunde inte spara galleriläge."
+    );
   };
 
   const saveAdminSectionLabels = () => {
-    if (!token || !selectedEventId) return;
-    const saveSections = async () => {
-      const response = await fetch(`${API_BASE}/admin/sections`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          eventId: Number(selectedEventId),
-          ...adminSectionVisibility,
-          sectionOrder: adminSectionOrder,
-          formFieldOrder: adminMergedFormFieldOrder,
-          sectionLabelProgram: adminSectionLabels.program,
-          sectionLabelSpeakers: adminSectionLabels.speakers,
-          sectionLabelPartners: adminSectionLabels.partners,
-          sectionLabelFaq: adminSectionLabels.faq,
-          sectionLabelGallery: adminSectionLabels.gallery,
-          sectionLabelFormButton: adminSectionLabels.formButton,
-          faqText: adminFaqText,
-          speakersLayout: adminSpeakersLayout,
-          galleryMode: adminGalleryMode,
-          translateDefaultLanguage: adminTranslateDefaultLanguage
-        })
-      });
-      if (!response.ok) throw new Error("Sections save failed");
-    };
-    saveSections().catch(() => setError("Kunde inte spara rubrikerna."));
+    putSectionsPayload(buildSectionsPayload(), "Kunde inte spara rubrikerna.");
   };
 
   const handleSectionLabelChange = (field, value) => {
     setAdminSectionLabels((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const persistSocial = (nextSocial) => {
+    putSectionsPayload(
+      buildSectionsPayload({
+        socialInstagramUrl: nextSocial.instagramUrl,
+        socialFacebookUrl: nextSocial.facebookUrl,
+        socialLinkedinUrl: nextSocial.linkedinUrl,
+        socialShowInstagram: nextSocial.showInstagram,
+        socialShowFacebook: nextSocial.showFacebook,
+        socialShowLinkedin: nextSocial.showLinkedin,
+        socialIconStyle: nextSocial.iconStyle,
+        socialIconShape: nextSocial.iconShape,
+        socialCaption: nextSocial.caption
+      }),
+      "Kunde inte spara sociala medier."
+    );
+  };
+
+  const handleSocialToggle = (field) => {
+    setAdminSocial((prev) => {
+      const next = { ...prev, [field]: !prev[field] };
+      persistSocial(next);
+      return next;
+    });
+  };
+
+  const handleSocialStyleChange = (field, value) => {
+    setAdminSocial((prev) => {
+      const next = { ...prev, [field]: value };
+      persistSocial(next);
+      return next;
+    });
+  };
+
+  const handleSocialUrlChange = (field, value) => {
+    setAdminSocial((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const saveAdminSocialUrls = () => {
+    persistSocial(adminSocial);
   };
 
   const sectionOrderLabels = {
@@ -4549,6 +4613,7 @@ const AdminPage = () => {
     speakers: "Talare",
     partners: "Partner",
     gallery: "Galleri",
+    social: "Sociala medier",
     place: "Plats"
   };
 
@@ -4560,34 +4625,10 @@ const AdminPage = () => {
     next[fromIndex] = next[toIndex];
     next[toIndex] = tmp;
     setAdminSectionOrder(next);
-    if (!token || !selectedEventId) return;
-    const saveSections = async () => {
-      const response = await fetch(`${API_BASE}/admin/sections`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          eventId: Number(selectedEventId),
-          ...adminSectionVisibility,
-          sectionOrder: next,
-          formFieldOrder: adminMergedFormFieldOrder,
-          sectionLabelProgram: adminSectionLabels.program,
-          sectionLabelSpeakers: adminSectionLabels.speakers,
-          sectionLabelPartners: adminSectionLabels.partners,
-          sectionLabelFaq: adminSectionLabels.faq,
-          sectionLabelGallery: adminSectionLabels.gallery,
-          sectionLabelFormButton: adminSectionLabels.formButton,
-          faqText: adminFaqText,
-          speakersLayout: adminSpeakersLayout,
-          galleryMode: adminGalleryMode,
-          translateDefaultLanguage: adminTranslateDefaultLanguage
-        })
-      });
-      if (!response.ok) throw new Error("Sections save failed");
-    };
-    saveSections().catch(() => setError("Kunde inte spara sektionsordningen."));
+    putSectionsPayload(
+      buildSectionsPayload({ sectionOrder: next }),
+      "Kunde inte spara sektionsordningen."
+    );
   };
 
   const handleCustomFieldFormChange = (event) => {
@@ -10688,6 +10729,15 @@ const AdminPage = () => {
                   <button
                     type="button"
                     role="tab"
+                    className={`admin-main-tab ${eventSettingsTab === "social" ? "is-active" : ""}`}
+                    aria-selected={eventSettingsTab === "social"}
+                    onClick={() => setEventSettingsTab("social")}
+                  >
+                    Sociala medier
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
                     className={`admin-main-tab ${eventSettingsTab === "statistics" ? "is-active" : ""}`}
                     aria-selected={eventSettingsTab === "statistics"}
                     onClick={() => setEventSettingsTab("statistics")}
@@ -11492,6 +11542,212 @@ const AdminPage = () => {
               </div>
                   </>
                 ) : null}
+                {eventSettingsTab === "social" ? (
+              <div className="section">
+                <div
+                  className="section-header"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "1rem",
+                    flexWrap: "wrap",
+                    justifyContent: "space-between"
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
+                    <h2>Sociala medier</h2>
+                    <label className="field" style={{ marginBottom: 0, maxWidth: "260px" }}>
+                      <input
+                        type="text"
+                        value={adminSectionLabels.social}
+                        onChange={(e) => handleSectionLabelChange("social", e.target.value)}
+                        onBlur={saveAdminSectionLabels}
+                        placeholder="Byt ut rubriknamn"
+                        aria-label="Byt ut rubriknamn för Sociala medier"
+                      />
+                    </label>
+                  </div>
+                  <label className="field checkbox-field section-toggle">
+                    <span className="field-label">Visa</span>
+                    <input
+                      name="showSocial"
+                      type="checkbox"
+                      checked={adminSectionVisibility.showSocial}
+                      onChange={handleSectionVisibilityChange}
+                    />
+                  </label>
+                </div>
+                <p className="muted" style={{ marginTop: 0 }}>
+                  Klistra in länkar till era profiler. Aktivera de plattformar ni vill visa och välj
+                  ikonernas form och färg. Sektionens placering på framsidan ställer du in med pilarna
+                  under <strong>Framsida</strong>.
+                </p>
+
+                <div className="social-admin-platforms">
+                  {SOCIAL_PLATFORMS.map((platform) => {
+                    const urlField = `${platform.key}Url`;
+                    const showField = `show${platform.key.charAt(0).toUpperCase()}${platform.key.slice(1)}`;
+                    return (
+                      <div className="social-admin-platform" key={platform.key}>
+                        <div className="social-admin-platform__head">
+                          <span className="social-admin-platform__name">
+                            <span
+                              className="social-admin-platform__icon"
+                              style={{ color: SOCIAL_BRAND_COLORS[platform.key] }}
+                              aria-hidden="true"
+                            >
+                              <SocialGlyph platform={platform.key} />
+                            </span>
+                            {platform.label}
+                          </span>
+                          <label className="field checkbox-field section-toggle">
+                            <span className="field-label">Aktivera</span>
+                            <input
+                              type="checkbox"
+                              checked={adminSocial[showField]}
+                              onChange={() => handleSocialToggle(showField)}
+                            />
+                          </label>
+                        </div>
+                        <label className="field" style={{ marginBottom: 0 }}>
+                          <span className="field-label">Länk till {platform.label}</span>
+                          <input
+                            type="url"
+                            inputMode="url"
+                            value={adminSocial[urlField]}
+                            onChange={(e) => handleSocialUrlChange(urlField, e.target.value)}
+                            onBlur={saveAdminSocialUrls}
+                            placeholder={`https://www.${platform.key}.com/...`}
+                            disabled={!adminSocial[showField]}
+                          />
+                        </label>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <fieldset className="gallery-mode-picker" style={{ marginTop: "1.5rem" }}>
+                  <legend className="field-label">Ikonfärg</legend>
+                  <div className="gallery-mode-options">
+                    <label className="gallery-mode-option">
+                      <input
+                        type="radio"
+                        name="socialIconStyle"
+                        value="color"
+                        checked={adminSocial.iconStyle === "color"}
+                        onChange={() => handleSocialStyleChange("iconStyle", "color")}
+                      />
+                      <span>Plattformsfärger</span>
+                    </label>
+                    <label className="gallery-mode-option">
+                      <input
+                        type="radio"
+                        name="socialIconStyle"
+                        value="mono"
+                        checked={adminSocial.iconStyle === "mono"}
+                        onChange={() => handleSocialStyleChange("iconStyle", "mono")}
+                      />
+                      <span>Enfärgad (temafärg)</span>
+                    </label>
+                    <label className="gallery-mode-option">
+                      <input
+                        type="radio"
+                        name="socialIconStyle"
+                        value="grayscale"
+                        checked={adminSocial.iconStyle === "grayscale"}
+                        onChange={() => handleSocialStyleChange("iconStyle", "grayscale")}
+                      />
+                      <span>Gråskala</span>
+                    </label>
+                  </div>
+                </fieldset>
+
+                <fieldset className="gallery-mode-picker">
+                  <legend className="field-label">Ikonform</legend>
+                  <div className="gallery-mode-options">
+                    <label className="gallery-mode-option">
+                      <input
+                        type="radio"
+                        name="socialIconShape"
+                        value="circle"
+                        checked={adminSocial.iconShape === "circle"}
+                        onChange={() => handleSocialStyleChange("iconShape", "circle")}
+                      />
+                      <span>Rund</span>
+                    </label>
+                    <label className="gallery-mode-option">
+                      <input
+                        type="radio"
+                        name="socialIconShape"
+                        value="rounded"
+                        checked={adminSocial.iconShape === "rounded"}
+                        onChange={() => handleSocialStyleChange("iconShape", "rounded")}
+                      />
+                      <span>Rundade hörn</span>
+                    </label>
+                    <label className="gallery-mode-option">
+                      <input
+                        type="radio"
+                        name="socialIconShape"
+                        value="square"
+                        checked={adminSocial.iconShape === "square"}
+                        onChange={() => handleSocialStyleChange("iconShape", "square")}
+                      />
+                      <span>Fyrkantig</span>
+                    </label>
+                    <label className="gallery-mode-option">
+                      <input
+                        type="radio"
+                        name="socialIconShape"
+                        value="plain"
+                        checked={adminSocial.iconShape === "plain"}
+                        onChange={() => handleSocialStyleChange("iconShape", "plain")}
+                      />
+                      <span>Endast ikon</span>
+                    </label>
+                  </div>
+                </fieldset>
+
+                <label className="field" style={{ marginTop: "0.5rem" }}>
+                  <span className="field-label">Text under ikonerna</span>
+                  <textarea
+                    rows={2}
+                    value={adminSocial.caption}
+                    onChange={(e) => handleSocialUrlChange("caption", e.target.value)}
+                    onBlur={saveAdminSocialUrls}
+                    placeholder="T.ex. Följ oss för senaste nytt!"
+                    maxLength={500}
+                  />
+                </label>
+
+                <div className="social-admin-preview">
+                  <span className="field-label">Förhandsvisning</span>
+                  {(() => {
+                    const previewItems = SOCIAL_PLATFORMS.filter((platform) => {
+                      const showField = `show${platform.key.charAt(0).toUpperCase()}${platform.key.slice(1)}`;
+                      const urlField = `${platform.key}Url`;
+                      return adminSocial[showField] && adminSocial[urlField] && adminSocial[urlField].trim();
+                    }).map((platform) => ({
+                      platform: platform.key,
+                      label: platform.label,
+                      url: adminSocial[`${platform.key}Url`]
+                    }));
+                    return previewItems.length > 0 ? (
+                      <SocialLinks
+                        items={previewItems}
+                        iconStyle={adminSocial.iconStyle}
+                        iconShape={adminSocial.iconShape}
+                        caption={adminSocial.caption}
+                      />
+                    ) : (
+                      <p className="muted" style={{ marginTop: "0.5rem" }}>
+                        Aktivera en plattform och klistra in en länk för att se förhandsvisning.
+                      </p>
+                    );
+                  })()}
+                </div>
+              </div>
+                ) : null}
                 {eventSettingsTab === "statistics" ? (
                   <EventAnalytics apiBase={API_BASE} token={token} eventId={selectedEventId} />
                 ) : null}
@@ -11764,12 +12020,24 @@ function App() {
     showTranslate: true,
     showDiscountCode: true,
     showFormButton: false,
+    showSocial: false,
     translateDefaultLanguage: "sv"
+  });
+  const [social, setSocial] = useState({
+    instagramUrl: "",
+    facebookUrl: "",
+    linkedinUrl: "",
+    showInstagram: true,
+    showFacebook: true,
+    showLinkedin: true,
+    iconStyle: "color",
+    iconShape: "rounded",
+    caption: ""
   });
   const [eventSectionsLoaded, setEventSectionsLoaded] = useState(false);
   const translateMountedEventIdRef = useRef(null);
   const [formFieldOrder, setFormFieldOrder] = useState([]);
-  const publicDefaultSectionOrder = ["text", "formButton", "program", "faq", "form", "speakers", "partners", "gallery", "place"];
+  const publicDefaultSectionOrder = ["text", "formButton", "program", "faq", "form", "speakers", "partners", "gallery", "social", "place"];
   const [sectionOrder, setSectionOrder] = useState([...publicDefaultSectionOrder]);
   const [programItems, setProgramItems] = useState([]);
   const [sectionLabels, setSectionLabels] = useState({
@@ -11778,7 +12046,8 @@ function App() {
     partners: "",
     faq: "",
     gallery: "",
-    formButton: ""
+    formButton: "",
+    social: ""
   });
   const [speakersLayout, setSpeakersLayout] = useState("grid");
   const [faqText, setFaqText] = useState("");
@@ -12115,7 +12384,23 @@ function App() {
       showFaq: data.sections?.showFaq || false,
       showGallery: data.sections?.showGallery === true,
       showFormButton: data.sections?.showFormButton === true,
+      showSocial: data.sections?.showSocial === true,
       translateDefaultLanguage: normalizeTranslateDefaultLanguage(data.sections?.translateDefaultLanguage)
+    });
+    setSocial({
+      instagramUrl: data.sections?.socialInstagramUrl ?? "",
+      facebookUrl: data.sections?.socialFacebookUrl ?? "",
+      linkedinUrl: data.sections?.socialLinkedinUrl ?? "",
+      showInstagram: data.sections?.socialShowInstagram !== false,
+      showFacebook: data.sections?.socialShowFacebook !== false,
+      showLinkedin: data.sections?.socialShowLinkedin !== false,
+      iconStyle: ["color", "mono", "grayscale"].includes(data.sections?.socialIconStyle)
+        ? data.sections.socialIconStyle
+        : "color",
+      iconShape: ["circle", "rounded", "square", "plain"].includes(data.sections?.socialIconShape)
+        ? data.sections.socialIconShape
+        : "rounded",
+      caption: data.sections?.socialCaption ?? ""
     });
     setSectionOrder(mergeSectionOrder(data.sections?.sectionOrder, publicDefaultSectionOrder));
     setSectionLabels({
@@ -12124,7 +12409,8 @@ function App() {
       partners: data.sections?.sectionLabelPartners ?? "",
       faq: data.sections?.sectionLabelFaq ?? "",
       gallery: data.sections?.sectionLabelGallery ?? "",
-      formButton: data.sections?.sectionLabelFormButton ?? ""
+      formButton: data.sections?.sectionLabelFormButton ?? "",
+      social: data.sections?.sectionLabelSocial ?? ""
     });
     const mode = data.sections?.galleryMode;
     setGalleryMode(mode === "slideshow" || mode === "marquee" ? mode : "grid");
@@ -12241,6 +12527,7 @@ function App() {
           showOrganization: true,
           showTranslate: true,
           showDiscountCode: true,
+          showSocial: false,
           translateDefaultLanguage: "sv"
         })
       )
@@ -12705,6 +12992,31 @@ function App() {
                 images={galleryImages}
                 mode={galleryMode}
                 resolveAssetUrl={resolveAssetUrl}
+              />
+            </div>
+          );
+        }
+        if (key === "social" && sectionVisibility.showSocial) {
+          const socialItems = SOCIAL_PLATFORMS.filter((platform) => {
+            const showField = `show${platform.key.charAt(0).toUpperCase()}${platform.key.slice(1)}`;
+            const urlField = `${platform.key}Url`;
+            return social[showField] && social[urlField] && social[urlField].trim();
+          }).map((platform) => ({
+            platform: platform.key,
+            label: platform.label,
+            url: social[`${platform.key}Url`]
+          }));
+          if (socialItems.length === 0) {
+            return null;
+          }
+          return (
+            <div className="section section-social" key="social">
+              <h2>{sectionLabels.social.trim() || "Följ oss"}</h2>
+              <SocialLinks
+                items={socialItems}
+                iconStyle={social.iconStyle}
+                iconShape={social.iconShape}
+                caption={social.caption}
               />
             </div>
           );

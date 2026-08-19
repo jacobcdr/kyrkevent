@@ -158,7 +158,18 @@ CREATE TABLE IF NOT EXISTS event_sections (
   speakers_layout TEXT NOT NULL DEFAULT 'grid',
   show_gallery BOOLEAN NOT NULL DEFAULT FALSE,
   section_label_gallery TEXT DEFAULT '',
-  gallery_mode TEXT NOT NULL DEFAULT 'grid'
+  gallery_mode TEXT NOT NULL DEFAULT 'grid',
+  show_social BOOLEAN NOT NULL DEFAULT FALSE,
+  section_label_social TEXT DEFAULT '',
+  social_instagram_url TEXT DEFAULT '',
+  social_facebook_url TEXT DEFAULT '',
+  social_linkedin_url TEXT DEFAULT '',
+  social_show_instagram BOOLEAN NOT NULL DEFAULT TRUE,
+  social_show_facebook BOOLEAN NOT NULL DEFAULT TRUE,
+  social_show_linkedin BOOLEAN NOT NULL DEFAULT TRUE,
+  social_icon_style TEXT NOT NULL DEFAULT 'color',
+  social_icon_shape TEXT NOT NULL DEFAULT 'rounded',
+  social_caption TEXT DEFAULT ''
 );
 
 ALTER TABLE event_sections
@@ -181,7 +192,18 @@ ALTER TABLE event_sections
   ADD COLUMN IF NOT EXISTS translate_default_language TEXT NOT NULL DEFAULT 'sv',
   ADD COLUMN IF NOT EXISTS show_gallery BOOLEAN NOT NULL DEFAULT FALSE,
   ADD COLUMN IF NOT EXISTS section_label_gallery TEXT DEFAULT '',
-  ADD COLUMN IF NOT EXISTS gallery_mode TEXT NOT NULL DEFAULT 'grid';
+  ADD COLUMN IF NOT EXISTS gallery_mode TEXT NOT NULL DEFAULT 'grid',
+  ADD COLUMN IF NOT EXISTS show_social BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS section_label_social TEXT DEFAULT '',
+  ADD COLUMN IF NOT EXISTS social_instagram_url TEXT DEFAULT '',
+  ADD COLUMN IF NOT EXISTS social_facebook_url TEXT DEFAULT '',
+  ADD COLUMN IF NOT EXISTS social_linkedin_url TEXT DEFAULT '',
+  ADD COLUMN IF NOT EXISTS social_show_instagram BOOLEAN NOT NULL DEFAULT TRUE,
+  ADD COLUMN IF NOT EXISTS social_show_facebook BOOLEAN NOT NULL DEFAULT TRUE,
+  ADD COLUMN IF NOT EXISTS social_show_linkedin BOOLEAN NOT NULL DEFAULT TRUE,
+  ADD COLUMN IF NOT EXISTS social_icon_style TEXT NOT NULL DEFAULT 'color',
+  ADD COLUMN IF NOT EXISTS social_icon_shape TEXT NOT NULL DEFAULT 'rounded',
+  ADD COLUMN IF NOT EXISTS social_caption TEXT DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS event_gallery_images (
   id SERIAL PRIMARY KEY,
