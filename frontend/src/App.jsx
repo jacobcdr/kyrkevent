@@ -1058,9 +1058,11 @@ const CopyEventUrlButton = ({ url }) => {
   );
 };
 
+const SITE_TITLE = "Anmälningar för event & kultur";
+
 const LandingPage = () => {
   useEffect(() => {
-    document.title = "Kyrkevent";
+    document.title = SITE_TITLE;
   }, []);
   return (
     <div className="page landing-page">
@@ -1659,7 +1661,7 @@ function AdminCheckInPage() {
   useEffect(() => {
     document.title = "QR-incheckning";
     return () => {
-      document.title = "Kyrkevent";
+      document.title = SITE_TITLE;
     };
   }, []);
 
@@ -2163,10 +2165,7 @@ const AdminPage = () => {
   const [systemStatus, setSystemStatus] = useState(null);
   const [systemStatusLoading, setSystemStatusLoading] = useState(false);
   useEffect(() => {
-    document.title = "Kyrkevent";
-    return () => {
-      document.title = "Event";
-    };
+    document.title = SITE_TITLE;
   }, []);
 
   const loadSystemStatus = async (authToken) => {
@@ -12667,9 +12666,9 @@ function App() {
   }, [event, isAdminRoute, isPaymentStatusRoute]);
 
   useEffect(() => {
-    if (isAdminRoute || isPaymentStatusRoute) return;
-    document.title = event?.name || "Event";
-  }, [event?.name, isAdminRoute, isPaymentStatusRoute]);
+    if (isAdminRoute || isPaymentStatusRoute || isLandingRoute) return;
+    document.title = event?.name || SITE_TITLE;
+  }, [event?.name, isAdminRoute, isPaymentStatusRoute, isLandingRoute]);
 
   useEffect(() => {
     if (!event || isAdminRoute || isPaymentStatusRoute || isVerifyEmailRoute || isResetPasswordRoute) {
