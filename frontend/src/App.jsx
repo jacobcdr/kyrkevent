@@ -1102,7 +1102,7 @@ const LandingPage = () => {
       </div>
 
       <section className="landing-pricing" aria-labelledby="landing-pricing-heading">
-        <h2 id="landing-pricing-heading" className="landing-pricing-title">Välj plan</h2>
+        <h2 id="landing-pricing-heading" className="landing-pricing-title">Välj abonnemangsplan</h2>
         <div className="landing-pricing-cards">
           <div className="landing-pricing-card landing-pricing-card-gratis">
             <div className="landing-pricing-card-header">
@@ -1114,6 +1114,10 @@ const LandingPage = () => {
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Mailbekräftelse till deltagare</li>
               <li className="landing-pricing-feature excluded"><span className="landing-pricing-icon" aria-hidden="true">✕</span> Rabattkoder</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Anmälningssida &amp; listor</li>
+              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Bygg dina egna formulär</li>
+              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Bildgalleri</li>
+              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Besökarstatistik</li>
+              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Möjlighet att checka in deltagare med QR-kod</li>
             </ul>
             <p className="landing-pricing-price">0 kr</p>
             <a href="/admin?view=signup" className="landing-pricing-btn">Kom igång</a>
@@ -1129,8 +1133,12 @@ const LandingPage = () => {
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Mailbekräftelse till deltagare</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Rabattkoder</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Anmälningssida &amp; listor</li>
+              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Bygg dina egna formulär</li>
+              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Bildgalleri</li>
+              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Besökarstatistik</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Köp av enstaka betalevent</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Anpassade listor om vilka som har betalat</li>
+              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Möjlighet att checka in deltagare med QR-kod</li>
             </ul>
             <p className="landing-pricing-price">129 kr/betalevent</p>
             <a href="/admin?view=signup" className="landing-pricing-btn">Kom igång</a>
@@ -1146,8 +1154,12 @@ const LandingPage = () => {
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Mailbekräftelse till deltagare</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Rabattkoder</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Anmälningssida &amp; listor</li>
+              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Bygg dina egna formulär</li>
+              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Bildgalleri</li>
+              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Besökarstatistik</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Tillgång till obegränsat antal betalevent</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Anpassade listor om vilka som har betalat</li>
+              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Möjlighet att checka in deltagare med QR-kod</li>
             </ul>
             <p className="landing-pricing-price">1995 kr/år</p>
             <a href="/admin?view=signup" className="landing-pricing-btn">Kom igång</a>
@@ -5575,13 +5587,36 @@ const AdminPage = () => {
     if (s === "canceled" || s === "cancelled" || s === "expired" || s === "failed") return "error";
     return "unknown";
   };
+  const getBookingTicketPrice = (booking) => {
+    const ticket = parsePriceFromText(booking?.pris);
+    return ticket == null ? 0 : ticket;
+  };
   const getBookingNetTicketRevenue = (booking) => {
     const status = String(booking?.payment_status || "").toLowerCase();
     if (status !== "paid" && status !== "refunded") return 0;
-    const ticket = parsePriceFromText(booking?.pris);
-    if (ticket == null || ticket < 0.01) return 0;
+    const ticket = getBookingTicketPrice(booking);
+    if (ticket < 0.01) return 0;
     const refunded = getBookingRefundAmount(booking);
     return Math.max(0, Math.round((ticket - refunded) * 100) / 100);
+  };
+  const isBookingVoidedForSummary = (booking) => !!booking?.voided_at;
+  const isBookingConfirmedForSummary = (booking) => {
+    const status = String(booking?.payment_status || "").toLowerCase();
+    return status === "manual" || status === "paid" || status === "refunded";
+  };
+  const isBookingFullyRefundedForSummary = (booking) => {
+    if (getBookingRefundState(booking) === "full") return true;
+    return String(booking?.payment_status || "").toLowerCase() === "refunded";
+  };
+  const isBookingPayingForSummary = (booking) => {
+    if (isBookingVoidedForSummary(booking)) return false;
+    return getBookingNetTicketRevenue(booking) > 0.001;
+  };
+  const isBookingFreeForSummary = (booking) => {
+    if (isBookingVoidedForSummary(booking)) return false;
+    if (isBookingPayingForSummary(booking)) return false;
+    if (!isBookingConfirmedForSummary(booking)) return false;
+    return getBookingTicketPrice(booking) < 0.01 || isBookingFullyRefundedForSummary(booking);
   };
   const canRefundBooking = (booking) => {
     if (booking?.voided_at) return false;
@@ -5742,7 +5777,11 @@ const AdminPage = () => {
   };
 
   const bookingsWithRevenue = bookings.filter((booking) => getBookingNetTicketRevenue(booking) > 0.001);
-  const paidCount = bookingsWithRevenue.length;
+  const paidCount = bookings.filter(isBookingPayingForSummary).length;
+  const freeCount = bookings.filter(isBookingFreeForSummary).length;
+  const totalBookingCount = bookings.filter(
+    (booking) => isBookingPayingForSummary(booking) || isBookingFreeForSummary(booking)
+  ).length;
   const paidTotal = bookingsWithRevenue.reduce(
     (sum, booking) => sum + getBookingNetTicketRevenue(booking),
     0
@@ -9260,6 +9299,18 @@ const AdminPage = () => {
               datum, plats och biljetter, och titta sedan i flikarna Bokningar och Utbetalning för detaljer kring betalningar och
               utbetalningar.
             </p>
+
+            <div className="admin-help-contact">
+              <h3>Problem eller frågor?</h3>
+              <p className="muted" style={{ marginTop: 0 }}>
+                Om något inte fungerar som det ska, hör av dig så hjälper vi dig.
+              </p>
+              <p>
+                E-post: <a href="mailto:kontakt@lonetec.se">kontakt@lonetec.se</a>
+                <br />
+                Telefon: <a href="tel:+46101998640">010-199 86 40</a>
+              </p>
+            </div>
           </div>
         ) : null}
         {token && selectedEventId && adminSection !== "profile" && adminSection !== "help" ? (
@@ -9559,6 +9610,14 @@ const AdminPage = () => {
                 <div className="summary-item">
                   <span>Antal betalande</span>
                   <strong>{paidCount}</strong>
+                </div>
+                <div className="summary-item">
+                  <span>Antal gratis</span>
+                  <strong>{freeCount}</strong>
+                </div>
+                <div className="summary-item">
+                  <span>Totalt antal</span>
+                  <strong>{totalBookingCount}</strong>
                 </div>
                 <div className="summary-item">
                   <span>Totala intäkter</span>
@@ -9937,8 +9996,8 @@ const AdminPage = () => {
                           i intäkter eller utbetalningar.
                         </li>
                         <li>
-                          <strong>Makulerad</strong> – administrativ markering i listan. Makulering påverkar inte
-                          intäkter eller utbetalningar.
+                          <strong>Makulerad</strong> – administrativ markering i listan. Makulerade anmälningar räknas
+                          inte med i antal betalande, antal gratis eller totalt antal.
                         </li>
                       </ul>
                       <p className="field-hint">
@@ -9967,10 +10026,20 @@ const AdminPage = () => {
                       <h4>Intäkter och utbetalningar</h4>
                       <ul>
                         <li>
-                          Summeringen ovanför listan (<em>Antal betalande</em> och <em>Totala intäkter</em>) baseras på
-                          betalda biljetter minus eventuella återbetalningar.
+                          Summeringen ovanför listan baseras på betalda biljetter minus eventuella
+                          återbetalningar (<em>Antal betalande</em> och <em>Totala intäkter</em>).
+                          <em>Antal gratis</em> räknar bekräftade anmälningar med biljettpris 0 kr samt helt
+                          återbetalda biljetter (som inte är makulerade).
+                          <em>Totalt antal</em> är summan av betalande och gratis. Makulerade anmälningar räknas inte med.
                         </li>
-                        <li>Makulering påverkar inte dessa siffror.</li>
+                        <li>
+                          Delåterbetalda biljetter räknas kvar under <em>Antal betalande</em> så länge det återstår
+                          intäkt efter återbetalningen.
+                        </li>
+                        <li>
+                          <em>Totala intäkter</em> baseras fortfarande på betalda biljetter minus återbetalningar och
+                          påverkas inte av makulering (samma som vid utbetalning).
+                        </li>
                         <li>
                           Om utbetalning redan är begärd eller genomförd för eventet är återbetalning låst. Makulering
                           går fortfarande att göra och ångra.

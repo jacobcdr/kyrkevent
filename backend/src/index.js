@@ -18,7 +18,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import crypto from "node:crypto";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
-import * as xlsx from "xlsx";
+import xlsx from "xlsx-js-style";
 import { Resend } from "resend";
 import PDFDocument from "pdfkit";
 import QRCode from "qrcode";
@@ -8482,6 +8482,20 @@ const toCsvRow = (values) =>
     })
     .join(",");
 
+const applyVoidedExcelRowStyles = (worksheet, voidedFlags, columnCount) => {
+  voidedFlags.forEach((isVoided, dataRowIndex) => {
+    if (!isVoided) return;
+    const rowIndex = dataRowIndex + 1;
+    for (let col = 0; col < columnCount; col++) {
+      const cellRef = xlsx.utils.encode_cell({ r: rowIndex, c: col });
+      if (!worksheet[cellRef]) continue;
+      worksheet[cellRef].s = {
+        font: { strike: true, color: { rgb: "FF777777" } }
+      };
+    }
+  });
+};
+
 app.get("/admin/bookings/export", requireAdmin, async (req, res) => {
   try {
     const eventId = await ensureEventOwnership(req.query.eventId, req.userId, res);
@@ -8561,25 +8575,27 @@ app.get("/admin/bookings/export.xlsx", requireAdmin, async (_req, res) => {
     );
     const customFields = customFieldsResult.rows;
     const result = await pool.query(
-      "SELECT id, name, email, city, phone, organization, ticket, booth, terms, payment_status, pris, custom_fields, created_at FROM bookings WHERE event_id = $1 ORDER BY created_at DESC",
+      "SELECT id, name, email, city, phone, organization, ticket, booth, terms, payment_status, pris, custom_fields, created_at, voided_at FROM bookings WHERE event_id = $1 ORDER BY created_at DESC",
       [eventId]
     );
+    const header = [
+      "ID",
+      "Namn",
+      "Email",
+      "Stad",
+      "Telnr",
+      "Organisation",
+      "Biljett",
+      "Monterbord",
+      "Villkor",
+      "Betalning",
+      "Pris",
+      ...customFields.map((field) => field.label),
+      "Skapad"
+    ];
+    const voidedFlags = result.rows.map((row) => !!row.voided_at);
     const rows = [
-      [
-        "ID",
-        "Namn",
-        "Email",
-        "Stad",
-        "Telnr",
-        "Organisation",
-        "Biljett",
-        "Monterbord",
-        "Villkor",
-        "Betalning",
-        "Pris",
-        ...customFields.map((field) => field.label),
-        "Skapad"
-      ],
+      header,
       ...result.rows.map((row) => [
         row.id,
         row.name,
@@ -8608,8 +8624,9 @@ app.get("/admin/bookings/export.xlsx", requireAdmin, async (_req, res) => {
     ];
     const workbook = xlsx.utils.book_new();
     const worksheet = xlsx.utils.aoa_to_sheet(rows);
+    applyVoidedExcelRowStyles(worksheet, voidedFlags, header.length);
     xlsx.utils.book_append_sheet(workbook, worksheet, "Bokningar");
-    const buffer = xlsx.write(workbook, { bookType: "xlsx", type: "buffer" });
+    const buffer = xlsx.write(workbook, { bookType: "xlsx", type: "buffer", cellStyles: true });
     res.setHeader(
       "Content-Disposition",
       `attachment; filename="bookings-${new Date().toISOString().slice(0, 10)}.xlsx"`

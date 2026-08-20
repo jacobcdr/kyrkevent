@@ -2090,6 +2090,24 @@ h2 {
   font-size: 0.8rem;
 }
 
+.admin-help-contact {
+  margin-top: 2rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border);
+}
+
+.admin-help-contact h3 {
+  margin: 0 0 0.5rem;
+}
+
+.admin-help-contact p {
+  margin: 0 0 0.75rem;
+}
+
+.admin-help-contact p:last-child {
+  margin-bottom: 0;
+}
+
 @media (max-width: 720px) {
   .admin-vat-rate-choices-row {
     grid-template-columns: 1fr;
