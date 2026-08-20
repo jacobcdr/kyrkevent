@@ -386,6 +386,30 @@ function formatAdminSubscriptionPlanLabel(plan) {
   return "Gratis";
 }
 
+const SUBSCRIPTION_PLAN_INFO = [
+  {
+    id: "gratis",
+    title: "Gratis",
+    price: "0 kr",
+    description:
+      "Två aktiva event samtidigt. Anmälningssida, listor och mailbekräftelse. Ingen onlinebetalning via plattformen och inga rabattkoder."
+  },
+  {
+    id: "bas",
+    title: "Bas",
+    price: "129 kr/betalevent",
+    description:
+      "Obegränsat antal event. Köp eventkrediter (1–5 åt gången) för att lägga till biljettpriser och ta betalt online. En kredit gäller per event med priser. Rabattkoder och anpassade betalningslistor ingår."
+  },
+  {
+    id: "premium",
+    title: "Premium",
+    price: "1995 kr/år",
+    description:
+      "Obegränsat antal event och betalevent utan att köpa eventkrediter. Onlinebetalning, rabattkoder och anpassade betalningslistor ingår. Betalas 1995 kr/år via onlinebetalning."
+  }
+];
+
 function AdminProfileInfoRow({ label, value }) {
   return (
     <div className="admin-profile-info-row">
@@ -1153,6 +1177,46 @@ const PaymentStatusPage = () => {
   const [message, setMessage] = useState("");
   const [summary, setSummary] = useState(null);
   const [purchaseTime] = useState(() => new Date());
+  const [returnToProfile, setReturnToProfile] = useState(false);
+
+  const goToAdminSection = (section, notice) => {
+    try {
+      if (notice) {
+        sessionStorage.setItem("profilePaymentNotice", notice);
+      }
+      sessionStorage.removeItem("paymentReturnTo");
+    } catch {
+      /* ignore */
+    }
+    window.location.replace(`/admin?section=${section}`);
+  };
+
+  useEffect(() => {
+    const handlePageShow = (event) => {
+      if (!event.persisted) {
+        return;
+      }
+      try {
+        if (!localStorage.getItem("pendingVerifyToken") && sessionStorage.getItem("paymentReturnTo") === "profile") {
+          window.location.replace("/admin?section=profile");
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+    window.addEventListener("pageshow", handlePageShow);
+    return () => window.removeEventListener("pageshow", handlePageShow);
+  }, []);
+
+  useEffect(() => {
+    try {
+      if (sessionStorage.getItem("paymentReturnTo") === "profile") {
+        setReturnToProfile(true);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   useEffect(() => {
     const isDirect = params.get("direct") === "1";
@@ -1197,6 +1261,14 @@ const PaymentStatusPage = () => {
     }
     const verifyTokenValue = params.get("token") || localStorage.getItem("pendingVerifyToken");
     if (!verifyTokenValue) {
+      try {
+        if (sessionStorage.getItem("paymentReturnTo") === "profile") {
+          window.location.replace("/admin?section=profile");
+          return;
+        }
+      } catch {
+        /* ignore */
+      }
       setStatus("missing");
       setMessage("Saknar betalnings-ID.");
       return;
@@ -1208,9 +1280,16 @@ const PaymentStatusPage = () => {
       }
       const data = await response.json();
       localStorage.removeItem("pendingVerifyToken");
-      if (data.status === "paid") {
+      const paymentStatus = String(data.status || "pending").toLowerCase();
+      const orderType = data.summary?.orderType;
+      if (orderType === "bas" || orderType === "premium") {
+        setReturnToProfile(true);
+      }
+      if (paymentStatus === "paid") {
         setStatus("paid");
-        if (data.summary?.orderType === "bas") {
+        if (data.summary?.orderType === "premium") {
+          setMessage("Premium-abonnemang aktiverat. Du har nu full funktionalitet i ett år.");
+        } else if (data.summary?.orderType === "bas") {
           setMessage(`Bas-köp genomfört. ${data.summary.quantity || 0} eventkredit(er) är tillagda. Du kan nu lägga till priser på biljetter under Dina event.`);
         } else {
           const attendeeCount = Array.isArray(data.summary?.names)
@@ -1224,12 +1303,20 @@ const PaymentStatusPage = () => {
               : "Betalningen är genomförd. Din anmälan är registrerad."
           );
         }
-      } else {
-        setStatus(data.status || "pending");
-        setMessage("Betalningen är inte genomförd ännu.");
+        if (data.summary) {
+          setSummary(data.summary);
+        }
+        return;
       }
-      if (data.summary) {
-        setSummary(data.summary);
+      setStatus(paymentStatus);
+      if (paymentStatus === "canceled" || paymentStatus === "cancelled") {
+        setMessage("Betalningen avbröts. Inget köp har genomförts.");
+      } else if (paymentStatus === "expired") {
+        setMessage("Betalningen har gått ut. Inget köp har genomförts.");
+      } else if (paymentStatus === "failed") {
+        setMessage("Betalningen misslyckades. Inget köp har genomförts.");
+      } else {
+        setMessage("Betalningen är inte genomförd ännu. Inget köp har genomförts.");
       }
     };
     verify().catch(() => {
@@ -1300,6 +1387,9 @@ const PaymentStatusPage = () => {
     return [];
   })();
 
+  const isSubscriptionOrder =
+    summary?.orderType === "bas" || summary?.orderType === "premium" || returnToProfile;
+
   return (
     <div className="page">
       <div className="section payment-status">
@@ -1310,7 +1400,7 @@ const PaymentStatusPage = () => {
           <div>
             <h2>Betalningsstatus</h2>
             <p className="status-message">{message || "Kontrollerar betalning..."}</p>
-            {summary ? (
+            {summary && status === "paid" ? (
               <div className="status-summary">
                 {summary.eventName ? (
                   <div className="summary-row">
@@ -1318,7 +1408,7 @@ const PaymentStatusPage = () => {
                     <strong>{summary.eventName}</strong>
                   </div>
                 ) : null}
-                {summary?.orderType === "bas" ? (
+                {summary?.orderType === "bas" || summary?.orderType === "premium" ? (
                   <>
                     <div className="summary-row">
                       <span>Organisation</span>
@@ -1476,7 +1566,37 @@ const PaymentStatusPage = () => {
                 )}
               </div>
             ) : null}
-            {status === "paid" ? (
+            {status !== "loading" && isSubscriptionOrder ? (
+              <div className="payment-status-actions">
+                <button
+                  type="button"
+                  className="button"
+                  onClick={() => goToAdminSection("profile", status === "paid" ? "" : status || "pending")}
+                >
+                  Tillbaka till profilen
+                </button>
+                {summary?.orderType === "bas" && status === "paid" ? (
+                  <button
+                    type="button"
+                    className="button button-outline"
+                    onClick={() => goToAdminSection("home")}
+                  >
+                    Gå till Dina event
+                  </button>
+                ) : null}
+                {status !== "paid" ? (
+                  <p className="muted payment-status-actions-note">
+                    {status === "pending" || status === "open"
+                      ? "Betalningen är inte klar. Om du avbröt betalningen har inget köp genomförts – gå tillbaka till profilen och försök igen vid behov."
+                      : "Inget köp har genomförts. Gå tillbaka till profilen och försök igen vid behov."}
+                  </p>
+                ) : (
+                  <p className="muted payment-status-actions-note">
+                    Kvitto skickas som PDF till din e-post. Du behöver inte stänga denna sida.
+                  </p>
+                )}
+              </div>
+            ) : status === "paid" ? (
               <p className="muted">Du kan nu stänga denna sida.</p>
             ) : null}
           </div>
@@ -1959,6 +2079,7 @@ const AdminPage = () => {
     }, ms);
   };
   const [vatRateHelpOpen, setVatRateHelpOpen] = useState(false);
+  const [subscriptionPlanInfoOpen, setSubscriptionPlanInfoOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [backendStatus, setBackendStatus] = useState("checking");
   const [dbStatus, setDbStatus] = useState("checking");
@@ -2241,6 +2362,7 @@ const AdminPage = () => {
   const [showBasConfirm, setShowBasConfirm] = useState(false);
   const [basQuantity, setBasQuantity] = useState(1);
   const [basPaymentLoading, setBasPaymentLoading] = useState(false);
+  const [premiumPaymentLoading, setPremiumPaymentLoading] = useState(false);
   const [passwordForm, setPasswordForm] = useState({
     currentPassword: "",
     newPassword: "",
@@ -2290,6 +2412,10 @@ const AdminPage = () => {
   const [adminPayoutRequestsLoading, setAdminPayoutRequestsLoading] = useState(false);
   const [adminPayoutRequestsPageSize, setAdminPayoutRequestsPageSize] = useState(10);
   const [adminPayoutRequestsPage, setAdminPayoutRequestsPage] = useState(1);
+  const [adminSubscriptionPayments, setAdminSubscriptionPayments] = useState([]);
+  const [adminSubscriptionPaymentsLoading, setAdminSubscriptionPaymentsLoading] = useState(false);
+  const [adminSubscriptionPaymentsPageSize, setAdminSubscriptionPaymentsPageSize] = useState(10);
+  const [adminSubscriptionPaymentsPage, setAdminSubscriptionPaymentsPage] = useState(1);
   const [adminPayoutAnonymizeInProgressId, setAdminPayoutAnonymizeInProgressId] = useState(null);
   const [adminPartialCandidates, setAdminPartialCandidates] = useState([]);
   const [adminPartialCandidatesLoading, setAdminPartialCandidatesLoading] = useState(false);
@@ -2762,6 +2888,48 @@ const AdminPage = () => {
     loadPayoutSummary(token).catch(() => {});
   }, [token]);
 
+  const adminSectionFromUrlApplied = useRef(false);
+  useEffect(() => {
+    if (!token || adminSectionFromUrlApplied.current) {
+      return;
+    }
+    const sectionParam = new URLSearchParams(window.location.search).get("section");
+    const allowedSections = ["home", "profile", "bookings", "frontpage", "settings", "payout", "admin", "help"];
+    if (!sectionParam || !allowedSections.includes(sectionParam)) {
+      return;
+    }
+    adminSectionFromUrlApplied.current = true;
+    if (sectionParam === "home") {
+      setSelectedEventId("");
+    }
+    setAdminSection(sectionParam);
+    if (sectionParam === "profile") {
+      try {
+        sessionStorage.removeItem("paymentReturnTo");
+        const notice = sessionStorage.getItem("profilePaymentNotice");
+        if (notice) {
+          sessionStorage.removeItem("profilePaymentNotice");
+          const noticeMessages = {
+            canceled: "Betalningen avbröts. Inget köp har genomförts.",
+            cancelled: "Betalningen avbröts. Inget köp har genomförts.",
+            expired: "Betalningen har gått ut. Inget köp har genomförts.",
+            failed: "Betalningen misslyckades. Inget köp har genomförts.",
+            pending: "Betalningen slutfördes inte. Inget köp har genomförts.",
+            open: "Betalningen slutfördes inte. Inget köp har genomförts.",
+            missing: "Betalningssidan kunde inte visas. Du är tillbaka på profilen."
+          };
+          showToast(noticeMessages[notice] || "Betalningen slutfördes inte. Inget köp har genomförts.");
+        }
+      } catch {
+        /* ignore */
+      }
+      loadProfile(token).catch(() => setError("Kunde inte ladda profilen."));
+    }
+    const url = new URL(window.location.href);
+    url.searchParams.delete("section");
+    window.history.replaceState({}, "", `${url.pathname}${url.search}`);
+  }, [token]);
+
   useEffect(() => {
     if (!token) {
       return;
@@ -2994,6 +3162,23 @@ const AdminPage = () => {
     }
   };
 
+  const loadAdminSubscriptionPayments = async () => {
+    if (!token || !isAdminUser) return;
+    setAdminSubscriptionPaymentsLoading(true);
+    try {
+      const response = await fetch(`${API_BASE}/admin/subscription-payments`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!response.ok) throw new Error("Failed to load");
+      const data = await response.json();
+      setAdminSubscriptionPayments(data.rows || []);
+    } catch {
+      setAdminSubscriptionPayments([]);
+    } finally {
+      setAdminSubscriptionPaymentsLoading(false);
+    }
+  };
+
   const loadAdminOrganizations = async () => {
     if (!token || !isAdminUser) return;
     setAdminOrganizationsLoading(true);
@@ -3194,6 +3379,7 @@ const AdminPage = () => {
     if (token && isAdminUser && adminSection === "admin") {
       loadAdminPayments();
       loadAdminPayoutRequests();
+      loadAdminSubscriptionPayments();
       loadAdminPartialCandidates();
       loadAdminOrganizations();
       loadAdminEventLinks();
@@ -3614,7 +3800,7 @@ const AdminPage = () => {
     setProfileForm((prev) => ({ ...prev, [name]: value }));
   };
 
-  const performProfileSave = async () => {
+  const performProfileSave = async (planOverride) => {
     const response = await fetch(`${API_BASE}/admin/profile`, {
       method: "PUT",
       headers: {
@@ -3622,7 +3808,7 @@ const AdminPage = () => {
         Authorization: `Bearer ${token}`
       },
       body: JSON.stringify({
-        subscriptionPlan: profileForm.subscriptionPlan,
+        subscriptionPlan: planOverride ?? profileForm.subscriptionPlan,
         firstName: profileForm.firstName,
         lastName: profileForm.lastName,
         organization: profileForm.organization,
@@ -3658,7 +3844,21 @@ const AdminPage = () => {
       return;
     }
     const plan = (profileForm.subscriptionPlan || "gratis").toLowerCase();
+    const activePlan = (activeSubscriptionPlan || "gratis").toLowerCase();
+    if (plan === "gratis" && activePlan === "gratis") {
+      setError("");
+      showToast("Välj Bas eller Premium ovan innan du går vidare med ett annat abonnemang.");
+      return;
+    }
     if (plan === "premium") {
+      const firstName = (profileForm.firstName ?? "").toString().trim();
+      const lastName = (profileForm.lastName ?? "").toString().trim();
+      const organization = (profileForm.organization ?? "").toString().trim();
+      if (!firstName || !lastName || !organization) {
+        setError("");
+        showToast("Fyll i förnamn, efternamn och organisation och spara profilen först. Välj sedan Premium och klicka Gå vidare med annat Abonnemang.");
+        return;
+      }
       setShowPremiumConfirm(true);
       return;
     }
@@ -3709,6 +3909,7 @@ const AdminPage = () => {
         return;
       }
       localStorage.setItem("pendingVerifyToken", data.verifyToken);
+      sessionStorage.setItem("paymentReturnTo", "profile");
       window.location.href = data.checkoutUrl;
     } catch (err) {
       setError(err?.message || "Kunde inte starta betalning.");
@@ -3717,11 +3918,52 @@ const AdminPage = () => {
     }
   };
 
+  const handlePremiumKop = async () => {
+    if (!token || premiumPaymentLoading) return;
+    setPremiumPaymentLoading(true);
+    setError("");
+    try {
+      const response = await fetch(`${API_BASE}/admin/payments/start-premium`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        }
+      });
+      const data = await response.json();
+      if (!data.ok || !data.checkoutUrl || !data.verifyToken) {
+        const errMsg = data.error || "Kunde inte starta betalning.";
+        setError(errMsg);
+        if (errMsg.includes("förnamn") || errMsg.includes("organisation")) {
+          showToast(errMsg);
+        }
+        return;
+      }
+      localStorage.setItem("pendingVerifyToken", data.verifyToken);
+      sessionStorage.setItem("paymentReturnTo", "profile");
+      window.location.href = data.checkoutUrl;
+    } catch (err) {
+      setError(err?.message || "Kunde inte starta betalning.");
+    } finally {
+      setPremiumPaymentLoading(false);
+    }
+  };
+
   const handlePremiumConfirmYes = () => {
+    const firstName = (profileForm.firstName ?? "").toString().trim();
+    const lastName = (profileForm.lastName ?? "").toString().trim();
+    const organization = (profileForm.organization ?? "").toString().trim();
+    if (!firstName || !lastName || !organization) {
+      setError("");
+      showToast("Fyll i förnamn, efternamn och organisation och spara profilen först. Välj sedan Premium och klicka Gå vidare med annat Abonnemang.");
+      return;
+    }
     setShowPremiumConfirm(false);
     setError("");
     setProfileLoading(true);
-    performProfileSave()
+    const keepPlan = (activeSubscriptionPlan || "gratis").toLowerCase();
+    performProfileSave(keepPlan)
+      .then(() => handlePremiumKop())
       .catch(() => setError("Kunde inte spara profilen."))
       .finally(() => setProfileLoading(false));
   };
@@ -5843,6 +6085,41 @@ const AdminPage = () => {
         </div>
       ) : null}
 
+      {subscriptionPlanInfoOpen ? (
+        <div className="toaster-overlay" onClick={() => setSubscriptionPlanInfoOpen(false)} aria-hidden="false">
+          <div
+            className="toaster subscription-plan-info-toaster"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-labelledby="subscription-plan-info-title"
+            aria-modal="true"
+          >
+            <h3 id="subscription-plan-info-title" className="toaster-title">
+              Abonnemang och priser
+            </h3>
+            <p className="subscription-plan-info-lead muted">
+              Välj det abonnemang som passar dina event. Priserna gäller för plattformen Kyrkevent.se.
+            </p>
+            {SUBSCRIPTION_PLAN_INFO.map((plan) => (
+              <div key={plan.id} className={`subscription-plan-info-block subscription-plan-info-block-${plan.id}`}>
+                <div className="subscription-plan-info-block-head">
+                  <h4 className="subscription-plan-info-block-title">{plan.title}</h4>
+                  <span className={`subscription-plan-info-price subscription-plan-badge subscription-plan-badge-${plan.id}`}>
+                    {plan.price}
+                  </span>
+                </div>
+                <p className="subscription-plan-info-block-body">{plan.description}</p>
+              </div>
+            ))}
+            <div className="toaster-actions">
+              <button type="button" className="button" onClick={() => setSubscriptionPlanInfoOpen(false)}>
+                Stäng
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {vatRateHelpOpen ? (
         <div className="toaster-overlay" onClick={() => setVatRateHelpOpen(false)} aria-hidden="false">
           <div
@@ -6171,7 +6448,7 @@ const AdminPage = () => {
             {adminPanelTab === "ekonomi" ? (
               <div className="admin-panel admin-panel-ekonomi">
                 <h2>Ekonomi</h2>
-                <h3 className="admin-subsection-title">Betalningsstatistik</h3>
+                <h3 className="admin-subsection-title">Betalningsstatistik för kunders event</h3>
                 <p className="muted">
                   Samtliga betalda anmälningar i systemet. Filtrera på datum och filtrera diagrammet på organisation och eventnamn.
                 </p>
@@ -6670,7 +6947,7 @@ const AdminPage = () => {
                 })()}
               </>
             ) : null}
-            <h3 className="admin-subsection-title admin-subsection-title-spaced">Delutbetalning</h3>
+            <h3 className="admin-subsection-title admin-subsection-title-spaced">Delutbetalning event</h3>
             <p className="muted" style={{ marginBottom: "1rem" }}>
               Registrera delutbetalning endast för pågående event med kvarvarande intäkter. Avslutade event utbetalas i sin helhet
               via vanlig utbetalningsbegäran. Varje event kan endast delutbetalas en gång och högst med 70% av eventets totala intäkter.
@@ -6755,7 +7032,7 @@ const AdminPage = () => {
                 ) : null}
               </form>
             )}
-            <h3 className="admin-subsection-title admin-subsection-title-spaced">Förfrågar utbetalning</h3>
+            <h3 className="admin-subsection-title admin-subsection-title-spaced">Förfrågan eventutbetalning</h3>
             {adminPayoutRequestsLoading ? (
               <p className="muted">Laddar...</p>
             ) : adminPayoutRequests.length > 0 ? (
@@ -7070,6 +7347,197 @@ const AdminPage = () => {
               </>
             ) : (
               <p className="muted">Inga utbetalningsbegäran.</p>
+            )}
+            <h3 className="admin-subsection-title admin-subsection-title-spaced">Abonnemangsinbetalningar</h3>
+            {adminSubscriptionPaymentsLoading ? (
+              <p className="muted">Laddar...</p>
+            ) : adminSubscriptionPayments.length > 0 ? (
+              <>
+                <div style={{ display: "flex", alignItems: "center", gap: "1rem", marginBottom: "0.75rem", flexWrap: "wrap" }}>
+                  <label className="field" style={{ marginBottom: 0 }}>
+                    <span className="field-label" style={{ marginRight: "0.5rem" }}>Visa:</span>
+                    <select
+                      value={adminSubscriptionPaymentsPageSize}
+                      onChange={(e) => {
+                        setAdminSubscriptionPaymentsPageSize(Number(e.target.value));
+                        setAdminSubscriptionPaymentsPage(1);
+                      }}
+                      className="admin-payments-filter-select"
+                      style={{ width: "auto", maxWidth: "none" }}
+                    >
+                      <option value={10}>10</option>
+                      <option value={25}>25</option>
+                      <option value={50}>50</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="table-wrap">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>Profil ID</th>
+                        <th>Organisation</th>
+                        <th>Köpare</th>
+                        <th>Produkt</th>
+                        <th>Belopp</th>
+                        <th>Datum</th>
+                        <th>Åtgärd</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(() => {
+                        const total = adminSubscriptionPayments.length;
+                        const totalPages = Math.max(1, Math.ceil(total / adminSubscriptionPaymentsPageSize));
+                        const page = Math.min(Math.max(1, adminSubscriptionPaymentsPage), totalPages);
+                        const start = (page - 1) * adminSubscriptionPaymentsPageSize;
+                        const pagedRows = adminSubscriptionPayments.slice(start, start + adminSubscriptionPaymentsPageSize);
+                        return pagedRows.map((r, idx) => (
+                          <tr key={r.paymentId || `${r.profileId}-${r.paidAt}-${idx}`}>
+                            <td>{r.profileId || "–"}</td>
+                            <td>{r.organization || "–"}</td>
+                            <td>{r.buyerName || "–"}</td>
+                            <td>{r.productDescription || "–"}</td>
+                            <td>
+                              {(r.amount ?? 0).toLocaleString("sv-SE", {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2
+                              })}{" "}
+                              SEK
+                            </td>
+                            <td>
+                              {r.paidAt
+                                ? new Date(r.paidAt).toLocaleString("sv-SE", {
+                                    dateStyle: "short",
+                                    timeStyle: "short"
+                                  })
+                                : "–"}
+                            </td>
+                            <td>
+                              {r.paymentId ? (
+                                <button
+                                  type="button"
+                                  className="button button-outline"
+                                  onClick={async () => {
+                                    if (!token) return;
+                                    try {
+                                      const response = await fetch(
+                                        `${API_BASE}/admin/subscription-payments/${encodeURIComponent(r.paymentId)}/receipt.pdf`,
+                                        { headers: { Authorization: `Bearer ${token}` } }
+                                      );
+                                      if (!response.ok) throw new Error("Kunde inte hämta kvitto");
+                                      const blob = await response.blob();
+                                      const url = window.URL.createObjectURL(blob);
+                                      const link = document.createElement("a");
+                                      link.href = url;
+                                      const prefix = r.purchaseType === "bas" ? "kvitto-bas" : "kvitto-premium";
+                                      link.download = `${prefix}-${r.paymentId}.pdf`;
+                                      document.body.appendChild(link);
+                                      link.click();
+                                      link.remove();
+                                      window.URL.revokeObjectURL(url);
+                                    } catch (err) {
+                                      setPayoutMessage(err.message || "Kunde inte ladda ner kvitto.");
+                                    }
+                                  }}
+                                >
+                                  Kvitto (PDF)
+                                </button>
+                              ) : (
+                                "–"
+                              )}
+                            </td>
+                          </tr>
+                        ));
+                      })()}
+                    </tbody>
+                  </table>
+                </div>
+                {(() => {
+                  const total = adminSubscriptionPayments.length;
+                  const totalPages = Math.max(1, Math.ceil(total / adminSubscriptionPaymentsPageSize));
+                  const page = Math.min(Math.max(1, adminSubscriptionPaymentsPage), totalPages);
+                  const start = (page - 1) * adminSubscriptionPaymentsPageSize;
+                  const getSubscriptionPageNumbers = () => {
+                    if (totalPages <= 7) {
+                      return Array.from({ length: totalPages }, (_, i) => i + 1);
+                    }
+                    const pages = [1];
+                    const from = Math.max(2, page - 1);
+                    const to = Math.min(totalPages - 1, page + 1);
+                    if (from > 2) pages.push("…");
+                    for (let p = from; p <= to; p++) pages.push(p);
+                    if (to < totalPages - 1) pages.push("…");
+                    if (totalPages > 1) pages.push(totalPages);
+                    return pages;
+                  };
+                  return (
+                    <nav className="admin-payments-pagination" aria-label="Sidnavigering abonnemangsinbetalningar">
+                      <span className="admin-payments-pagination-info">
+                        Visar {start + 1}–{Math.min(start + adminSubscriptionPaymentsPageSize, total)} av {total}
+                      </span>
+                      <div className="admin-payments-pagination-controls">
+                        <button
+                          type="button"
+                          className="admin-payments-pagination-btn"
+                          disabled={page <= 1}
+                          onClick={() => setAdminSubscriptionPaymentsPage(1)}
+                          aria-label="Första sidan"
+                        >
+                          «
+                        </button>
+                        <button
+                          type="button"
+                          className="admin-payments-pagination-btn"
+                          disabled={page <= 1}
+                          onClick={() => setAdminSubscriptionPaymentsPage((p) => Math.max(1, p - 1))}
+                          aria-label="Föregående sida"
+                        >
+                          ‹
+                        </button>
+                        {getSubscriptionPageNumbers().map((p, i) =>
+                          p === "…" ? (
+                            <span key={`sub-ellipsis-${i}`} className="admin-payments-pagination-ellipsis">…</span>
+                          ) : (
+                            <button
+                              key={p}
+                              type="button"
+                              className={`admin-payments-pagination-btn admin-payments-pagination-num ${page === p ? "is-current" : ""}`}
+                              onClick={() => setAdminSubscriptionPaymentsPage(p)}
+                              aria-label={`Sida ${p}`}
+                              aria-current={page === p ? "page" : undefined}
+                            >
+                              {p}
+                            </button>
+                          )
+                        )}
+                        <button
+                          type="button"
+                          className="admin-payments-pagination-btn"
+                          disabled={page >= totalPages}
+                          onClick={() => setAdminSubscriptionPaymentsPage((p) => Math.min(totalPages, p + 1))}
+                          aria-label="Nästa sida"
+                        >
+                          ›
+                        </button>
+                        <button
+                          type="button"
+                          className="admin-payments-pagination-btn"
+                          disabled={page >= totalPages}
+                          onClick={() => setAdminSubscriptionPaymentsPage(totalPages)}
+                          aria-label="Sista sidan"
+                        >
+                          »
+                        </button>
+                      </div>
+                      <span className="admin-payments-pagination-info admin-payments-pagination-suffix">
+                        Sida {page} av {totalPages}
+                      </span>
+                    </nav>
+                  );
+                })()}
+              </>
+            ) : (
+              <p className="muted">Inga abonnemangsinbetalningar.</p>
             )}
               </div>
             ) : null}
@@ -8091,7 +8559,18 @@ const AdminPage = () => {
             <h2>Profil</h2>
             <form className="admin-form" onSubmit={handleProfileSubmit}>
               <div className="subscription-plan-box">
-                <span className="field-label">Abonnemang</span>
+                <div className="subscription-plan-label-row">
+                  <span className="field-label">Abonnemang</span>
+                  <button
+                    type="button"
+                    className="subscription-plan-info-btn"
+                    onClick={() => setSubscriptionPlanInfoOpen(true)}
+                    aria-label="Visa priser och info om abonnemang"
+                    title="Visa priser och info"
+                  >
+                    i
+                  </button>
+                </div>
                 <fieldset className="subscription-plan-options" aria-label="Välj abonnemang">
                   {(() => {
                     const premiumEndsAt = profileForm.premium_ends_at ? new Date(profileForm.premium_ends_at) : null;
@@ -8140,8 +8619,18 @@ const AdminPage = () => {
                     );
                   })()}
                 </fieldset>
-                <button type="submit" name="action" value="subscription" className="button subscription-plan-activate" disabled={profileLoading}>
-                  Fortsätt
+                <button
+                  type="submit"
+                  name="action"
+                  value="subscription"
+                  className={`button subscription-plan-activate${
+                    (activeSubscriptionPlan || "gratis") === "gratis" || (activeSubscriptionPlan || "gratis") === "bas"
+                      ? " subscription-plan-activate-flash"
+                      : ""
+                  }`}
+                  disabled={profileLoading}
+                >
+                  Gå vidare med annat Abonnemang
                 </button>
                 <div className="subscription-plan-status">
                   <div className="subscription-plan-status-row">
@@ -8150,8 +8639,30 @@ const AdminPage = () => {
                       {(activeSubscriptionPlan || "gratis") === "gratis" ? "Gratis" : (activeSubscriptionPlan || "gratis") === "bas" ? "Bas" : "Premium"}
                     </span>
                   </div>
-                  {(activeSubscriptionPlan || "gratis") === "bas" && (profileForm.bas_event_credits ?? 0) >= 0 ? (
-                    <div className="subscription-plan-credits">Bas-eventkrediter: {profileForm.bas_event_credits ?? 0}</div>
+                  {(activeSubscriptionPlan || "gratis") === "bas" ? (
+                    <>
+                      <div className="subscription-plan-credits">Bas-eventkrediter: {profileForm.bas_event_credits ?? 0}</div>
+                      <div className="subscription-plan-bas-credits-action">
+                        <p className="subscription-plan-upgrade-hint muted">
+                          Du behöver även köpa eventkrediter för att kunna lägga till biljettpriser och ta betalt på dina event.
+                        </p>
+                        <button
+                          type="button"
+                          className="button subscription-plan-bas-buy-btn"
+                          onClick={() => setShowBasConfirm(true)}
+                        >
+                          Köp
+                        </button>
+                      </div>
+                      <p className="subscription-plan-upgrade-hint muted">
+                        Uppdatera abonnemanget ovan till Premium för full funktionalitet med obegränsat antal betalevent.
+                      </p>
+                    </>
+                  ) : null}
+                  {(activeSubscriptionPlan || "gratis") === "gratis" ? (
+                    <p className="subscription-plan-upgrade-hint muted">
+                      Uppdatera abonnemanget ovan till Bas eller Premium för att få full funktionalitet, t.ex. onlinebetalning och rabattkoder.
+                    </p>
                   ) : null}
                   {(activeSubscriptionPlan || "gratis") === "premium" && (profileForm.premium_activated_at || profileForm.premium_ends_at) ? (
                     <div className="subscription-plan-premium-dates">
@@ -8391,9 +8902,9 @@ const AdminPage = () => {
                       return (
                         <>
                           <p className="premium-confirm-text">
-                            När du aktiverar Premium startar du ett månadsabonnemang, pris 1995 kr/år. Kostnaderna faktureras till de uppgifter som finns i profilinställningarna.
+                            När du aktiverar Premium betalar du 1995 kr/år via onlinebetalning. Abonnemanget gäller i ett år från aktiveringsdatum.
                           </p>
-                          <p className="premium-confirm-question">Vill du aktivera Premium-abonnemang?</p>
+                          <p className="premium-confirm-question">Vill du gå vidare till betalning?</p>
                         </>
                       );
                     })()}
@@ -8423,8 +8934,8 @@ const AdminPage = () => {
                           <button type="button" className="button button-outline" onClick={() => setShowPremiumConfirm(false)}>
                             Nej
                           </button>
-                          <button type="button" className="button" onClick={handlePremiumConfirmYes} disabled={profileLoading}>
-                            Ja
+                          <button type="button" className="button" onClick={handlePremiumConfirmYes} disabled={profileLoading || premiumPaymentLoading}>
+                            {premiumPaymentLoading ? "Startar…" : "Gå till betalning"}
                           </button>
                         </>
                       );
@@ -8802,20 +9313,34 @@ const AdminPage = () => {
                     </ul>
                   </div>
                   <div className="admin-events-plan-wrap">
-                    <span className="admin-events-plan-label">Abonnemang</span>
-                    <span className={`admin-events-plan-badge subscription-plan-badge subscription-plan-badge-${(activeSubscriptionPlan || "gratis").toLowerCase()}`}>
-                      {(activeSubscriptionPlan || "gratis") === "gratis" ? "Gratis" : (activeSubscriptionPlan || "gratis") === "bas" ? "Bas" : "Premium"}
-                    </span>
-                    {(activeSubscriptionPlan || "gratis") === "premium" && (profileForm.premium_activated_at || profileForm.premium_ends_at) ? (
-                      <div className="admin-events-premium-dates">
-                        {profileForm.premium_activated_at ? (
-                          <span className="admin-events-date">Från {new Date(profileForm.premium_activated_at).toLocaleDateString("sv-SE", { year: "numeric", month: "short", day: "numeric" })}</span>
-                        ) : null}
-                        {profileForm.premium_ends_at ? (
-                          <span className="admin-events-date">Till {new Date(profileForm.premium_ends_at).toLocaleDateString("sv-SE", { year: "numeric", month: "short", day: "numeric" })}</span>
-                        ) : null}
-                      </div>
-                    ) : null}
+                    <div className="admin-events-plan-card">
+                      <span className="admin-events-plan-label">Abonnemang</span>
+                      <span className={`admin-events-plan-badge subscription-plan-badge subscription-plan-badge-${(activeSubscriptionPlan || "gratis").toLowerCase()}`}>
+                        {(activeSubscriptionPlan || "gratis") === "gratis" ? "Gratis" : (activeSubscriptionPlan || "gratis") === "bas" ? "Bas" : "Premium"}
+                      </span>
+                      {(activeSubscriptionPlan || "gratis") === "gratis" || (activeSubscriptionPlan || "gratis") === "bas" ? (
+                        <button
+                          type="button"
+                          className="admin-events-plan-update-link"
+                          onClick={() => {
+                            setAdminSection("profile");
+                            loadProfile(token).catch(() => setError("Kunde inte ladda profilen."));
+                          }}
+                        >
+                          Uppdatera
+                        </button>
+                      ) : null}
+                      {(activeSubscriptionPlan || "gratis") === "premium" && (profileForm.premium_activated_at || profileForm.premium_ends_at) ? (
+                        <div className="admin-events-premium-dates">
+                          {profileForm.premium_activated_at ? (
+                            <span className="admin-events-date">Från {new Date(profileForm.premium_activated_at).toLocaleDateString("sv-SE", { year: "numeric", month: "short", day: "numeric" })}</span>
+                          ) : null}
+                          {profileForm.premium_ends_at ? (
+                            <span className="admin-events-date">Till {new Date(profileForm.premium_ends_at).toLocaleDateString("sv-SE", { year: "numeric", month: "short", day: "numeric" })}</span>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
                 </div>
                 <h2>Dina event</h2>

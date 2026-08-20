@@ -55,6 +55,8 @@ const MOLLIE_AMOUNT = process.env.MOLLIE_AMOUNT || "";
 const MOLLIE_CURRENCY = process.env.MOLLIE_CURRENCY || "SEK";
 const BAS_PRICE_DEFAULT = 95;
 const BAS_PRICE_PER_EVENT = Math.max(1, Number(process.env.BAS_PRICE_PER_EVENT || String(BAS_PRICE_DEFAULT)) || BAS_PRICE_DEFAULT);
+const PREMIUM_PRICE_DEFAULT = 1995;
+const PREMIUM_PRICE_YEAR = Math.max(1, Number(process.env.PREMIUM_PRICE_YEAR || String(PREMIUM_PRICE_DEFAULT)) || PREMIUM_PRICE_DEFAULT);
 const SERVICE_FEE_AMOUNT =
   Math.max(0, Number(process.env.SERVICE_FEE_AMOUNT || "15") || 0);
 const FRONTEND_URL = process.env.FRONTEND_URL || "";
@@ -63,6 +65,10 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
 const RESEND_FROM = process.env.RESEND_FROM || "";
 const RECEIPT_SELLER = process.env.RECEIPT_SELLER || "Lonetec AB";
 const RECEIPT_ISSUER = process.env.RECEIPT_ISSUER || "Lonetec AB";
+const RECEIPT_SELLER_ORG_NUMBER = process.env.RECEIPT_SELLER_ORG_NUMBER || "556907-4189";
+const RECEIPT_SELLER_VAT_NUMBER = process.env.RECEIPT_SELLER_VAT_NUMBER || "SE556907418901";
+const RECEIPT_SELLER_ADDRESS =
+  process.env.RECEIPT_SELLER_ADDRESS || "Övragärgesvägen 20, 56146 Huskvarna";
 const RECEIPT_PAYMENT_METHOD = process.env.RECEIPT_PAYMENT_METHOD || "Online";
 const ORDER_NUMBER_QR_CONTENT_ID = "order-number-qr";
 const BOLAGSAPI_KEY = process.env.BOLAGSAPI_KEY || "";
@@ -324,6 +330,200 @@ const formatSek = (value) => {
     maximumFractionDigits: 2
   })} SEK`;
 };
+
+function formatOrgNumberDisplay(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (digits.length === 10) {
+    return `${digits.slice(0, 6)}-${digits.slice(6)}`;
+  }
+  const trimmed = String(value || "").trim();
+  return trimmed || "–";
+}
+
+function writeSubscriptionPurchaseReceiptPdf(
+  doc,
+  {
+    orderNumber,
+    createdDate,
+    productLabel,
+    quantity,
+    organization,
+    buyerOrgNumber,
+    fullName,
+    unitPriceInclVat,
+    netAmount,
+    vatAmount,
+    totalAmount
+  }
+) {
+  const logoPath = path.resolve(__dirname, "..", "..", "frontend", "public", "kyrkevent2.png");
+  if (fs.existsSync(logoPath)) {
+    doc.image(logoPath, 50, 50, { width: 120 });
+    doc.y = 50 + 55;
+    doc.moveDown(1);
+  }
+  doc.fontSize(20).text("Kvitto", { continued: false });
+  doc.moveDown();
+  doc.fontSize(11);
+  doc.text(`Ordernummer: ${orderNumber}`);
+  doc.text(`Datum & tid: ${createdDate.toLocaleString("sv-SE")}`);
+  doc.moveDown(0.5);
+  doc.fontSize(12).text("Köpare", { underline: true });
+  doc.fontSize(11);
+  doc.text(`Organisation: ${organization || "–"}`);
+  doc.text(`Orgnr: ${formatOrgNumberDisplay(buyerOrgNumber)}`);
+  doc.text(`För- och efternamn: ${fullName || "–"}`);
+  doc.moveDown(0.5);
+  doc.text(`Produkt: ${productLabel}`);
+  if (typeof unitPriceInclVat === "number" && Number.isFinite(unitPriceInclVat)) {
+    const unitVatAmount = Math.round((unitPriceInclVat * 0.25 / 1.25) * 100) / 100;
+    const unitNetAmount = Math.round((unitPriceInclVat - unitVatAmount) * 100) / 100;
+    doc.text(`Styckpris (exkl. moms): ${formatSek(unitNetAmount)}`);
+    doc.text(`Styckpris (inkl. moms): ${formatSek(unitPriceInclVat)}`);
+  }
+  if (quantity != null) {
+    doc.text(`Antal: ${quantity} st`);
+  }
+  doc.text(`Summa (exkl. moms): ${formatSek(netAmount)}`);
+  doc.text(`Moms (25%): ${formatSek(vatAmount)}`);
+  doc.font("Helvetica-Bold").text(`Totalbelopp: ${formatSek(totalAmount)}`);
+  doc.font("Helvetica");
+  doc.moveDown(0.5);
+  doc.text(`Betalningssätt: ${RECEIPT_PAYMENT_METHOD}`);
+  doc.moveDown(0.5);
+  doc.fontSize(12).text("Säljare", { underline: true });
+  doc.fontSize(11);
+  doc.text(`Säljare: ${RECEIPT_SELLER}`);
+  doc.text(`Orgnr: ${RECEIPT_SELLER_ORG_NUMBER}`);
+  doc.text(`VAT-nummer: ${RECEIPT_SELLER_VAT_NUMBER}`);
+  doc.text(`Adress: ${RECEIPT_SELLER_ADDRESS}`);
+  doc.moveDown();
+  doc.fontSize(9).fillColor("#666");
+  doc.text("Kontakt: kontakt@lonetec.se", { continued: false });
+  doc.text("Lonetec AB – abonnemangskvitto", { continued: false });
+  doc.fillColor("#000");
+}
+
+function createSubscriptionPurchaseReceiptPdfBuffer(data) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ margin: 50, size: "A4" });
+    const chunks = [];
+    doc.on("data", (chunk) => chunks.push(chunk));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+    writeSubscriptionPurchaseReceiptPdf(doc, data);
+    doc.end();
+  });
+}
+
+function getSubscriptionPaymentDetails(payload) {
+  const type = String(payload?.type || "").toLowerCase();
+  if (type === "bas") {
+    const qty = Math.min(5, Math.max(1, Math.floor(Number(payload?.quantity)) || 1));
+    return {
+      purchaseType: "bas",
+      quantity: qty,
+      amountSek: qty * BAS_PRICE_PER_EVENT,
+      productLabel: "Bas-eventkrediter",
+      unitPriceInclVat: BAS_PRICE_PER_EVENT
+    };
+  }
+  if (type === "premium") {
+    return {
+      purchaseType: "premium",
+      quantity: null,
+      amountSek: PREMIUM_PRICE_YEAR,
+      productLabel: "Premium-abonnemang (1 år)",
+      unitPriceInclVat: PREMIUM_PRICE_YEAR
+    };
+  }
+  return null;
+}
+
+function buildSubscriptionReceiptPdfPayload({ profile, payload, createdDate, orderNumber }) {
+  const details = getSubscriptionPaymentDetails(payload);
+  if (!details || !profile) {
+    return null;
+  }
+  const fullName = `${profile.first_name || ""} ${profile.last_name || ""}`.trim();
+  const organization = String(profile.organization ?? "").trim() || "–";
+  const vatAmount = Math.round((details.amountSek * 0.25 / 1.25) * 100) / 100;
+  const netAmount = Math.round((details.amountSek - vatAmount) * 100) / 100;
+  return {
+    orderNumber,
+    createdDate: createdDate instanceof Date ? createdDate : new Date(createdDate),
+    productLabel: details.productLabel,
+    quantity: details.quantity,
+    organization,
+    buyerOrgNumber: profile.org_number,
+    fullName,
+    unitPriceInclVat: details.unitPriceInclVat,
+    netAmount,
+    vatAmount,
+    totalAmount: details.amountSek
+  };
+}
+
+async function sendSubscriptionPurchaseReceiptEmail({
+  profile,
+  purchaseType,
+  quantity,
+  amountSek,
+  orderNumber,
+  createdDate
+}) {
+  if (!resend || !RESEND_FROM || !profile?.email) {
+    return;
+  }
+  const fullName = `${profile.first_name || ""} ${profile.last_name || ""}`.trim();
+  const isBas = purchaseType === "bas";
+  const productLabel = isBas ? "Bas-eventkrediter" : "Premium-abonnemang (1 år)";
+  const payload = isBas ? { type: "bas", quantity } : { type: "premium" };
+  const pdfData = buildSubscriptionReceiptPdfPayload({
+    profile,
+    payload,
+    createdDate,
+    orderNumber
+  });
+  if (!pdfData) {
+    return;
+  }
+  const pdfBuffer = await createSubscriptionPurchaseReceiptPdfBuffer(pdfData);
+  const subject = isBas ? "Kvitto – köp av Bas-eventkrediter" : "Kvitto – Premium-abonnemang";
+  const filename = isBas ? `kvitto-bas-${orderNumber}.pdf` : `kvitto-premium-${orderNumber}.pdf`;
+  const text = [
+    `Hej ${fullName || ""}!`,
+    "",
+    isBas ? "Tack för ditt köp av Bas-eventkrediter." : "Tack för ditt köp av Premium-abonnemang.",
+    "",
+    "Kvitto finns bifogat som PDF.",
+    "",
+    "Vänliga hälsningar,",
+    RECEIPT_SELLER
+  ].join("\n");
+  const html = `
+    <div style="font-family: Arial, sans-serif; color:#111827;">
+      <p>Hej ${fullName || ""}!</p>
+      <p>Tack för ditt köp av <strong>${productLabel}</strong>.</p>
+      <p>Kvitto finns bifogat som PDF.</p>
+      <p style="margin-top:16px;">Vänliga hälsningar,<br/>${RECEIPT_SELLER}</p>
+    </div>
+  `;
+  await resend.emails.send({
+    from: RESEND_FROM,
+    to: profile.email,
+    subject,
+    text,
+    html,
+    attachments: [
+      {
+        filename,
+        content: pdfBuffer.toString("base64"),
+        contentType: "application/pdf"
+      }
+    ]
+  });
+}
 
 const formatOrderNumber = (date) =>
   date
@@ -2449,12 +2649,16 @@ app.get("/payments/verify", async (req, res) => {
       ticketTotal = basTotal;
       serviceFee = 0;
       totalPaid = basTotal;
+    } else if (payload.type === "premium") {
+      ticketTotal = PREMIUM_PRICE_YEAR;
+      serviceFee = 0;
+      totalPaid = PREMIUM_PRICE_YEAR;
     }
 
     let eventNameForSummary = "";
     let vatExempt = false;
     let vatRatePercent = 25;
-    if (payload.type !== "bas") {
+    if (payload.type !== "bas" && payload.type !== "premium") {
       const eventId = firstItem?.eventId || (isCart && payload.items?.[0]?.eventId);
       if (eventId) {
         const eventRow = await pool.query("SELECT name FROM events WHERE id = $1", [eventId]);
@@ -2471,7 +2675,9 @@ app.get("/payments/verify", async (req, res) => {
       email: firstItem?.email || "",
       eventName: eventNameForSummary,
       ticket:
-        payload.type === "bas"
+        payload.type === "premium"
+          ? "Premium-abonnemang (1 år)"
+          : payload.type === "bas"
           ? `Bas-eventkrediter (${payload.quantity || 1} st)`
           : isCart
             ? `${payload.items.length} st`
@@ -2489,6 +2695,21 @@ app.get("/payments/verify", async (req, res) => {
       summary.orderType = "bas";
       summary.quantity = payload.quantity;
       summary.unitPrice = BAS_PRICE_PER_EVENT;
+      if (payload.profile_id) {
+        const profileRow = await pool.query(
+          "SELECT first_name, last_name, organization FROM admin_user_profiles WHERE profile_id = $1",
+          [payload.profile_id]
+        );
+        const p = profileRow.rows[0];
+        if (p) {
+          summary.organization = String(p.organization ?? "").trim();
+          summary.firstName = String(p.first_name ?? "").trim();
+          summary.lastName = String(p.last_name ?? "").trim();
+        }
+      }
+    } else if (payload.type === "premium") {
+      summary.orderType = "premium";
+      summary.unitPrice = PREMIUM_PRICE_YEAR;
       if (payload.profile_id) {
         const profileRow = await pool.query(
           "SELECT first_name, last_name, organization FROM admin_user_profiles WHERE profile_id = $1",
@@ -2531,7 +2752,7 @@ app.get("/payments/verify", async (req, res) => {
             try {
               const profileRow = await client.query(
                 `
-                  SELECT first_name, last_name, email, organization
+                  SELECT first_name, last_name, email, organization, org_number
                   FROM admin_user_profiles
                   WHERE profile_id = $1
                 `,
@@ -2541,90 +2762,58 @@ app.get("/payments/verify", async (req, res) => {
               if (profile && profile.email && resend && RESEND_FROM) {
                 const createdDate = new Date();
                 const orderNumber = formatOrderNumber(createdDate);
-                const amountSek = qty * BAS_PRICE_PER_EVENT;
-                const vatAmount = Math.round((amountSek * 0.25 / 1.25) * 100) / 100;
-                const netAmount = Math.round((amountSek - vatAmount) * 100) / 100;
-                const fullName = `${profile.first_name || ""} ${profile.last_name || ""}`.trim();
-                const organization = String(profile.organization ?? "").trim() || "–";
-
-                const subject = "Kvitto – köp av Bas-eventkrediter";
-                const textLines = [
-                  "Kvitto",
-                  "======",
-                  `Hej ${fullName || ""}!`,
-                  "",
-                  "Tack för ditt köp av Bas-eventkrediter.",
-                  "",
-                  `Ordernummer: ${orderNumber}`,
-                  `Datum & tid: ${createdDate.toLocaleString("sv-SE")}`,
-                  `Organisation: ${organization}`,
-                  `För- och efternamn: ${fullName || "–"}`,
-                  "",
-                  `Produkt: Bas-eventkrediter`,
-                  `Antal: ${qty} st`,
-                  `Pris (exkl. moms): ${netAmount.toLocaleString("sv-SE", {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2
-                  })} SEK`,
-                  `Moms (25%): ${vatAmount.toLocaleString("sv-SE", {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2
-                  })} SEK`,
-                  `Totalbelopp: ${amountSek.toLocaleString("sv-SE", {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2
-                  })} SEK`,
-                  "",
-                  "Betalningssätt: Online",
-                  `Säljare: ${RECEIPT_SELLER}`,
-                  "",
-                  "Vänliga hälsningar,",
-                  RECEIPT_SELLER
-                ];
-
-                const html = `
-                  <div style="font-family: Arial, sans-serif; color:#111827;">
-                    <h2 style="margin:0 0 8px 0;">Kvitto</h2>
-                    <p>Hej ${fullName || ""}!</p>
-                    <p>Tack för ditt köp av <strong>Bas-eventkrediter</strong>.</p>
-                    <table style="border-collapse: collapse; width: 100%; max-width: 520px;">
-                      <tbody>
-                        <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Ordernummer</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">${orderNumber}</td></tr>
-                        <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Datum &amp; tid</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">${createdDate.toLocaleString("sv-SE")}</td></tr>
-                        <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Organisation</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">${organization}</td></tr>
-                        <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">För- och efternamn</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">${fullName || "–"}</td></tr>
-                        <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Produkt</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right;">Bas-eventkrediter</td></tr>
-                        <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Antal</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right;">${qty} st</td></tr>
-                        <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Pris (exkl. moms)</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right;">${netAmount.toLocaleString("sv-SE", {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2
-                        })} SEK</td></tr>
-                        <tr><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">Moms (25%)</td><td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right;">${vatAmount.toLocaleString("sv-SE", {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2
-                        })} SEK</td></tr>
-                        <tr><td style="padding:6px 8px; font-weight:600;">Totalbelopp</td><td style="padding:6px 8px; text-align:right; font-weight:700;">${amountSek.toLocaleString("sv-SE", {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2
-                        })} SEK</td></tr>
-                      </tbody>
-                    </table>
-                    <p style="margin-top:16px;">Betalningssätt: Online<br/>Säljare: ${RECEIPT_SELLER}</p>
-                    <p style="margin-top:16px;">Vänliga hälsningar,<br/>${RECEIPT_SELLER}</p>
-                  </div>
-                `;
-
-                await resend.emails.send({
-                  from: RESEND_FROM,
-                  to: profile.email,
-                  subject,
-                  text: textLines.join("\n"),
-                  html
+                await sendSubscriptionPurchaseReceiptEmail({
+                  profile,
+                  purchaseType: "bas",
+                  quantity: qty,
+                  amountSek: qty * BAS_PRICE_PER_EVENT,
+                  orderNumber,
+                  createdDate
                 });
               }
             } catch (err) {
               // eslint-disable-next-line no-console
               console.error("Failed to send Bas credits receipt email", err);
+            }
+          } else if (pay && pay.type === "premium" && pay.profile_id) {
+            await client.query(
+              `UPDATE admin_user_profiles
+               SET subscription_plan = 'premium',
+                   premium_activated_at = NOW(),
+                   premium_ends_at = NOW() + interval '1 year',
+                   premium_avslut_requested_at = NULL
+               WHERE profile_id = $1`,
+              [pay.profile_id]
+            );
+            await client.query(
+              "UPDATE payment_orders SET status = $1, booking_id = -1 WHERE payment_id = $2",
+              [status, paymentId]
+            );
+
+            try {
+              const profileRow = await client.query(
+                `
+                  SELECT first_name, last_name, email, organization, org_number
+                  FROM admin_user_profiles
+                  WHERE profile_id = $1
+                `,
+                [pay.profile_id]
+              );
+              const profile = profileRow.rows[0];
+              if (profile && profile.email && resend && RESEND_FROM) {
+                const createdDate = new Date();
+                const orderNumber = formatOrderNumber(createdDate);
+                await sendSubscriptionPurchaseReceiptEmail({
+                  profile,
+                  purchaseType: "premium",
+                  amountSek: PREMIUM_PRICE_YEAR,
+                  orderNumber,
+                  createdDate
+                });
+              }
+            } catch (err) {
+              // eslint-disable-next-line no-console
+              console.error("Failed to send Premium receipt email", err);
             }
           } else if (Array.isArray(pay.items) && pay.items.length > 0) {
             const bookingIds = [];
@@ -3338,6 +3527,67 @@ app.post("/admin/payments/start-bas", requireAdmin, paymentLimiter, async (req, 
   }
 });
 
+app.post("/admin/payments/start-premium", requireAdmin, paymentLimiter, async (req, res) => {
+  if (!mollie) {
+    res.status(500).json({ ok: false, error: "MOLLIE_API_KEY is not set" });
+    return;
+  }
+  try {
+    const profileRow = await pool.query(
+      "SELECT profile_id, first_name, last_name, organization, subscription_plan, premium_ends_at FROM admin_user_profiles WHERE user_id = $1",
+      [req.userId]
+    );
+    const row = profileRow.rows[0];
+    const profileId = row?.profile_id || "";
+    if (!profileId) {
+      res.status(400).json({ ok: false, error: "Profil saknas. Spara profilen först." });
+      return;
+    }
+    const firstName = String(row?.first_name ?? "").trim();
+    const lastName = String(row?.last_name ?? "").trim();
+    const organization = String(row?.organization ?? "").trim();
+    if (!firstName || !lastName || !organization) {
+      res.status(400).json({
+        ok: false,
+        error: "Fyll i förnamn, efternamn och organisation under Profil och spara innan du aktiverar Premium."
+      });
+      return;
+    }
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const endsAtStr = row?.premium_ends_at ? new Date(row.premium_ends_at).toISOString().slice(0, 10) : "";
+    const hasActivePremium =
+      (row?.subscription_plan || "").toLowerCase() === "premium" && endsAtStr && endsAtStr >= todayStr;
+    if (hasActivePremium) {
+      res.status(400).json({ ok: false, error: "Du har redan ett aktivt Premium-abonnemang." });
+      return;
+    }
+    const amountSek = PREMIUM_PRICE_YEAR;
+    const origin = (req.get("origin") || FRONTEND_URL || req.protocol + "://" + req.get("host") || "").replace(/\/$/, "");
+    const payment = await mollie.payments.create({
+      amount: { currency: MOLLIE_CURRENCY, value: amountSek.toFixed(2) },
+      description: `${profileId} Premium`,
+      redirectUrl: `${origin}/payment-status`
+    });
+    const checkoutUrl = payment.getCheckoutUrl ? payment.getCheckoutUrl() : payment?._links?.checkout?.href;
+    if (!checkoutUrl) {
+      res.status(500).json({ ok: false, error: "Missing checkout URL" });
+      return;
+    }
+    const verifyToken = crypto.randomBytes(32).toString("hex");
+    await pool.query(
+      `INSERT INTO payment_orders (payment_id, payload, status, verify_token) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (payment_id) DO UPDATE SET
+         payload = EXCLUDED.payload,
+         status = EXCLUDED.status,
+         verify_token = COALESCE(payment_orders.verify_token, EXCLUDED.verify_token)`,
+      [payment.id, { type: "premium", profile_id: profileId }, payment.status, verifyToken]
+    );
+    res.json({ ok: true, checkoutUrl, verifyToken });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message || "Kunde inte starta betalning." });
+  }
+});
+
 app.put("/admin/profile", requireAdmin, async (req, res) => {
   const {
     firstName,
@@ -3363,12 +3613,14 @@ app.put("/admin/profile", requireAdmin, async (req, res) => {
       [req.userId]
     );
     const wasPremium = (existing.rows[0]?.subscription_plan || "").toLowerCase() === "premium";
-    const hadPremiumDates = existing.rows[0]?.premium_activated_at != null;
     const premiumEndsAt = existing.rows[0]?.premium_ends_at;
     const todayStr = new Date().toISOString().slice(0, 10);
     const endsAtStr = premiumEndsAt ? new Date(premiumEndsAt).toISOString().slice(0, 10) : "";
     const premiumStillActive = wasPremium && endsAtStr && endsAtStr >= todayStr;
-    const effectivePlan = premiumStillActive && (plan === "gratis" || plan === "bas") ? "premium" : plan;
+    let effectivePlan = premiumStillActive && (plan === "gratis" || plan === "bas") ? "premium" : plan;
+    if (plan === "premium" && !premiumStillActive) {
+      effectivePlan = (existing.rows[0]?.subscription_plan || "gratis").toLowerCase();
+    }
     let profileId = existing.rows[0]?.profile_id;
     for (let attempt = 0; attempt < 10; attempt++) {
       if (!profileId) profileId = generateShortProfileId();
@@ -3413,14 +3665,6 @@ app.put("/admin/profile", requireAdmin, async (req, res) => {
             vatExemptBool
           ]
         );
-        if (effectivePlan === "premium" && (!wasPremium || !hadPremiumDates)) {
-          await pool.query(
-            `UPDATE admin_user_profiles
-             SET premium_activated_at = NOW(), premium_ends_at = NOW() + interval '1 year'
-             WHERE user_id = $1`,
-            [req.userId]
-          );
-        }
         const profileRow = await pool.query(
           "SELECT profile_id, first_name, last_name, organization, org_number, address, postal_code, city, email, phone, bg_number, subscription_plan, premium_activated_at, premium_ends_at, COALESCE(vat_exempt, false) AS vat_exempt FROM admin_user_profiles WHERE user_id = $1",
           [req.userId]
@@ -3539,7 +3783,7 @@ const formatMollieAmount = (amountSek) => {
 
 const isNonTicketMolliePaymentPayload = (payload) => {
   if (!payload || typeof payload !== "object") return true;
-  if (payload.type === "bas") return true;
+  if (payload.type === "bas" || payload.type === "premium") return true;
   if (payload.quantity != null && payload.profile_id && !payload.eventId && !payload.items) return true;
   return false;
 };
@@ -3708,7 +3952,7 @@ async function buildBookingRefundContext(bookingId, userId) {
       ok: false,
       status: 403,
       error:
-        "Återbetalning är endast tillåten för eventbiljetter. Abonnemang (Bas) och andra betalningstyper kan inte återbetalas här."
+        "Återbetalning är endast tillåten för eventbiljetter. Abonnemang (Bas/Premium) och andra betalningstyper kan inte återbetalas här."
     };
   }
   if (!mollie) {
@@ -4360,6 +4604,104 @@ app.get("/admin/admin-payments", requireAdmin, requireSuperAdmin, async (req, re
     });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to load payments" });
+  }
+});
+
+app.get("/admin/subscription-payments", requireAdmin, requireSuperAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT po.payment_id, po.payload, po.created_at,
+              p.profile_id, p.organization, p.org_number, p.first_name, p.last_name
+       FROM payment_orders po
+       LEFT JOIN admin_user_profiles p ON p.profile_id = (po.payload->>'profile_id')
+       WHERE po.status = 'paid'
+         AND po.booking_id = -1
+         AND po.payload->>'type' IN ('bas', 'premium')
+       ORDER BY po.created_at DESC`
+    );
+    const rows = (result.rows || [])
+      .map((row) => {
+        const payload = row.payload || {};
+        const details = getSubscriptionPaymentDetails(payload);
+        if (!details) {
+          return null;
+        }
+        return {
+          paymentId: row.payment_id,
+          profileId: row.profile_id || payload.profile_id || "",
+          organization: row.organization || "",
+          purchaseType: details.purchaseType,
+          productDescription:
+            details.purchaseType === "bas"
+              ? `Bas-eventkrediter (${details.quantity} st)`
+              : "Premium-abonnemang (1 år)",
+          quantity: details.quantity,
+          amount: Math.round(details.amountSek * 100) / 100,
+          paidAt: row.created_at ? row.created_at.toISOString() : null,
+          buyerName: `${row.first_name || ""} ${row.last_name || ""}`.trim()
+        };
+      })
+      .filter(Boolean);
+    res.json({ ok: true, rows });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Kunde inte ladda abonnemangsinbetalningar." });
+  }
+});
+
+app.get("/admin/subscription-payments/:paymentId/receipt.pdf", requireAdmin, requireSuperAdmin, async (req, res) => {
+  try {
+    const paymentId = String(req.params.paymentId || "").trim();
+    if (!paymentId) {
+      return res.status(400).json({ ok: false, error: "Ogiltigt betalnings-id." });
+    }
+    const orderResult = await pool.query(
+      `SELECT po.payment_id, po.payload, po.status, po.created_at
+       FROM payment_orders po
+       WHERE po.payment_id = $1
+         AND po.status = 'paid'
+         AND po.booking_id = -1
+         AND po.payload->>'type' IN ('bas', 'premium')`,
+      [paymentId]
+    );
+    const order = orderResult.rows[0];
+    if (!order) {
+      return res.status(404).json({ ok: false, error: "Abonnemangsbetalning hittades inte." });
+    }
+    const profileId = order.payload?.profile_id;
+    const profileResult = await pool.query(
+      `SELECT first_name, last_name, email, organization, org_number
+       FROM admin_user_profiles
+       WHERE profile_id = $1`,
+      [profileId]
+    );
+    const profile = profileResult.rows[0];
+    if (!profile) {
+      return res.status(404).json({ ok: false, error: "Profil hittades inte." });
+    }
+    const createdDate = order.created_at ? new Date(order.created_at) : new Date();
+    const orderNumber = formatOrderNumber(createdDate);
+    const pdfData = buildSubscriptionReceiptPdfPayload({
+      profile,
+      payload: order.payload,
+      createdDate,
+      orderNumber
+    });
+    if (!pdfData) {
+      return res.status(400).json({ ok: false, error: "Ogiltig abonnemangsbetalning." });
+    }
+    const purchaseType = String(order.payload?.type || "").toLowerCase();
+    const filename =
+      purchaseType === "bas" ? `kvitto-bas-${orderNumber}.pdf` : `kvitto-premium-${orderNumber}.pdf`;
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    const doc = new PDFDocument({ margin: 50, size: "A4" });
+    doc.pipe(res);
+    writeSubscriptionPurchaseReceiptPdf(doc, pdfData);
+    doc.end();
+  } catch (error) {
+    if (!res.headersSent) {
+      res.status(500).json({ ok: false, error: "Kunde inte skapa kvitto." });
+    }
   }
 });
 

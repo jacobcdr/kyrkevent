@@ -1046,6 +1046,21 @@ h2 {
   box-shadow: 0 12px 28px rgba(17, 24, 39, 0.08);
 }
 
+.payment-status-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 0.75rem;
+  margin-top: 1rem;
+  align-items: center;
+}
+
+.payment-status-actions-note {
+  flex: 1 1 100%;
+  margin: 0.15rem 0 0;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
 .status-icon {
   width: 48px;
   height: 48px;
@@ -1786,10 +1801,94 @@ h2 {
   gap: 0.6rem 1rem;
 }
 
-.subscription-plan-box .field-label {
+.subscription-plan-label-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
   width: 100%;
   margin: 0 0 0.25rem 0;
+}
+
+.subscription-plan-box .field-label {
+  width: auto;
+  margin: 0;
   font-size: 0.9rem;
+}
+
+.subscription-plan-info-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--card);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  font-style: italic;
+  font-family: Georgia, "Times New Roman", serif;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.subscription-plan-info-btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.subscription-plan-info-toaster {
+  width: min(26rem, calc(100% - 2rem));
+  max-height: min(85vh, 34rem);
+  overflow-y: auto;
+  text-align: left;
+}
+
+.subscription-plan-info-lead {
+  margin: 0 0 0.75rem;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.subscription-plan-info-block {
+  margin: 0.75rem 0 0;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.subscription-plan-info-block:first-of-type {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 0;
+}
+
+.subscription-plan-info-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.35rem;
+}
+
+.subscription-plan-info-block-title {
+  margin: 0;
+  font-size: 0.98rem;
+}
+
+.subscription-plan-info-price {
+  flex-shrink: 0;
+  padding: 0.25rem 0.55rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.subscription-plan-info-block-body {
+  margin: 0;
+  font-size: 0.86rem;
+  color: var(--muted);
+  line-height: 1.45;
 }
 
 .subscription-plan-options {
@@ -2070,10 +2169,17 @@ h2 {
 
 .subscription-plan-activate {
   margin: 0;
-  padding: 0.35rem 0.75rem;
-  font-size: 0.8rem;
+  padding: 0.45rem 0.85rem;
+  font-size: 0.78rem;
   width: auto;
   min-width: 0;
+  white-space: normal;
+  line-height: 1.25;
+  text-align: center;
+}
+
+.subscription-plan-activate-flash {
+  animation: admin-events-plan-update-flash 2.8s ease-in-out infinite;
 }
 
 .subscription-plan-status {
@@ -2095,6 +2201,33 @@ h2 {
 .subscription-plan-status-label {
   font-size: 0.85rem;
   color: var(--text-muted, #666);
+}
+
+.subscription-plan-upgrade-hint {
+  margin: 0.15rem 0 0;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  max-width: 34rem;
+}
+
+.subscription-plan-bas-credits-action {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem 0.85rem;
+  width: 100%;
+  max-width: 34rem;
+}
+
+.subscription-plan-bas-credits-action .subscription-plan-upgrade-hint {
+  flex: 1 1 14rem;
+  margin: 0;
+}
+
+.subscription-plan-bas-buy-btn {
+  flex-shrink: 0;
+  padding: 0.35rem 0.85rem;
+  font-size: 0.8rem;
 }
 
 .subscription-plan-badge {
@@ -2185,29 +2318,74 @@ h2 {
 
 .admin-events-plan-wrap {
   flex-shrink: 0;
+}
+
+.admin-events-plan-card {
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
-  gap: 0.35rem;
+  align-items: center;
+  text-align: center;
+  gap: 0.55rem;
+  min-width: 9.5rem;
+  padding: 0.75rem 1rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
 }
 
 .admin-events-plan-wrap .admin-events-plan-label {
   font-size: 0.8rem;
   color: var(--text-muted, #666);
   font-weight: 500;
+  letter-spacing: 0.01em;
 }
 
 .admin-events-plan-badge {
-  padding: 0.55rem 1.15rem;
+  padding: 0.55rem 1.35rem;
   font-size: 1rem;
   font-weight: 700;
+  min-width: 6.5rem;
+}
+
+.admin-events-plan-update-link {
+  margin: 0.1rem 0 0;
+  padding: 0.35rem 0.5rem 0;
+  border: none;
+  border-top: 1px solid var(--border);
+  width: 100%;
+  background: transparent;
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.3;
+  cursor: pointer;
+  animation: admin-events-plan-update-flash 2.8s ease-in-out infinite;
+}
+
+.admin-events-plan-update-link:hover {
+  color: var(--accent-dark);
+}
+
+@keyframes admin-events-plan-update-flash {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
 }
 
 .admin-events-premium-dates {
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  align-items: center;
   gap: 0.15rem;
+  width: 100%;
+  margin-top: 0.1rem;
+  padding-top: 0.45rem;
+  border-top: 1px solid var(--border);
   font-size: 0.75rem;
   color: var(--text-muted, #666);
 }
