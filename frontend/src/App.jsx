@@ -15,6 +15,7 @@ import "leaflet/dist/leaflet.css";
 import "./App.css";
 import { EventGallery } from "./EventGallery";
 import { EventAnalytics } from "./EventAnalytics";
+import { getOrCreateVisitorId } from "./visitorId";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 const API_BASE_NORMALIZED = API_BASE.replace(/\/+$/, "");
@@ -12828,15 +12829,15 @@ function App() {
       setEvent(data.event || null);
       setEventError("");
       try {
-        const guardKey = `__kyrkevent_view_tracked__:${String(eventSlug)}`;
-        if (!window[guardKey]) {
-          window[guardKey] = true;
-          await fetch(`${API_BASE}/events/${eventSlug}/view`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ referrer: document.referrer || "" })
-          });
-        }
+        const visitorId = getOrCreateVisitorId();
+        await fetch(`${API_BASE}/events/${eventSlug}/view`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            referrer: document.referrer || "",
+            visitorId: visitorId || ""
+          })
+        });
       } catch {
         // ignore tracking errors
       }

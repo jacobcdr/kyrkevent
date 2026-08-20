@@ -171,15 +171,16 @@ export function EventAnalytics({ apiBase, token, eventId }) {
 
   const title =
     data?.granularity === "hour" && data?.from
-      ? `Besök per timme – ${formatDayLong(data.from)}`
-      : "Besök över tid";
+      ? `Unika besökare per timme – ${formatDayLong(data.from)}`
+      : "Unika besökare över tid";
 
   return (
     <div className="section event-analytics">
       <h2>Besöksstatistik</h2>
       <p className="muted" style={{ marginTop: 0 }}>
-        Antal besök på eventsidan. Klicka på en dag i diagrammet för att se fördelning per timme.
-        Historik samlas in från och med att denna funktion är aktiv. Plats på kartan baseras på ungefärlig
+        Unika besökare räknas per webbläsare och dag. Uppdatering av sidan ökar sidvisningar men inte
+        antalet unika besökare. Klicka på en dag i diagrammet för att se fördelning per timme. Historik
+        samlas in från och med att denna funktion är aktiv. Plats på kartan baseras på ungefärlig
         IP-geolokalisering och följer samma filter som diagrammet.
       </p>
 
@@ -290,7 +291,11 @@ export function EventAnalytics({ apiBase, token, eventId }) {
         <>
           <div className="event-analytics-summary">
             <div className="event-analytics-summary-item">
-              <span className="muted">Besök i perioden</span>
+              <span className="muted">Unika besökare i perioden</span>
+              <strong>{data.totalUniqueVisitors?.toLocaleString("sv-SE") ?? 0}</strong>
+            </div>
+            <div className="event-analytics-summary-item">
+              <span className="muted">Sidvisningar i perioden</span>
               <strong>{data.totalViews?.toLocaleString("sv-SE") ?? 0}</strong>
             </div>
             {data.peak?.count > 0 ? (
@@ -298,13 +303,18 @@ export function EventAnalytics({ apiBase, token, eventId }) {
                 <span className="muted">Mest trafik</span>
                 <strong>
                   {data.granularity === "hour"
-                    ? `${data.peak.label} (${data.peak.count})`
-                    : `${formatDayLong(data.peak.label)} (${data.peak.count})`}
+                    ? `${data.peak.label} (${data.peak.count} unika`
+                    : `${formatDayLong(data.peak.label)} (${data.peak.count} unika`}
+                  {data.peak.viewCount != null ? `, ${data.peak.viewCount} visningar)` : ")"}
                 </strong>
               </div>
             ) : null}
             <div className="event-analytics-summary-item">
-              <span className="muted">Totalt sedan start</span>
+              <span className="muted">Totalt unika sedan start</span>
+              <strong>{data.lifetimeUniqueVisitors?.toLocaleString("sv-SE") ?? 0}</strong>
+            </div>
+            <div className="event-analytics-summary-item">
+              <span className="muted">Totalt sidvisningar sedan start</span>
               <strong>{data.lifetimeViews?.toLocaleString("sv-SE") ?? 0}</strong>
             </div>
           </div>
@@ -318,7 +328,15 @@ export function EventAnalytics({ apiBase, token, eventId }) {
                   <XAxis dataKey="name" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
                   <YAxis allowDecimals={false} tick={{ fontSize: 12 }} width={36} />
                   <Tooltip
-                    formatter={(value) => [value, "Besök"]}
+                    formatter={(value, name, item) => {
+                      if (name === "Unika besökare") {
+                        const views = item?.payload?.count;
+                        return views != null
+                          ? [`${value} unika (${views} visningar)`, "Unika besökare"]
+                          : [value, "Unika besökare"];
+                      }
+                      return [value, name];
+                    }}
                     labelFormatter={(label, payload) => {
                       if (data.granularity === "day" && payload?.[0]?.payload?.label) {
                         return formatDayLong(payload[0].payload.label);
@@ -327,10 +345,10 @@ export function EventAnalytics({ apiBase, token, eventId }) {
                     }}
                   />
                   <Bar
-                    dataKey="count"
+                    dataKey="uniqueCount"
                     fill="var(--accent)"
                     radius={[4, 4, 0, 0]}
-                    name="Besök"
+                    name="Unika besökare"
                     cursor={data.granularity === "day" ? "pointer" : "default"}
                     onClick={handleBarClick}
                   />
@@ -341,12 +359,12 @@ export function EventAnalytics({ apiBase, token, eventId }) {
               ) : null}
             </div>
           ) : (
-            <p className="muted">Inga besök i valt filter ännu.</p>
+            <p className="muted">Inga besökare i valt filter ännu.</p>
           )}
 
           <div className="event-analytics-breakdown">
             <div className="event-analytics-breakdown-col event-analytics-breakdown-col--wide">
-              <h3 className="admin-subsection-title">Besökares plats</h3>
+              <h3 className="admin-subsection-title">Besökares plats (unika)</h3>
               {locationRows.length > 0 ? (
                 <>
                   <EventAnalyticsMap locations={locationRows} />
@@ -366,7 +384,7 @@ export function EventAnalytics({ apiBase, token, eventId }) {
               )}
             </div>
             <div className="event-analytics-breakdown-col">
-              <h3 className="admin-subsection-title">Enhet</h3>
+              <h3 className="admin-subsection-title">Enhet (unika)</h3>
               {data.devices?.length ? (
                 <ul className="event-analytics-breakdown-list">
                   {data.devices.map((row) => (
@@ -383,7 +401,7 @@ export function EventAnalytics({ apiBase, token, eventId }) {
               )}
             </div>
             <div className="event-analytics-breakdown-col">
-              <h3 className="admin-subsection-title">Trafikkälla</h3>
+              <h3 className="admin-subsection-title">Trafikkälla (unika)</h3>
               {data.referrers?.length ? (
                 <ul className="event-analytics-breakdown-list">
                   {data.referrers.map((row) => (

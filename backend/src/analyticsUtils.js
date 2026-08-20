@@ -1,6 +1,8 @@
 import geoip from "geoip-lite";
 
 const ANALYTICS_TZ = "Europe/Stockholm";
+const VISITOR_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const DEVICE_TYPES = new Set(["mobile", "tablet", "desktop", "bot", "unknown"]);
 const REFERRER_TYPES = new Set(["direct", "search", "social", "external", "unknown"]);
@@ -94,8 +96,21 @@ export function resolveAnalyticsRange({ from, to, preset }) {
   return { from: addDaysToDateStr(today, -29), to: today };
 }
 
+export function parseVisitorId(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!VISITOR_ID_RE.test(normalized)) {
+    return "";
+  }
+  return normalized;
+}
+
 export function fillDailySeries(fromStr, toStr, rows) {
-  const map = new Map((rows || []).map((row) => [row.bucket, Number(row.count) || 0]));
+  const viewMap = new Map();
+  const uniqueMap = new Map();
+  for (const row of rows || []) {
+    viewMap.set(row.bucket, Number(row.view_count) || 0);
+    uniqueMap.set(row.bucket, Number(row.unique_count) || 0);
+  }
   const [fy, fm, fd] = fromStr.split("-").map(Number);
   const [ty, tm, td] = toStr.split("-").map(Number);
   const cursor = new Date(fy, fm - 1, fd);
@@ -103,18 +118,28 @@ export function fillDailySeries(fromStr, toStr, rows) {
   const series = [];
   while (cursor <= end) {
     const label = formatDateYmd(cursor);
-    series.push({ label, count: map.get(label) || 0 });
+    series.push({
+      label,
+      count: viewMap.get(label) || 0,
+      uniqueCount: uniqueMap.get(label) || 0
+    });
     cursor.setDate(cursor.getDate() + 1);
   }
   return series;
 }
 
 export function fillHourlySeries(rows) {
-  const map = new Map((rows || []).map((row) => [Number(row.bucket), Number(row.count) || 0]));
+  const viewMap = new Map();
+  const uniqueMap = new Map();
+  for (const row of rows || []) {
+    viewMap.set(Number(row.bucket), Number(row.view_count) || 0);
+    uniqueMap.set(Number(row.bucket), Number(row.unique_count) || 0);
+  }
   return Array.from({ length: 24 }, (_, hour) => ({
     label: `${String(hour).padStart(2, "0")}:00`,
     hour,
-    count: map.get(hour) || 0
+    count: viewMap.get(hour) || 0,
+    uniqueCount: uniqueMap.get(hour) || 0
   }));
 }
 
