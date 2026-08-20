@@ -657,6 +657,7 @@ h2 {
 .speaker-bio--clamped {
   display: -webkit-box;
   -webkit-box-orient: vertical;
+  line-clamp: 10;
   -webkit-line-clamp: 10;
   overflow: hidden;
 }
@@ -3666,6 +3667,50 @@ select.goog-te-combo {
 .admin-checkin-viewport video,
 .admin-checkin-viewport canvas {
   border-radius: 12px;
+}
+
+.admin-checkin-search {
+  margin-bottom: 1rem;
+}
+
+.admin-checkin-search-label {
+  margin: 0 0 0.5rem;
+  font-size: 0.88rem;
+  line-height: 1.35;
+}
+
+.admin-checkin-search-form {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+
+.admin-checkin-search-input {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border, #f0d89d);
+  border-radius: 10px;
+  font: inherit;
+  background: #fff;
+  color: var(--text, #3b2611);
+}
+
+.admin-checkin-search-input:focus {
+  outline: 2px solid var(--accent, #c8860a);
+  outline-offset: 1px;
+}
+
+.admin-checkin-search-button {
+  flex-shrink: 0;
+  min-width: 4.5rem;
+}
+
+.admin-checkin-line-order {
+  font-size: 0.78rem;
+  color: var(--muted, #7a6548);
+  font-variant-numeric: tabular-nums;
 }
 
 .admin-checkin-toast {

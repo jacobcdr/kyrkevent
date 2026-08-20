@@ -1631,6 +1631,8 @@ function AdminCheckInPage() {
   const [modalMatches, setModalMatches] = useState(null);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [busy, setBusy] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchBusy, setSearchBusy] = useState(false);
   const html5Ref = useRef(null);
   /** Pausar avläsning (samma QR flera gånger / medan modal är öppen). Sätts true innan pause, false först efter lyckad resume. */
   const decodeSuppressedRef = useRef(false);
@@ -1687,6 +1689,15 @@ function AdminCheckInPage() {
     } catch {
       /* Inte pausad (t.ex. dubbel resume eller avbruten init) — ignoreras */
     } finally {
+      decodeSuppressedRef.current = false;
+    }
+  };
+
+  const pauseScanner = () => {
+    decodeSuppressedRef.current = true;
+    try {
+      html5Ref.current?.pause(true);
+    } catch {
       decodeSuppressedRef.current = false;
     }
   };
@@ -1818,6 +1829,53 @@ function AdminCheckInPage() {
     resumeScanner();
   };
 
+  const openMatchesModal = (matches) => {
+    setModalMatches(matches);
+  };
+
+  const handleSearchSubmit = async (event) => {
+    event.preventDefault();
+    const query = searchQuery.trim();
+    if (query.length < 2 || searchBusy) {
+      return;
+    }
+    pauseScanner();
+    setSearchBusy(true);
+    try {
+      const res = await fetch(`${API_BASE}/admin/events/${eventId}/check-in/search`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ query })
+      });
+      let data = null;
+      try {
+        data = await res.json();
+      } catch {
+        data = null;
+      }
+      if (!data?.ok) {
+        const msg =
+          data?.error === "ingen träff"
+            ? "Ingen träff"
+            : data?.error === "Ange minst 2 tecken."
+              ? "Ange minst 2 tecken"
+              : data?.error || "Sökning misslyckades";
+        showToast(msg);
+        resumeScanner();
+        return;
+      }
+      openMatchesModal(data.matches || []);
+    } catch {
+      showToast("Nätverksfel");
+      resumeScanner();
+    } finally {
+      setSearchBusy(false);
+    }
+  };
+
   const handleConfirmCheckIn = async () => {
     const todo = (modalMatches || []).filter((m) => !m.checkedIn);
     const bookingIds = todo.filter((m) => selectedIds.has(m.id)).map((m) => m.id);
@@ -1872,6 +1930,9 @@ function AdminCheckInPage() {
   }
 
   const orderLabel = modalMatches?.[0]?.orderNumber ?? "";
+  const showOrderPerMatch =
+    modalMatches != null &&
+    new Set(modalMatches.map((m) => m.orderNumber).filter(Boolean)).size > 1;
   const todoMatches = modalMatches ? modalMatches.filter((m) => !m.checkedIn) : [];
   const doneMatches = modalMatches ? modalMatches.filter((m) => m.checkedIn) : [];
   const selectedTodoCount = todoMatches.filter((m) => selectedIds.has(m.id)).length;
@@ -1883,13 +1944,36 @@ function AdminCheckInPage() {
         <h1>Incheckning</h1>
         {eventName ? <p className="admin-checkin-event-name">{eventName}</p> : null}
         <p className="muted admin-checkin-hint">
-          Håll biljettens QR-kod i kameran. Den gäller endast för detta event.
+          Håll biljettens QR-kod i kameran, eller sök manuellt nedan. Gäller endast detta event.
         </p>
       </header>
 
       {cameraError ? <p className="admin-error">{cameraError}</p> : null}
 
       <div id={readerDomId} className="admin-checkin-viewport" />
+
+      <section className="admin-checkin-search" aria-label="Manuell incheckning">
+        <p className="muted admin-checkin-search-label">Saknar QR-kod? Sök på namn, e-post eller ordernummer.</p>
+        <form className="admin-checkin-search-form" onSubmit={handleSearchSubmit}>
+          <input
+            type="search"
+            className="admin-checkin-search-input"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="T.ex. namn eller ordernummer"
+            autoComplete="off"
+            enterKeyHint="search"
+            disabled={searchBusy}
+          />
+          <button
+            type="submit"
+            className="button admin-checkin-search-button"
+            disabled={searchBusy || searchQuery.trim().length < 2}
+          >
+            {searchBusy ? "…" : "Sök"}
+          </button>
+        </form>
+      </section>
 
       {toast ? (
         <div className="admin-checkin-toast" role="status">
@@ -1917,9 +2001,11 @@ function AdminCheckInPage() {
                 </div>
                 <div className="admin-checkin-modal-scroll">
                   <h2 id="admin-checkin-dialog-title">Bekräfta incheckning</h2>
-                  <p className="admin-checkin-modal-order">
-                    Ordernummer: <strong>{orderLabel}</strong>
-                  </p>
+                  {orderLabel && !showOrderPerMatch ? (
+                    <p className="admin-checkin-modal-order">
+                      Ordernummer: <strong>{orderLabel}</strong>
+                    </p>
+                  ) : null}
                   {doneMatches.length > 0 ? (
                     <>
                       <p className="muted admin-checkin-modal-sub">Redan incheckade:</p>
@@ -1932,6 +2018,9 @@ function AdminCheckInPage() {
                               </span>{" "}
                               {m.name}
                             </span>
+                            {showOrderPerMatch && m.orderNumber ? (
+                              <span className="admin-checkin-line-order">{m.orderNumber}</span>
+                            ) : null}
                             {m.ticket ? <span className="admin-checkin-line-ticket">{m.ticket}</span> : null}
                           </li>
                         ))}
@@ -1954,6 +2043,9 @@ function AdminCheckInPage() {
                               />
                               <span className="admin-checkin-checkbox-label">
                                 <span className="admin-checkin-line-name">{m.name}</span>
+                                {showOrderPerMatch && m.orderNumber ? (
+                                  <span className="admin-checkin-line-order">{m.orderNumber}</span>
+                                ) : null}
                                 {m.ticket ? <span className="admin-checkin-line-ticket">{m.ticket}</span> : null}
                               </span>
                             </label>

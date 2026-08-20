@@ -566,6 +566,19 @@ const normalizeQrOrderNumber = (raw) => {
   return digits;
 };
 
+const BOOKING_RESOLVED_ORDER_EXPR = `TRIM(COALESCE(b.order_number,
+  (SELECT po.payload->>'orderNumber' FROM payment_orders po
+   WHERE po.booking_id = b.id OR b.id = ANY(COALESCE(po.booking_ids, ARRAY[]::integer[]))
+   LIMIT 1), ''))`;
+
+const mapCheckInMatchRow = (row) => ({
+  id: row.id,
+  name: String(row.name || "").trim() || "–",
+  ticket: row.ticket != null && String(row.ticket).trim() ? String(row.ticket).trim() : null,
+  orderNumber: String(row.resolved_order || "").trim() || null,
+  checkedIn: !!row.checked_in_at
+});
+
 const ALLOWED_EVENT_VAT_RATES = [6, 12, 25];
 
 const normalizeEventVatRatePercent = (value) => {
@@ -8395,16 +8408,10 @@ app.post("/admin/events/:eventId/check-in/scan", requireAdmin, async (req, res) 
     const result = await pool.query(
       `
         SELECT b.id, b.name, b.ticket, b.checked_in_at,
-               TRIM(COALESCE(b.order_number,
-                 (SELECT po.payload->>'orderNumber' FROM payment_orders po
-                  WHERE po.booking_id = b.id OR b.id = ANY(COALESCE(po.booking_ids, ARRAY[]::integer[]))
-                  LIMIT 1), '')) AS resolved_order
+               ${BOOKING_RESOLVED_ORDER_EXPR} AS resolved_order
         FROM bookings b
         WHERE b.event_id = $1
-          AND TRIM(COALESCE(b.order_number,
-                 (SELECT po.payload->>'orderNumber' FROM payment_orders po
-                  WHERE po.booking_id = b.id OR b.id = ANY(COALESCE(po.booking_ids, ARRAY[]::integer[]))
-                  LIMIT 1), '')) = $2
+          AND ${BOOKING_RESOLVED_ORDER_EXPR} = $2
         ORDER BY b.name ASC NULLS LAST, b.id ASC
       `,
       [eventId, normalized]
@@ -8414,15 +8421,60 @@ app.post("/admin/events/:eventId/check-in/scan", requireAdmin, async (req, res) 
       return;
     }
     const matches = result.rows.map((row) => ({
-      id: row.id,
-      name: String(row.name || "").trim() || "–",
-      ticket: row.ticket != null && String(row.ticket).trim() ? String(row.ticket).trim() : null,
-      orderNumber: normalized,
-      checkedIn: !!row.checked_in_at
+      ...mapCheckInMatchRow(row),
+      orderNumber: normalized
     }));
     res.json({ ok: true, matches });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Incheckning misslyckades." });
+  }
+});
+
+app.post("/admin/events/:eventId/check-in/search", requireAdmin, async (req, res) => {
+  try {
+    const eventId = await ensureEventOwnership(req.params.eventId, req.userId, res);
+    if (!eventId) {
+      return;
+    }
+    const query = String(req.body?.query ?? "").trim();
+    if (query.length < 2) {
+      res.status(400).json({ ok: false, error: "Ange minst 2 tecken." });
+      return;
+    }
+    const escaped = query.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+    const likePattern = `%${escaped}%`;
+    const digitsOnly = query.replace(/\D/g, "");
+    const conditions = [
+      "b.name ILIKE $2 ESCAPE '\\'",
+      "COALESCE(b.email, '') ILIKE $2 ESCAPE '\\'",
+      "COALESCE(b.ticket, '') ILIKE $2 ESCAPE '\\'",
+      `${BOOKING_RESOLVED_ORDER_EXPR} ILIKE $2 ESCAPE '\\'`
+    ];
+    const params = [eventId, likePattern];
+    if (digitsOnly.length >= 4) {
+      const digitPattern = `%${digitsOnly.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
+      conditions.push(`${BOOKING_RESOLVED_ORDER_EXPR} LIKE $${params.length + 1} ESCAPE '\\'`);
+      params.push(digitPattern);
+    }
+    const result = await pool.query(
+      `
+        SELECT b.id, b.name, b.ticket, b.checked_in_at,
+               ${BOOKING_RESOLVED_ORDER_EXPR} AS resolved_order
+        FROM bookings b
+        WHERE b.event_id = $1
+          AND (${conditions.join(" OR ")})
+        ORDER BY b.name ASC NULLS LAST, b.id ASC
+        LIMIT 25
+      `,
+      params
+    );
+    if (result.rowCount === 0) {
+      res.json({ ok: false, error: "ingen träff" });
+      return;
+    }
+    res.json({ ok: true, matches: result.rows.map(mapCheckInMatchRow) });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Sökning misslyckades." });
   }
 });
 
