@@ -15,6 +15,7 @@ import "leaflet/dist/leaflet.css";
 import "./App.css";
 import { EventGallery } from "./EventGallery";
 import { EventAnalytics } from "./EventAnalytics";
+import { EventActivityLog } from "./EventActivityLog";
 import { getOrCreateVisitorId } from "./visitorId";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
@@ -6573,6 +6574,15 @@ const AdminPage = () => {
                 >
                   Status
                 </button>
+                <button
+                  type="button"
+                  role="tab"
+                  className={`admin-main-tab ${adminPanelTab === "logging" ? "is-active" : ""}`}
+                  aria-selected={adminPanelTab === "logging"}
+                  onClick={() => setAdminPanelTab("logging")}
+                >
+                  Loggning
+                </button>
               </nav>
             </div>
             <div className="admin-tabbed-frame__body">
@@ -7870,6 +7880,18 @@ const AdminPage = () => {
                 ) : (
                   <p className="muted">Kunde inte hämta systemstatus.</p>
                 )}
+              </div>
+            ) : null}
+
+            {adminPanelTab === "logging" ? (
+              <div className="admin-panel admin-panel-logging">
+                <EventActivityLog
+                  apiBase={API_BASE}
+                  token={token}
+                  scope="platform"
+                  organizations={adminOrganizations}
+                  events={adminEventLinks}
+                />
               </div>
             ) : null}
 
@@ -13464,10 +13486,11 @@ function App() {
         ...item,
         discountCode: discount
       }));
+      const visitorId = getOrCreateVisitorId();
       const response = await fetch(`${API_BASE}/payments/start-cart`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items })
+        body: JSON.stringify({ items, visitorId: visitorId || "" })
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {

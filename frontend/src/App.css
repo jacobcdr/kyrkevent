@@ -4686,6 +4686,108 @@ button.admin-booking-void-button:hover {
   border-bottom: none;
 }
 
+.event-activity-log-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 1rem 0;
+  font-size: 0.92rem;
+}
+
+.event-activity-log-admin-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.75rem 1rem;
+  margin-bottom: 1rem;
+}
+
+.event-activity-log-admin-filters .field {
+  margin: 0;
+}
+
+.event-activity-log-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.event-activity-log-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.event-activity-log-table th,
+.event-activity-log-table td {
+  padding: 0.55rem 0.65rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.event-activity-log-table th {
+  background: var(--surface-muted, #f8fafc);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.event-activity-log-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.event-activity-log-table .event-activity-log-id {
+  max-width: 9rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.event-activity-log-table .event-activity-log-details {
+  min-width: 10rem;
+  max-width: 18rem;
+  line-height: 1.4;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.event-activity-log-badge {
+  display: inline-block;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  background: #eef2ff;
+  color: #3730a3;
+  white-space: nowrap;
+}
+
+.event-activity-log-badge--payment_paid,
+.event-activity-log-badge--direct_registration,
+.event-activity-log-badge--booking_created,
+.event-activity-log-badge--email_sent {
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.event-activity-log-badge--payment_canceled,
+.event-activity-log-badge--payment_expired,
+.event-activity-log-badge--payment_failed {
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.event-activity-log-badge--mollie_created,
+.event-activity-log-badge--checkout_started,
+.event-activity-log-badge--payment_open {
+  background: #fff7ed;
+  color: #c2410c;
+}
+
 /* Sociala medier */
 .social-links {
   display: flex;

@@ -539,6 +539,93 @@ const formatOrderNumber = (date) =>
     })
     .replace(/\D/g, "");
 
+const VISITOR_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const normalizeVisitorId = (value) => {
+  const id = String(value || "").trim();
+  return VISITOR_ID_RE.test(id) ? id : "";
+};
+
+const eventIdFromPaymentPayload = (payload) => {
+  if (!payload) return null;
+  if (Array.isArray(payload.items) && payload.items[0]?.eventId) {
+    return payload.items[0].eventId;
+  }
+  return payload.eventId || null;
+};
+
+const buildActivityCheckoutSummary = (items, extra = {}) => {
+  const list = Array.isArray(items) ? items : [];
+  const ticketNames = list.map((item) => item.priceName).filter(Boolean);
+  const emails = [...new Set(list.map((item) => item.email).filter(Boolean))];
+  const names = list.map((item) => item.name).filter(Boolean);
+  return {
+    ticketCount: list.length,
+    tickets: ticketNames.slice(0, 3).join(", ") + (ticketNames.length > 3 ? " …" : ""),
+    attendeeCount: names.length,
+    email: emails[0] || "",
+    ...extra
+  };
+};
+
+const logEventActivity = async (eventId, activityType, data = {}) => {
+  const normalizedEventId = normalizeEventId(eventId);
+  if (!normalizedEventId || !activityType) return;
+  try {
+    const visitorId = normalizeVisitorId(data.visitorId);
+    const orderNumber = data.orderNumber ? String(data.orderNumber).trim() : null;
+    const paymentId = data.paymentId ? String(data.paymentId).trim() : null;
+    const payload = data.payload && typeof data.payload === "object" ? data.payload : {};
+    await pool.query(
+      `
+        INSERT INTO event_activity_log (event_id, visitor_id, activity_type, order_number, payment_id, payload)
+        VALUES ($1, $2, $3, $4, $5, $6)
+      `,
+      [normalizedEventId, visitorId, activityType, orderNumber, paymentId, JSON.stringify(payload)]
+    );
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Failed to log event activity", error);
+  }
+};
+
+const ACTIVITY_LOG_RETENTION_DAYS = 90;
+
+const purgeOldActivityLogs = async () => {
+  try {
+    const result = await pool.query(
+      `
+        DELETE FROM event_activity_log
+        WHERE created_at < NOW() - ($1::int * INTERVAL '1 day')
+      `,
+      [ACTIVITY_LOG_RETENTION_DAYS]
+    );
+    const deleted = result.rowCount ?? 0;
+    if (deleted > 0) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `Purged ${deleted} activity log entries older than ${ACTIVITY_LOG_RETENTION_DAYS} days`
+      );
+    }
+    return deleted;
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Failed to purge old activity logs", error);
+    return 0;
+  }
+};
+
+const startActivityLogRetention = () => {
+  purgeOldActivityLogs().catch(() => {});
+  setInterval(
+    () => {
+      purgeOldActivityLogs().catch(() => {});
+    },
+    24 * 60 * 60 * 1000
+  );
+};
+
 const normalizeEventId = (value) => {
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) ? parsed : null;
@@ -1283,6 +1370,18 @@ const sendReceiptEmail = async (payload) => {
       html: message.html,
       ...(attachments.length > 0 ? { attachments } : {})
     });
+    if (payload.eventId) {
+      await logEventActivity(payload.eventId, "email_sent", {
+        orderNumber: resolvedOrderNumber,
+        payload: {
+          email: payload.email,
+          eventName: payload.eventName || "",
+          ticket: payload.priceName || "",
+          amount: payload.discountedAmount ?? payload.priceAmount ?? null,
+          serviceFee: payload.serviceFee ?? 0
+        }
+      });
+    }
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Failed to send receipt email", error);
@@ -2293,6 +2392,7 @@ app.post("/discounts/preview", async (req, res) => {
 app.post("/payments/start-cart", paymentLimiter, async (req, res) => {
   const raw = req.body || {};
   const items = Array.isArray(raw.items) ? raw.items : [];
+  const visitorId = normalizeVisitorId(raw.visitorId);
   if (items.length === 0) {
     res.status(400).json({ ok: false, error: "Cart is empty" });
     return;
@@ -2309,6 +2409,10 @@ app.post("/payments/start-cart", paymentLimiter, async (req, res) => {
   }
 
   const eventId = parsedItems[0].eventId;
+  await logEventActivity(eventId, "checkout_started", {
+    visitorId,
+    payload: buildActivityCheckoutSummary(parsedItems)
+  });
   const eventDateResult = await pool.query(
     "SELECT event_start_date, event_end_date, registration_deadline FROM events WHERE id = $1",
     [eventId]
@@ -2408,6 +2512,15 @@ app.post("/payments/start-cart", paymentLimiter, async (req, res) => {
         });
       }
       const sellerName = await getSellerNameForEvent(eventId);
+      await logEventActivity(eventId, "direct_registration", {
+        visitorId,
+        orderNumber,
+        payload: buildActivityCheckoutSummary(parsedItems, {
+          eventName,
+          bookingCount: bookings.length,
+          freeEvent: true
+        })
+      });
       return res.json({
         ok: true,
         direct: true,
@@ -2551,6 +2664,15 @@ app.post("/payments/start-cart", paymentLimiter, async (req, res) => {
       }
 
       const sellerName = await getSellerNameForEvent(eventId);
+      await logEventActivity(eventId, "direct_registration", {
+        visitorId,
+        orderNumber,
+        payload: buildActivityCheckoutSummary(processedItems, {
+          eventName: resolvedEventName,
+          bookingCount: bookings.length,
+          discount: "100%"
+        })
+      });
       return res.json({
         ok: true,
         direct: true,
@@ -2601,8 +2723,25 @@ app.post("/payments/start-cart", paymentLimiter, async (req, res) => {
           status = EXCLUDED.status,
           verify_token = COALESCE(payment_orders.verify_token, EXCLUDED.verify_token)
       `,
-      [payment.id, { items: processedItems, serviceFee, chargeAmount, orderNumber }, payment.status, verifyToken]
+      [
+        payment.id,
+        { items: processedItems, serviceFee, chargeAmount, orderNumber, visitorId },
+        payment.status,
+        verifyToken
+      ]
     );
+
+    await logEventActivity(eventId, "mollie_created", {
+      visitorId,
+      orderNumber,
+      paymentId: payment.id,
+      payload: buildActivityCheckoutSummary(processedItems, {
+        eventName,
+        amount: chargeAmount,
+        serviceFee,
+        currency: MOLLIE_CURRENCY
+      })
+    });
 
     res.json({ ok: true, checkoutUrl, verifyToken });
   } catch (error) {
@@ -2741,6 +2880,8 @@ app.get("/payments/verify", async (req, res) => {
     }
 
     const alreadyFulfilled = order.booking_id || (order.booking_ids && order.booking_ids.length > 0);
+    const previousPaymentStatus = String(order.status || "unknown").toLowerCase();
+    let fulfilledNow = false;
     if (status === "paid" && !alreadyFulfilled) {
       const client = await pool.connect();
       try {
@@ -2894,6 +3035,7 @@ app.get("/payments/verify", async (req, res) => {
               "UPDATE payment_orders SET status = $1, booking_ids = $2 WHERE payment_id = $3",
               [status, bookingIds, paymentId]
             );
+            fulfilledNow = true;
           } else {
             const finalAmount = pay.discountedAmount ?? pay.priceAmount;
             const booking = await client.query(
@@ -2928,6 +3070,7 @@ app.get("/payments/verify", async (req, res) => {
               "UPDATE payment_orders SET status = $1, booking_id = $2 WHERE payment_id = $3",
               [status, bid, paymentId]
             );
+            fulfilledNow = true;
             const sellerName = await getSellerNameForEvent(pay.eventId);
             const payEventNameRes = await client.query("SELECT name, confirmation_note FROM events WHERE id = $1", [
               pay.eventId
@@ -3003,6 +3146,61 @@ app.get("/payments/verify", async (req, res) => {
         names = fromBookings;
         summary.names = names;
         summary.name = names[0] || summary.name;
+      }
+    }
+
+    const activityEventId = eventIdFromPaymentPayload(payload);
+    const activityVisitorId = normalizeVisitorId(payload.visitorId);
+    if (activityEventId && fulfilledNow) {
+      await logEventActivity(activityEventId, "payment_paid", {
+        visitorId: activityVisitorId,
+        orderNumber: payload.orderNumber || null,
+        paymentId,
+        payload: {
+          eventName: summary.eventName,
+          ticket: summary.ticket,
+          total: summary.total,
+          attendeeCount: summary.names?.length || 0,
+          email: summary.email || ""
+        }
+      });
+      if (linkedIds.length > 0) {
+        await logEventActivity(activityEventId, "booking_created", {
+          visitorId: activityVisitorId,
+          orderNumber: payload.orderNumber || null,
+          paymentId,
+          payload: {
+            bookingIds: linkedIds,
+            attendeeCount: linkedIds.length,
+            names: names.slice(0, 5)
+          }
+        });
+      }
+    } else if (activityEventId) {
+      const currentStatus = String(status || "unknown").toLowerCase();
+      if (previousPaymentStatus !== currentStatus && currentStatus !== "paid") {
+        const paymentActivityType =
+          currentStatus === "canceled" || currentStatus === "cancelled"
+            ? "payment_canceled"
+            : currentStatus === "expired"
+              ? "payment_expired"
+              : currentStatus === "failed"
+                ? "payment_failed"
+                : currentStatus === "open"
+                  ? "payment_open"
+                  : "payment_status";
+        await logEventActivity(activityEventId, paymentActivityType, {
+          visitorId: activityVisitorId,
+          orderNumber: payload.orderNumber || null,
+          paymentId,
+          payload: {
+            eventName: summary.eventName,
+            ticket: summary.ticket,
+            total: summary.total,
+            attendeeCount: summary.names?.length || 0,
+            email: summary.email || ""
+          }
+        });
       }
     }
 
@@ -6871,6 +7069,7 @@ app.delete("/admin/events/:id", requireAdmin, async (req, res) => {
     await client.query("DELETE FROM hero_section WHERE event_id = $1", [eventId]);
     await client.query("DELETE FROM event_page_view_hits WHERE event_id = $1", [eventId]);
     await client.query("DELETE FROM event_page_views WHERE event_id = $1", [eventId]);
+    await client.query("DELETE FROM event_activity_log WHERE event_id = $1", [eventId]);
     const result = await client.query(
       "DELETE FROM events WHERE id = $1 AND user_id = $2",
       [eventId, req.userId]
@@ -8883,6 +9082,146 @@ app.get("/admin/event-analytics", requireAdmin, async (req, res) => {
   }
 });
 
+const ACTIVITY_LOG_TYPES = new Set([
+  "checkout_started",
+  "mollie_created",
+  "direct_registration",
+  "payment_paid",
+  "payment_canceled",
+  "payment_expired",
+  "payment_failed",
+  "payment_open",
+  "payment_status",
+  "booking_created",
+  "email_sent"
+]);
+
+app.get("/admin/event-activity-log", requireAdmin, async (req, res) => {
+  try {
+    const range = resolveAnalyticsRange({
+      from: req.query.from,
+      to: req.query.to,
+      preset: req.query.preset
+    });
+    if (!range.from || !range.to) {
+      res.status(400).json({ ok: false, error: "Ogiltigt datumintervall." });
+      return;
+    }
+
+    const typeFilter = String(req.query.type || "all").trim();
+    const limitRaw = Number.parseInt(req.query.limit, 10);
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 500) : 200;
+    const offsetRaw = Number.parseInt(req.query.offset, 10);
+    const offset = Number.isFinite(offsetRaw) ? Math.max(offsetRaw, 0) : 0;
+
+    const organizationFilter = String(req.query.organization || "").trim();
+    const filterEventId = normalizeEventId(req.query.eventId);
+
+    const adminRow = await pool.query("SELECT username FROM admin_users WHERE id = $1", [req.userId]);
+    const isSuperAdmin = (adminRow.rows[0]?.username || "").toLowerCase() === "admin";
+
+    const dateWhere = `(l.created_at AT TIME ZONE '${ANALYTICS_TZ}')::date >= $1::date AND (l.created_at AT TIME ZONE '${ANALYTICS_TZ}')::date <= $2::date`;
+    const params = [range.from, range.to];
+    let scopeSql = "";
+    const joinSql = `
+      JOIN events e ON e.id = l.event_id
+      LEFT JOIN admin_user_profiles p ON p.user_id = e.user_id
+    `;
+
+    if (isSuperAdmin) {
+      scopeSql = "1=1";
+      if (organizationFilter) {
+        params.push(organizationFilter);
+        scopeSql += ` AND TRIM(COALESCE(p.organization, '')) = $${params.length}`;
+      }
+      if (filterEventId) {
+        params.push(filterEventId);
+        scopeSql += ` AND l.event_id = $${params.length}`;
+      }
+    } else {
+      if (!filterEventId) {
+        res.status(400).json({ ok: false, error: "eventId required" });
+        return;
+      }
+      const eventId = await ensureEventOwnership(req.query.eventId, req.userId, res);
+      if (!eventId) {
+        return;
+      }
+      params.push(eventId);
+      scopeSql = `l.event_id = $${params.length}`;
+    }
+
+    let typeSql = "";
+    if (typeFilter !== "all" && ACTIVITY_LOG_TYPES.has(typeFilter)) {
+      params.push(typeFilter);
+      typeSql = ` AND l.activity_type = $${params.length}`;
+    }
+
+    const countResult = await pool.query(
+      `
+        SELECT COUNT(*)::int AS total
+        FROM event_activity_log l
+        ${joinSql}
+        WHERE ${scopeSql}
+          AND ${dateWhere}
+          ${typeSql}
+      `,
+      params
+    );
+
+    const listParams = [...params, limit, offset];
+    const rowsResult = await pool.query(
+      `
+        SELECT
+          l.id,
+          l.event_id,
+          l.visitor_id,
+          l.activity_type,
+          l.order_number,
+          l.payment_id,
+          l.payload,
+          l.created_at,
+          e.name AS event_name,
+          COALESCE(NULLIF(TRIM(p.organization), ''), '–') AS organization
+        FROM event_activity_log l
+        ${joinSql}
+        WHERE ${scopeSql}
+          AND ${dateWhere}
+          ${typeSql}
+        ORDER BY l.created_at DESC, l.id DESC
+        LIMIT $${listParams.length - 1}
+        OFFSET $${listParams.length}
+      `,
+      listParams
+    );
+
+    res.json({
+      ok: true,
+      log: {
+        from: range.from,
+        to: range.to,
+        total: countResult.rows[0]?.total ?? 0,
+        limit,
+        offset,
+        entries: (rowsResult.rows || []).map((row) => ({
+          id: row.id,
+          eventId: row.event_id,
+          eventName: row.event_name || "",
+          organization: row.organization || "",
+          visitorId: row.visitor_id || "",
+          activityType: row.activity_type,
+          orderNumber: row.order_number || "",
+          paymentId: row.payment_id || "",
+          payload: row.payload || {},
+          createdAt: row.created_at
+        }))
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Failed to load activity log" });
+  }
+});
+
 const EVENT_UPDATED_AT_CHILD_TABLES = [
   "event_sections",
   "program_items",
@@ -9222,6 +9561,30 @@ const ensureBookingsTable = async () => {
     CREATE INDEX IF NOT EXISTS idx_event_page_view_hits_event_visitor
       ON event_page_view_hits (event_id, visitor_id)
       WHERE visitor_id <> ''
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS event_activity_log (
+      id BIGSERIAL PRIMARY KEY,
+      event_id INTEGER NOT NULL,
+      visitor_id TEXT NOT NULL DEFAULT '',
+      activity_type TEXT NOT NULL,
+      order_number TEXT,
+      payment_id TEXT,
+      payload JSONB NOT NULL DEFAULT '{}',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_event_activity_log_event_created
+      ON event_activity_log (event_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_event_activity_log_event_type
+      ON event_activity_log (event_id, activity_type, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_event_activity_log_created
+      ON event_activity_log (created_at)
   `);
   await pool.query(`
     ALTER TABLE bookings
@@ -9564,6 +9927,7 @@ waitForDatabase(pool)
   .then(() => ensureBookingsTable())
   .then(() => {
     startHealthMonitor(pool);
+    startActivityLogRetention();
     app.listen(PORT, () => {
       // eslint-disable-next-line no-console
       console.log(`Backend listening on http://localhost:${PORT}`);
