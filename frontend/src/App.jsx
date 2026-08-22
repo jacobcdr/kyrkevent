@@ -1263,6 +1263,11 @@ const PaymentStatusPage = () => {
             total: typeof parsed.amount === "number" ? parsed.amount : (parsed.cart ? 0 : null),
             eventName: parsed.eventName,
             sellerName: parsed.sellerName || null,
+            sellerOrgNumber: parsed.sellerOrgNumber || null,
+            sellerAddress: parsed.sellerAddress || null,
+            issuerName: parsed.issuerName || null,
+            issuerOrgNumber: parsed.issuerOrgNumber || null,
+            issuerAddress: parsed.issuerAddress || null,
             orderNumber: parsed.orderNumber || null
           });
         } else {
@@ -1350,6 +1355,14 @@ const PaymentStatusPage = () => {
       maximumFractionDigits: 2
     })} SEK`;
   };
+  const calcVatFromGrossIncl = (grossInclVat, ratePercent) => {
+    if (typeof grossInclVat !== "number" || !Number.isFinite(grossInclVat) || grossInclVat <= 0) {
+      return 0;
+    }
+    const rate = ratePercent / 100;
+    return Math.round(((grossInclVat * rate) / (1 + rate)) * 100) / 100;
+  };
+  const SERVICE_FEE_VAT_RATE_PERCENT = 25;
   const ticketTotal =
     typeof summary?.amount === "number" && Number.isFinite(summary.amount)
       ? summary.amount
@@ -1369,17 +1382,66 @@ const PaymentStatusPage = () => {
     typeof summary?.vatRatePercent === "number" && summary.vatRatePercent > 0
       ? summary.vatRatePercent
       : 25;
-  const vatRate = vatRatePercent / 100;
-  const vatAmount =
-    !vatExempt && typeof totalAmount === "number"
-      ? Math.round(((totalAmount * vatRate) / (1 + vatRate)) * 100) / 100
-      : null;
-  const netAmount =
-    typeof totalAmount === "number"
-      ? vatExempt
-        ? totalAmount
-        : Math.round((totalAmount - (vatAmount || 0)) * 100) / 100
-      : null;
+  const vatBreakdown = (() => {
+    if (
+      typeof summary?.netAmount === "number" &&
+      typeof summary?.vatAmount === "number"
+    ) {
+      const ticket = ticketTotal ?? 0;
+      const fee = serviceFee > 0 ? serviceFee : 0;
+      const ticketVatVal = typeof summary.ticketVat === "number" ? summary.ticketVat : 0;
+      const serviceFeeVatVal = typeof summary.serviceFeeVat === "number" ? summary.serviceFeeVat : 0;
+      const ticketNetVal = vatExempt ? ticket : Math.round((ticket - ticketVatVal) * 100) / 100;
+      const serviceFeeNetVal = Math.round((fee - serviceFeeVatVal) * 100) / 100;
+      return {
+        ticketVat: ticketVatVal,
+        serviceFeeVat: serviceFeeVatVal,
+        ticketNet: ticketNetVal,
+        serviceFeeNet: serviceFeeNetVal,
+        netAmount: summary.netAmount,
+        vatAmount: summary.vatAmount,
+        totalAmount:
+          typeof summary.total === "number"
+            ? summary.total
+            : Math.round((summary.netAmount + summary.vatAmount) * 100) / 100
+      };
+    }
+    const ticket = ticketTotal ?? 0;
+    const fee = serviceFee > 0 ? serviceFee : 0;
+    const ticketVat = vatExempt ? 0 : calcVatFromGrossIncl(ticket, vatRatePercent);
+    const serviceFeeVat = calcVatFromGrossIncl(fee, SERVICE_FEE_VAT_RATE_PERCENT);
+    const ticketNet = vatExempt ? ticket : Math.round((ticket - ticketVat) * 100) / 100;
+    const serviceFeeNet = Math.round((fee - serviceFeeVat) * 100) / 100;
+    return {
+      ticketVat,
+      serviceFeeVat,
+      ticketNet,
+      serviceFeeNet,
+      netAmount: Math.round((ticketNet + serviceFeeNet) * 100) / 100,
+      vatAmount: Math.round((ticketVat + serviceFeeVat) * 100) / 100,
+      totalAmount: Math.round((ticket + fee) * 100) / 100
+    };
+  })();
+  const { ticketVat, serviceFeeVat, ticketNet, serviceFeeNet, netAmount, vatAmount, totalAmount: receiptTotal } =
+    vatBreakdown;
+  const priceTableRows = [];
+  if (ticketTotal != null && ticketTotal > 0) {
+    priceTableRows.push({
+      label: "Biljett",
+      net: ticketNet,
+      vatAmount: ticketVat,
+      total: ticketTotal
+    });
+  }
+  if (serviceFee > 0) {
+    priceTableRows.push({
+      label: "Serviceavgift",
+      net: serviceFeeNet,
+      vatAmount: serviceFeeVat,
+      total: serviceFee
+    });
+  }
+  const showVatExemptNote = vatExempt && ticketTotal != null && ticketTotal > 0;
   const orderNumber =
     summary?.orderNumber ||
     purchaseTime
@@ -1490,6 +1552,7 @@ const PaymentStatusPage = () => {
                   Om du inte hittar bekräftelsen, kontrollera även din skräppost.
                 </p>
                 {hasPriceInfo ? (
+                  <>
                   <div className="receipt">
                     <h3>Kvitto</h3>
                     <div className="receipt-row">
@@ -1522,32 +1585,80 @@ const PaymentStatusPage = () => {
                       <span>Säljare</span>
                       <strong>{summary.sellerName || "–"}</strong>
                     </div>
-                    <div className="receipt-row">
-                      <span>Biljett såld genom</span>
-                      <strong>Lonetec AB</strong>
-                    </div>
-                    {vatExempt ? (
+                    {summary.sellerOrgNumber ? (
                       <div className="receipt-row">
-                        <span>Moms</span>
-                        <strong>Ingen moms utgår (momsbefriad verksamhet)</strong>
+                        <span>Organisationsnummer</span>
+                        <strong>{summary.sellerOrgNumber}</strong>
                       </div>
-                    ) : (
-                      <>
-                        <div className="receipt-row">
-                          <span>Pris (exkl. moms)</span>
-                          <strong>{formatSek(netAmount)}</strong>
-                        </div>
-                        <div className="receipt-row">
-                          <span>Moms ({vatRatePercent}%)</span>
-                          <strong>{formatSek(vatAmount)}</strong>
-                        </div>
-                      </>
-                    )}
-                    <div className="receipt-total">
-                      <span>Totalbelopp</span>
-                      <strong>{formatSek(totalAmount)}</strong>
-                    </div>
+                    ) : null}
+                    {summary.sellerAddress ? (
+                      <div className="receipt-row">
+                        <span>Adress</span>
+                        <strong>{summary.sellerAddress}</strong>
+                      </div>
+                    ) : null}
+                    {summary.ticket ? (
+                      <div className="receipt-row">
+                        <span>Biljett</span>
+                        <strong>{summary.ticket}</strong>
+                      </div>
+                    ) : null}
+                    {summary.discountPercent ? (
+                      <div className="receipt-row">
+                        <span>Rabatt</span>
+                        <strong>{summary.discountPercent}%</strong>
+                      </div>
+                    ) : null}
+                    <div className="receipt-divider" aria-hidden="true" />
+                    <table className="receipt-price-table">
+                      <thead>
+                        <tr>
+                          <th scope="col">Beskrivning</th>
+                          <th scope="col">Exkl.moms</th>
+                          <th scope="col">Moms</th>
+                          <th scope="col">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {priceTableRows.map((row) => (
+                          <tr key={row.label}>
+                            <th scope="row">{row.label}</th>
+                            <td>{formatSek(row.net)}</td>
+                            <td>{formatSek(row.vatAmount)}</td>
+                            <td>{formatSek(row.total)}</td>
+                          </tr>
+                        ))}
+                        <tr className="receipt-price-table-total">
+                          <th scope="row">Totalt att betala</th>
+                          <td>{formatSek(netAmount)}</td>
+                          <td />
+                          <td>{formatSek(receiptTotal ?? totalAmount)}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                    {showVatExemptNote ? (
+                      <p className="receipt-price-footnote">* Momsbefriad verksamhet (biljett).</p>
+                    ) : null}
                   </div>
+                  <div className="receipt-issuer-note">
+                    <div className="receipt-issuer-note-row">
+                      <span>Biljett såld genom</span>
+                      <em>{summary.issuerName || "Lonetec AB"}</em>
+                    </div>
+                    {summary.issuerOrgNumber ? (
+                      <div className="receipt-issuer-note-row">
+                        <span>Organisationsnummer</span>
+                        <em>{summary.issuerOrgNumber}</em>
+                      </div>
+                    ) : null}
+                    {summary.issuerAddress ? (
+                      <div className="receipt-issuer-note-row">
+                        <span>Adress</span>
+                        <em>{summary.issuerAddress}</em>
+                      </div>
+                    ) : null}
+                  </div>
+                  </>
                 ) : (
                   <div className="receipt receipt-confirmation-only">
                     <div className="receipt-row">
@@ -13505,6 +13616,11 @@ function App() {
             names: (data.bookings || []).map((b) => b.name).filter((n) => !!n),
             eventName: data.eventName || event?.name || "Event",
             sellerName: data.sellerName || null,
+            sellerOrgNumber: data.sellerOrgNumber || null,
+            sellerAddress: data.sellerAddress || null,
+            issuerName: data.issuerName || null,
+            issuerOrgNumber: data.issuerOrgNumber || null,
+            issuerAddress: data.issuerAddress || null,
             orderNumber: data.orderNumber || null
           })
         );

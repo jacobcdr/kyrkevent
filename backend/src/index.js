@@ -60,6 +60,7 @@ const PREMIUM_PRICE_DEFAULT = 1995;
 const PREMIUM_PRICE_YEAR = Math.max(1, Number(process.env.PREMIUM_PRICE_YEAR || String(PREMIUM_PRICE_DEFAULT)) || PREMIUM_PRICE_DEFAULT);
 const SERVICE_FEE_AMOUNT =
   Math.max(0, Number(process.env.SERVICE_FEE_AMOUNT || "15") || 0);
+const SERVICE_FEE_VAT_RATE_PERCENT = 25;
 const FRONTEND_URL = process.env.FRONTEND_URL || "";
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.resolve("uploads");
 const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
@@ -330,6 +331,136 @@ const formatSek = (value) => {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
   })} SEK`;
+};
+
+const calcVatFromGrossIncl = (grossInclVat, ratePercent) => {
+  if (typeof grossInclVat !== "number" || !Number.isFinite(grossInclVat) || grossInclVat <= 0) {
+    return 0;
+  }
+  const rate = ratePercent / 100;
+  return Math.round(((grossInclVat * rate) / (1 + rate)) * 100) / 100;
+};
+
+const calcReceiptVatBreakdown = ({ ticketAmount, serviceFee, vatExempt, vatRatePercent }) => {
+  const ticket =
+    typeof ticketAmount === "number" && Number.isFinite(ticketAmount) ? ticketAmount : 0;
+  const fee =
+    typeof serviceFee === "number" && Number.isFinite(serviceFee) && serviceFee > 0 ? serviceFee : 0;
+  const ticketVat = vatExempt ? 0 : calcVatFromGrossIncl(ticket, vatRatePercent);
+  const serviceFeeVat = calcVatFromGrossIncl(fee, SERVICE_FEE_VAT_RATE_PERCENT);
+  const ticketNet = vatExempt ? ticket : Math.round((ticket - ticketVat) * 100) / 100;
+  const serviceFeeNet = Math.round((fee - serviceFeeVat) * 100) / 100;
+  return {
+    ticketVat,
+    serviceFeeVat,
+    ticketNet,
+    serviceFeeNet,
+    netAmount: Math.round((ticketNet + serviceFeeNet) * 100) / 100,
+    vatAmount: Math.round((ticketVat + serviceFeeVat) * 100) / 100,
+    totalAmount: Math.round((ticket + fee) * 100) / 100
+  };
+};
+
+const buildReceiptPriceTable = ({ ticketAmount, serviceFee, vatExempt, vatRatePercent }) => {
+  const breakdown = calcReceiptVatBreakdown({ ticketAmount, serviceFee, vatExempt, vatRatePercent });
+  const rows = [];
+  const ticket =
+    typeof ticketAmount === "number" && Number.isFinite(ticketAmount) && ticketAmount > 0
+      ? ticketAmount
+      : 0;
+  if (ticket > 0) {
+    rows.push({
+      label: "Biljett",
+      net: breakdown.ticketNet,
+      vatAmount: breakdown.ticketVat,
+      total: ticket
+    });
+  }
+  const fee =
+    typeof serviceFee === "number" && Number.isFinite(serviceFee) && serviceFee > 0 ? serviceFee : 0;
+  if (fee > 0) {
+    rows.push({
+      label: "Serviceavgift",
+      net: breakdown.serviceFeeNet,
+      vatAmount: breakdown.serviceFeeVat,
+      total: fee
+    });
+  }
+  return { rows, ...breakdown, showVatExemptNote: vatExempt === true && ticket > 0 };
+};
+
+const renderReceiptPriceTableText = (priceTable) => {
+  const lines = [
+    "────────────────────────────────────────",
+    "Beskrivning          Exkl.moms       Moms        Total"
+  ];
+  for (const row of priceTable.rows) {
+    lines.push(
+      `${row.label.padEnd(20)} ${formatSek(row.net).padStart(14)} ${formatSek(row.vatAmount).padStart(10)} ${formatSek(row.total).padStart(10)}`
+    );
+  }
+  lines.push(
+    `${"Totalt att betala".padEnd(20)} ${formatSek(priceTable.netAmount).padStart(14)} ${"".padStart(10)} ${formatSek(priceTable.totalAmount).padStart(10)}`
+  );
+  if (priceTable.showVatExemptNote) {
+    lines.push("* Momsbefriad verksamhet (biljett).");
+  }
+  lines.push("────────────────────────────────────────");
+  return lines;
+};
+
+const renderReceiptPriceTableHtml = (priceTable) => {
+  const cellStyle = "padding:8px 6px; border-bottom:1px solid #e5e7eb;";
+  const headStyle = `${cellStyle} font-weight:600; font-size:13px; color:#374151;`;
+  const numStyle = `${cellStyle} text-align:right; white-space:nowrap;`;
+  const rowHtml = (cells, { bold = false } = {}) => {
+    const weight = bold ? "font-weight:700;" : "";
+    return `<tr>${cells
+      .map(
+        (cell, index) =>
+          `<td style="${index === 0 ? cellStyle : numStyle}${weight}">${cell ?? ""}</td>`
+      )
+      .join("")}</tr>`;
+  };
+  const bodyRows = priceTable.rows
+    .map((row) =>
+      rowHtml([
+        `<strong>${row.label}</strong>`,
+        formatSek(row.net),
+        formatSek(row.vatAmount),
+        formatSek(row.total)
+      ])
+    )
+    .join("");
+  const totalRow = rowHtml(
+    [
+      "<strong>Totalt att betala</strong>",
+      `<strong>${formatSek(priceTable.netAmount)}</strong>`,
+      "",
+      `<strong>${formatSek(priceTable.totalAmount)}</strong>`
+    ],
+    { bold: true }
+  );
+  const footnote = priceTable.showVatExemptNote
+    ? `<p style="margin:6px 0 0; font-size:12px; color:#64748b;">* Momsbefriad verksamhet (biljett).</p>`
+    : "";
+  return `
+    <table style="border-collapse:collapse; width:100%; max-width:520px; margin-top:4px; font-size:14px;">
+      <thead>
+        <tr>
+          <th style="${headStyle} text-align:left;">Beskrivning</th>
+          <th style="${headStyle} text-align:right;">Exkl.moms</th>
+          <th style="${headStyle} text-align:right;">Moms</th>
+          <th style="${headStyle} text-align:right;">Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${bodyRows}
+        ${totalRow}
+      </tbody>
+    </table>
+    ${footnote}
+  `;
 };
 
 function formatOrgNumberDisplay(value) {
@@ -913,19 +1044,45 @@ const normalizeCustomFieldType = (value) => {
   return "text";
 };
 
-const getSellerNameForEvent = async (eventId) => {
-  if (!eventId) return "";
+const formatProfileAddress = (profile) => {
+  if (!profile) return "";
+  const parts = [profile.address, profile.postal_code, profile.city]
+    .map((part) => (part != null ? String(part).trim() : ""))
+    .filter(Boolean);
+  return parts.join(", ");
+};
+
+const getSellerInfoForEvent = async (eventId) => {
+  if (!eventId) {
+    return { name: "", orgNumber: "", address: "" };
+  }
   try {
     const result = await pool.query(
-      "SELECT p.organization FROM events e JOIN admin_user_profiles p ON p.user_id = e.user_id WHERE e.id = $1",
+      `
+        SELECT p.organization, p.org_number, p.address, p.postal_code, p.city
+        FROM events e
+        JOIN admin_user_profiles p ON p.user_id = e.user_id
+        WHERE e.id = $1
+      `,
       [eventId]
     );
-    const org = result.rows[0]?.organization;
-    if (org && String(org).trim()) return String(org).trim();
+    const row = result.rows[0];
+    if (!row) {
+      return { name: "", orgNumber: "", address: "" };
+    }
+    return {
+      name: row.organization && String(row.organization).trim() ? String(row.organization).trim() : "",
+      orgNumber: row.org_number && String(row.org_number).trim() ? String(row.org_number).trim() : "",
+      address: formatProfileAddress(row)
+    };
   } catch {
-    // ignore
+    return { name: "", orgNumber: "", address: "" };
   }
-  return "";
+};
+
+const getSellerNameForEvent = async (eventId) => {
+  const info = await getSellerInfoForEvent(eventId);
+  return info.name;
 };
 
 const getVatExemptForEvent = async (eventId) => {
@@ -972,6 +1129,8 @@ const buildReceiptEmail = ({
   serviceFee: serviceFeePayload,
   createdAt,
   sellerName: sellerNamePayload,
+  sellerOrgNumber: sellerOrgNumberPayload,
+  sellerAddress: sellerAddressPayload,
   orderNumber: orderNumberPayload,
   eventHasPrices: eventHasPricesPayload,
   eventConfirmationNote,
@@ -985,6 +1144,14 @@ const buildReceiptEmail = ({
       ? String(sellerNamePayload).trim()
       : "";
   const sellerName = organizerName || RECEIPT_SELLER;
+  const sellerOrgNumber =
+    sellerOrgNumberPayload && String(sellerOrgNumberPayload).trim()
+      ? String(sellerOrgNumberPayload).trim()
+      : "";
+  const sellerAddress =
+    sellerAddressPayload && String(sellerAddressPayload).trim()
+      ? String(sellerAddressPayload).trim()
+      : "";
   const createdDate = createdAt instanceof Date ? createdAt : new Date();
   const orderNumber =
     orderNumberPayload && String(orderNumberPayload).trim()
@@ -1068,19 +1235,10 @@ const buildReceiptEmail = ({
     typeof unitPrice === "number" && typeof ticketAmount === "number"
       ? Math.max(0, unitPrice - ticketAmount)
       : null;
-  const vatRate = vatRatePercent / 100;
-  const vatAmount =
-    !vatExempt && typeof totalAmount === "number"
-      ? Math.round(((totalAmount * vatRate) / (1 + vatRate)) * 100) / 100
-      : null;
-  const netAmount =
-    typeof totalAmount === "number"
-      ? vatExempt
-        ? totalAmount
-        : Math.round((totalAmount - (vatAmount || 0)) * 100) / 100
-      : null;
+  const priceTable = buildReceiptPriceTable({ ticketAmount, serviceFee, vatExempt, vatRatePercent });
   const discountLabel =
     typeof discountPercent === "number" && discountPercent > 0 ? ` (${discountPercent}%)` : "";
+  const issuerOrgNumberDisplay = formatOrgNumberDisplay(RECEIPT_SELLER_ORG_NUMBER);
 
   const lines = [
     `Hej ${name || ""}!`,
@@ -1093,46 +1251,42 @@ const buildReceiptEmail = ({
     ...(eventName ? [`Event: ${eventName}`] : []),
     `Betalning: ${RECEIPT_PAYMENT_METHOD}`,
     `Säljare: ${sellerName}`,
-    `Biljett såld genom: ${RECEIPT_ISSUER}`,
+    ...(sellerOrgNumber ? [`Organisationsnummer: ${sellerOrgNumber}`] : []),
+    ...(sellerAddress ? [`Adress: ${sellerAddress}`] : []),
+    ...(priceName ? [`Biljett: ${priceName}`] : []),
+    ...(discountAmount ? [`Rabatt${discountLabel}: -${formatSek(discountAmount)}`, ""] : [""]),
+    ...renderReceiptPriceTableText(priceTable),
     "",
-    `Biljett: ${priceName || "-"}`,
-    typeof ticketAmount === "number" ? `Summa (exkl. serviceavgift): ${formatSek(ticketAmount)}` : null,
-    serviceFee > 0 ? `Serviceavgift: ${formatSek(serviceFee)}` : null,
-    discountAmount ? `Rabatt${discountLabel}: -${formatSek(discountAmount)}` : null,
-    ...(vatExempt
-      ? [`Totalbelopp: ${formatSek(totalAmount)}`, "Moms: Ingen moms utgår (momsbefriad verksamhet)."]
-      : [
-          `Styckpris (exkl. moms): ${formatSek(netAmount)}`,
-          `Moms (${vatRatePercent}%): ${formatSek(vatAmount)}`,
-          `Totalbelopp: ${formatSek(totalAmount)}`
-        ]),
+    "Biljett såld genom:",
+    RECEIPT_ISSUER,
+    ...(issuerOrgNumberDisplay && issuerOrgNumberDisplay !== "–"
+      ? [`Organisationsnummer: ${issuerOrgNumberDisplay}`]
+      : []),
+    ...(RECEIPT_SELLER_ADDRESS ? [`Adress: ${RECEIPT_SELLER_ADDRESS}`] : []),
     "",
     ...(organizerName ? ["Vänliga hälsningar,", organizerName] : ["Vänliga hälsningar"])
   ].filter(Boolean);
 
-  const htmlRows = [
+  const metaHtmlRows = [
     ["Ordernummer", orderNumber],
     ["Datum & tid", createdDate.toLocaleString("sv-SE")],
     ...(eventName ? [["Event", eventName]] : []),
     ["Betalning", RECEIPT_PAYMENT_METHOD],
     ["Säljare", sellerName],
-    ["Biljett såld genom", RECEIPT_ISSUER],
-    ["Biljett", priceName || "-"],
-    ...(typeof ticketAmount === "number" ? [["Summa (exkl. serviceavgift)", formatSek(ticketAmount)]] : []),
-    ...(serviceFee > 0 ? [["Serviceavgift", formatSek(serviceFee)]] : []),
+    ...(sellerOrgNumber ? [["Organisationsnummer", sellerOrgNumber]] : []),
+    ...(sellerAddress ? [["Adress", sellerAddress]] : []),
+    ...(priceName ? [["Biljett", priceName]] : []),
     ...(discountAmount
       ? [[`Rabatt${discountLabel}`, `-${formatSek(discountAmount)}`]]
+      : [])
+  ];
+
+  const issuerNoteRows = [
+    ["Biljett såld genom", RECEIPT_ISSUER],
+    ...(issuerOrgNumberDisplay && issuerOrgNumberDisplay !== "–"
+      ? [["Organisationsnummer", issuerOrgNumberDisplay]]
       : []),
-    ...(vatExempt
-      ? [
-          ["Totalbelopp", formatSek(totalAmount)],
-          ["Moms", "Ingen moms utgår (momsbefriad verksamhet)"]
-        ]
-      : [
-          ["Styckpris (exkl. moms)", formatSek(netAmount)],
-          [`Moms (${vatRatePercent}%)`, formatSek(vatAmount)],
-          ["Totalbelopp", formatSek(totalAmount)]
-        ])
+    ...(RECEIPT_SELLER_ADDRESS ? [["Adress", RECEIPT_SELLER_ADDRESS]] : [])
   ];
 
   const html = `
@@ -1142,12 +1296,31 @@ const buildReceiptEmail = ({
       <p>Tack för din bokning. Här är ditt kvitto för hela bokningen (har du flera biljetter, är de inkluderade i kvittot nedan):</p>
       <table style="border-collapse: collapse; width: 100%; max-width: 520px;">
         <tbody>
-          ${htmlRows
+          ${metaHtmlRows
             .map(
               ([label, value]) => `
             <tr>
               <td style="padding:6px 8px; border-bottom:1px solid #e5e7eb;">${label}</td>
               <td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">
+                ${value}
+              </td>
+            </tr>
+          `
+            )
+            .join("")}
+        </tbody>
+      </table>
+      <div style="border-top:2px solid #e5e7eb; margin:14px 0 10px; max-width:520px;"></div>
+      ${renderReceiptPriceTableHtml(priceTable)}
+      <div style="border-top:2px solid #e5e7eb; margin:14px 0 10px; max-width:520px;"></div>
+      <table style="border-collapse: collapse; width: 100%; max-width: 520px; margin-top: 12px; font-size: 12px; color: #64748b;">
+        <tbody>
+          ${issuerNoteRows
+            .map(
+              ([label, value]) => `
+            <tr>
+              <td style="padding:3px 8px;">${label}</td>
+              <td style="padding:3px 8px; text-align:right; font-style: italic; font-weight: 400;">
                 ${value}
               </td>
             </tr>
@@ -1296,14 +1469,24 @@ const sendReceiptEmail = async (payload) => {
 
     let vatExempt = payload.vatExempt === true;
     let vatRatePercent = normalizeEventVatRatePercent(payload.vatRatePercent);
+    let sellerName = payload.sellerName;
+    let sellerOrgNumber = payload.sellerOrgNumber;
+    let sellerAddress = payload.sellerAddress;
     if (payload.eventId) {
       const vatCtx = await getEventVatContext(payload.eventId);
       vatExempt = vatCtx.vatExempt;
       vatRatePercent = vatCtx.vatRatePercent;
+      const sellerInfo = await getSellerInfoForEvent(payload.eventId);
+      if (!sellerName && sellerInfo.name) sellerName = sellerInfo.name;
+      if (!sellerOrgNumber && sellerInfo.orgNumber) sellerOrgNumber = sellerInfo.orgNumber;
+      if (!sellerAddress && sellerInfo.address) sellerAddress = sellerInfo.address;
     }
 
     const message = buildReceiptEmail({
       ...payload,
+      sellerName,
+      sellerOrgNumber,
+      sellerAddress,
       orderNumber: resolvedOrderNumber,
       vatExempt,
       vatRatePercent
@@ -2127,7 +2310,7 @@ app.post("/payments/start", paymentLimiter, async (req, res) => {
         eventRowForEmail.confirmation_note && String(eventRowForEmail.confirmation_note).trim()
           ? String(eventRowForEmail.confirmation_note).trim()
           : "";
-      const sellerName = await getSellerNameForEvent(parsed.payload.eventId);
+      const sellerInfo = await getSellerInfoForEvent(parsed.payload.eventId);
       await sendReceiptEmail({
         name: booking.name,
         email: booking.email,
@@ -2139,7 +2322,9 @@ app.post("/payments/start", paymentLimiter, async (req, res) => {
         discountPercent: null,
         serviceFee: 0,
         createdAt: booking.created_at,
-        sellerName,
+        sellerName: sellerInfo.name,
+        sellerOrgNumber: sellerInfo.orgNumber,
+        sellerAddress: sellerInfo.address,
         orderNumber,
         eventHasPrices: false,
         eventConfirmationNote
@@ -2156,7 +2341,12 @@ app.post("/payments/start", paymentLimiter, async (req, res) => {
           created_at: booking.created_at
         },
         eventName,
-        sellerName,
+        sellerName: sellerInfo.name,
+        sellerOrgNumber: sellerInfo.orgNumber,
+        sellerAddress: sellerInfo.address,
+        issuerName: RECEIPT_ISSUER,
+        issuerOrgNumber: RECEIPT_SELLER_ORG_NUMBER,
+        issuerAddress: RECEIPT_SELLER_ADDRESS,
         orderNumber
       });
     } catch (error) {
@@ -2260,7 +2450,7 @@ app.post("/payments/start", paymentLimiter, async (req, res) => {
         );
       }
 
-      const sellerName = await getSellerNameForEvent(parsed.payload.eventId);
+      const sellerInfo = await getSellerInfoForEvent(parsed.payload.eventId);
       const eventMetaRow = await pool.query("SELECT name, confirmation_note FROM events WHERE id = $1", [
         parsed.payload.eventId
       ]);
@@ -2281,7 +2471,9 @@ app.post("/payments/start", paymentLimiter, async (req, res) => {
         discountPercent: percentOff,
         serviceFee: 0,
         createdAt: booking.created_at,
-        sellerName,
+        sellerName: sellerInfo.name,
+        sellerOrgNumber: sellerInfo.orgNumber,
+        sellerAddress: sellerInfo.address,
         orderNumber,
         eventConfirmationNote
       });
@@ -2298,7 +2490,12 @@ app.post("/payments/start", paymentLimiter, async (req, res) => {
           created_at: booking.created_at
         },
         eventName: eventMeta.name || eventName,
-        sellerName,
+        sellerName: sellerInfo.name,
+        sellerOrgNumber: sellerInfo.orgNumber,
+        sellerAddress: sellerInfo.address,
+        issuerName: RECEIPT_ISSUER,
+        issuerOrgNumber: RECEIPT_SELLER_ORG_NUMBER,
+        issuerAddress: RECEIPT_SELLER_ADDRESS,
         orderNumber
       });
     }
@@ -2511,7 +2708,7 @@ app.post("/payments/start-cart", paymentLimiter, async (req, res) => {
           eventConfirmationNote
         });
       }
-      const sellerName = await getSellerNameForEvent(eventId);
+      const sellerInfo = await getSellerInfoForEvent(eventId);
       await logEventActivity(eventId, "direct_registration", {
         visitorId,
         orderNumber,
@@ -2527,7 +2724,12 @@ app.post("/payments/start-cart", paymentLimiter, async (req, res) => {
         cart: true,
         bookings,
         eventName,
-        sellerName,
+        sellerName: sellerInfo.name,
+        sellerOrgNumber: sellerInfo.orgNumber,
+        sellerAddress: sellerInfo.address,
+        issuerName: RECEIPT_ISSUER,
+        issuerOrgNumber: RECEIPT_SELLER_ORG_NUMBER,
+        issuerAddress: RECEIPT_SELLER_ADDRESS,
         orderNumber
       });
     } catch (error) {
@@ -2663,7 +2865,7 @@ app.post("/payments/start-cart", paymentLimiter, async (req, res) => {
         });
       }
 
-      const sellerName = await getSellerNameForEvent(eventId);
+      const sellerInfo = await getSellerInfoForEvent(eventId);
       await logEventActivity(eventId, "direct_registration", {
         visitorId,
         orderNumber,
@@ -2679,7 +2881,12 @@ app.post("/payments/start-cart", paymentLimiter, async (req, res) => {
         cart: true,
         bookings,
         eventName: resolvedEventName,
-        sellerName,
+        sellerName: sellerInfo.name,
+        sellerOrgNumber: sellerInfo.orgNumber,
+        sellerAddress: sellerInfo.address,
+        issuerName: RECEIPT_ISSUER,
+        issuerOrgNumber: RECEIPT_SELLER_ORG_NUMBER,
+        issuerAddress: RECEIPT_SELLER_ADDRESS,
         orderNumber
       });
     }
@@ -2777,7 +2984,7 @@ app.get("/payments/verify", async (req, res) => {
     const payload = order.payload || {};
     const isCart = Array.isArray(payload.items) && payload.items.length > 0;
     const firstItem = isCart ? payload.items[0] : payload;
-    const sellerName = await getSellerNameForEvent(firstItem?.eventId);
+    const sellerInfo = await getSellerInfoForEvent(firstItem?.eventId);
 
     let ticketTotal = isCart
       ? payload.items.reduce((s, p) => s + (p.discountedAmount ?? p.priceAmount ?? 0), 0)
@@ -2841,11 +3048,28 @@ app.get("/payments/verify", async (req, res) => {
       discountPercent: firstItem?.discountPercent ?? 0,
       total: totalPaid,
       serviceFee,
-      sellerName,
+      sellerName: sellerInfo.name,
+      sellerOrgNumber: sellerInfo.orgNumber,
+      sellerAddress: sellerInfo.address,
+      issuerName: RECEIPT_ISSUER,
+      issuerOrgNumber: RECEIPT_SELLER_ORG_NUMBER,
+      issuerAddress: RECEIPT_SELLER_ADDRESS,
       orderNumber: payload.orderNumber || null,
       vatExempt,
       vatRatePercent
     };
+    if (payload.type !== "bas" && payload.type !== "premium") {
+      const vatBreakdown = calcReceiptVatBreakdown({
+        ticketAmount: ticketTotal,
+        serviceFee,
+        vatExempt,
+        vatRatePercent
+      });
+      summary.ticketVat = vatBreakdown.ticketVat;
+      summary.serviceFeeVat = vatBreakdown.serviceFeeVat;
+      summary.netAmount = vatBreakdown.netAmount;
+      summary.vatAmount = vatBreakdown.vatAmount;
+    }
     if (payload.type === "bas") {
       summary.orderType = "bas";
       summary.quantity = payload.quantity;

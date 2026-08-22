@@ -2899,6 +2899,81 @@ h2 {
   font-weight: 700;
 }
 
+.receipt-divider {
+  margin: 0.85rem 0 0.75rem;
+  border-top: 2px solid #e5e7eb;
+}
+
+.receipt-price-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.receipt-price-table th,
+.receipt-price-table td {
+  padding: 0.55rem 0.35rem;
+  border-bottom: 1px solid #e5e7eb;
+  text-align: right;
+  vertical-align: top;
+}
+
+.receipt-price-table th:first-child,
+.receipt-price-table td:first-child {
+  text-align: left;
+}
+
+.receipt-price-table thead th {
+  font-weight: 600;
+  color: #374151;
+  font-size: 0.82rem;
+}
+
+.receipt-price-table tbody th[scope="row"] {
+  font-weight: 600;
+  text-align: left;
+}
+
+.receipt-price-table-total th,
+.receipt-price-table-total td {
+  font-weight: 700;
+  border-bottom: none;
+}
+
+.receipt-price-total-incl {
+  margin: 0.65rem 0 0;
+  text-align: right;
+  font-size: 0.92rem;
+}
+
+.receipt-price-footnote {
+  margin: 0.35rem 0 0;
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+.receipt-issuer-note {
+  margin-top: 0.65rem;
+  padding: 0.65rem 0.25rem 0;
+  border-top: 2px solid #e5e7eb;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: #64748b;
+}
+
+.receipt-issuer-note-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.12rem 0;
+}
+
+.receipt-issuer-note-row em {
+  font-style: italic;
+  font-weight: 400;
+  text-align: right;
+}
+
 .translate-row {
   display: flex;
   align-items: center;
