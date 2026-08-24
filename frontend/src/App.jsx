@@ -21,6 +21,76 @@ import { getOrCreateVisitorId } from "./visitorId";
 const API_BASE = import.meta.env.VITE_API_URL || "";
 const API_BASE_NORMALIZED = API_BASE.replace(/\/+$/, "");
 const MAX_GALLERY_IMAGES_PER_EVENT = 10;
+const HERO_IMAGE_MIN_HEIGHT_RATIO = 0.35;
+const HERO_IMAGE_PORTRAIT_ERROR =
+  "Eventbilden får inte vara högre än den är bred. Välj en liggande eller kvadratisk bild (t.ex. 1200×600 eller 1000×1000).";
+const HERO_IMAGE_TOO_WIDE_ERROR =
+  "Eventbilden är för låg i förhållande till bredden. Höjden måste vara minst 35 % av bredden (t.ex. minst 420 px på en 1200 px bred bild).";
+
+function getHeroImageDimensionError({ width, height }) {
+  if (height > width) {
+    return HERO_IMAGE_PORTRAIT_ERROR;
+  }
+  if (height < width * HERO_IMAGE_MIN_HEIGHT_RATIO) {
+    return HERO_IMAGE_TOO_WIDE_ERROR;
+  }
+  return null;
+}
+
+function measureElementLineCount(el, fallbackLineHeightRatio = 1.12) {
+  const style = window.getComputedStyle(el);
+  let lineHeight = parseFloat(style.lineHeight);
+  if (!Number.isFinite(lineHeight)) {
+    lineHeight = parseFloat(style.fontSize) * fallbackLineHeightRatio;
+  }
+  return Math.max(1, Math.round(el.getBoundingClientRect().height / lineHeight));
+}
+
+function syncHeroBannerTitleSize(el) {
+  if (!el) return;
+  el.classList.remove("hero-banner-title--compact", "hero-banner-title--compact-extra");
+  void el.offsetHeight;
+  let lines = measureElementLineCount(el, 1.12);
+  if (lines >= 3) {
+    el.classList.add("hero-banner-title--compact");
+    void el.offsetHeight;
+    lines = measureElementLineCount(el, 1.14);
+    if (lines >= 3) {
+      el.classList.add("hero-banner-title--compact-extra");
+    }
+  }
+}
+
+function syncHeroScrollHintPosition(contentEl, anchorEl, hintEl) {
+  if (!contentEl || !hintEl || hintEl.classList.contains("is-hidden")) {
+    return;
+  }
+  if (!anchorEl) {
+    hintEl.style.visibility = "hidden";
+    return;
+  }
+  hintEl.style.visibility = "visible";
+  const contentRect = contentEl.getBoundingClientRect();
+  const anchorRect = anchorEl.getBoundingClientRect();
+  hintEl.style.top = `${anchorRect.bottom - contentRect.top + 2}px`;
+  hintEl.style.left = `${anchorRect.left - contentRect.left + anchorRect.width / 2}px`;
+}
+
+function readImageFileDimensions(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve({ width: img.naturalWidth, height: img.naturalHeight });
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Kunde inte läsa bilden."));
+    };
+    img.src = url;
+  });
+}
 
 function formatStorageBytes(bytes) {
   if (!Number.isFinite(bytes) || bytes < 0) return "—";
@@ -451,6 +521,52 @@ function withUrlLanguage(pathname, language) {
     return base === "/" ? "/en" : `${base}/en`;
   }
   return base;
+}
+
+function formatEventDateHeroRange(startRaw, endRaw) {
+  const toDate = (value) => {
+    if (value == null) return null;
+    const d = new Date(`${String(value).slice(0, 10)}T12:00:00`);
+    return Number.isNaN(d.getTime()) ? null : d;
+  };
+  const start = toDate(startRaw);
+  const end = toDate(endRaw);
+  const day = (d) => d.getDate();
+  const month = (d) => d.toLocaleDateString("sv-SE", { month: "long" }).toUpperCase();
+  if (!start && !end) return "";
+  if (start && end) {
+    const startKey = String(startRaw).slice(0, 10);
+    const endKey = String(endRaw).slice(0, 10);
+    if (startKey !== endKey) {
+      if (start.getMonth() === end.getMonth() && start.getFullYear() === end.getFullYear()) {
+        return `${day(start)}-${day(end)} ${month(start)}`;
+      }
+      return `${day(start)} ${month(start)} – ${day(end)} ${month(end)}`;
+    }
+  }
+  const single = start || end;
+  return `${day(single)} ${month(single)}`;
+}
+
+function scrollToRegistrationForm() {
+  const target = document.getElementById("form-section");
+  if (target) {
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+}
+
+function scrollPastHeroBanner() {
+  const hero = document.querySelector(".page > .hero--banner");
+  if (!hero) return;
+  let el = hero.nextElementSibling;
+  while (el && !el.classList.contains("section")) {
+    el = el.nextElementSibling;
+  }
+  if (el) {
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+    return;
+  }
+  window.scrollBy({ top: Math.min(window.innerHeight * 0.55, 480), behavior: "smooth" });
 }
 
 function bindGoogleTranslateUrlSync() {
@@ -2259,6 +2375,11 @@ const AdminPage = () => {
   const [partnerEditingId, setPartnerEditingId] = useState(null);
   const [heroForm, setHeroForm] = useState({ title: "", bodyHtml: "" });
   const [heroImageUrl, setHeroImageUrl] = useState("");
+  const [heroOverlay, setHeroOverlay] = useState({
+    showEventName: true,
+    showCtaButton: true,
+    showDatePlace: true
+  });
   const heroEditorRef = useRef(null);
   const faqEditorRef = useRef(null);
   const programTimeEditorRef = useRef(null);
@@ -2876,6 +2997,11 @@ const AdminPage = () => {
       bodyHtml: data.bodyHtml || ""
     });
     setHeroImageUrl(data.imageUrl || "");
+    setHeroOverlay({
+      showEventName: data.showEventName !== false,
+      showCtaButton: data.showCtaButton !== false,
+      showDatePlace: data.showDatePlace !== false
+    });
     if (heroEditorRef.current) {
       heroEditorRef.current.innerHTML = data.bodyHtml || "";
     }
@@ -4888,11 +5014,30 @@ const AdminPage = () => {
 
   const handleHeroImageChange = (event) => {
     const file = event.target.files?.[0] || null;
+    const resetInput = () => {
+      if (event.target) {
+        event.target.value = "";
+      }
+    };
     if (!file || !token || !selectedEventId) {
       return;
     }
     setError("");
     const uploadImage = async () => {
+      let dimensions;
+      try {
+        dimensions = await readImageFileDimensions(file);
+      } catch {
+        showToast("Kunde inte läsa bilden. Prova ett annat filformat.");
+        resetInput();
+        return;
+      }
+      const dimensionError = getHeroImageDimensionError(dimensions);
+      if (dimensionError) {
+        showToast(dimensionError);
+        resetInput();
+        return;
+      }
       const formData = new FormData();
       formData.append("eventId", selectedEventId);
       formData.append("image", file);
@@ -4904,12 +5049,56 @@ const AdminPage = () => {
         body: formData
       });
       if (!response.ok) {
-        throw new Error("Hero image upload failed");
+        let errMsg = "Kunde inte ladda upp bilden.";
+        try {
+          const data = await response.json();
+          if (data?.error) {
+            errMsg = data.error;
+          }
+        } catch {
+          // ignore JSON parse errors
+        }
+        showToast(errMsg);
+        resetInput();
+        return;
       }
       await loadHero(selectedEventId);
       localStorage.setItem(buildStorageKey("heroUpdatedAt", selectedEventId), String(Date.now()));
     };
-    uploadImage().catch(() => setError("Kunde inte ladda upp bilden."));
+    uploadImage().catch(() => {
+      showToast("Kunde inte ladda upp bilden.");
+      resetInput();
+    });
+  };
+
+  const handleHeroOverlayChange = (event) => {
+    const { name, checked } = event.target;
+    const next = { ...heroOverlay, [name]: checked };
+    setHeroOverlay(next);
+    if (!token || !selectedEventId) {
+      return;
+    }
+    setError("");
+    const saveOverlay = async () => {
+      const response = await fetch(`${API_BASE}/admin/hero/overlay`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          eventId: selectedEventId,
+          showEventName: next.showEventName,
+          showCtaButton: next.showCtaButton,
+          showDatePlace: next.showDatePlace
+        })
+      });
+      if (!response.ok) {
+        throw new Error("Hero overlay save failed");
+      }
+      localStorage.setItem(buildStorageKey("heroUpdatedAt", selectedEventId), String(Date.now()));
+    };
+    saveOverlay().catch(() => showToast("Kunde inte spara inställningarna för eventbilden."));
   };
 
   const handleHeroImageRemove = () => {
@@ -11841,10 +12030,33 @@ const AdminPage = () => {
                 <h2>Eventbild</h2>
                 <div className="field">
                   <span className="field-label">Ladda upp bild</span>
-                  <p className="field-hint" style={{ marginBottom: "0.5rem" }}>
-                    För bästa resultat, använd en liggande bild (t.ex. 1200×600 px) med tydlig kontrast och utan
-                    text som är väldigt nära kanterna.
-                  </p>
+                  <div className="field-hint hero-image-upload-hint">
+                    <p>
+                      <strong>Rekommenderat:</strong> liggande bild i ungefär <strong>2:1-format</strong>, t.ex.{" "}
+                      <strong>1200×600 px</strong> eller <strong>1600×800 px</strong>. Hela loggans bredd ska synas –
+                      viktig text läggs ovanpå bilden automatiskt på eventsidan.
+                    </p>
+                    <p>
+                      <strong>Tillåtet:</strong> liggande och kvadratiska bilder där höjden är minst 35 % av bredden
+                      (t.ex. 1200×600, 1600×800 eller 1000×1000).
+                    </p>
+                    <p>
+                      <strong>Blockeras vid uppladdning:</strong> stående bilder (höjd större än bredd) och för låga
+                      liggande bilder (t.ex. 1200×400) – då blir eventnamn, knapp och datum ihoptryckta på mobil.
+                    </p>
+                    <p>
+                      <strong>Undvik också:</strong>
+                    </p>
+                    <ul>
+                      <li>
+                        Bilder där loggan tar upp mycket höjd med stora tomma ytor ovanför/under.
+                      </li>
+                      <li>
+                        Mycket text, knappar eller datum <strong>inbakade i själva bilden</strong> – det dubbleras med
+                        texten som sidan lägger ovanpå.
+                      </li>
+                    </ul>
+                  </div>
                   <label className="file-upload">
                     <input
                       className="file-upload-input"
@@ -11879,6 +12091,38 @@ const AdminPage = () => {
                 ) : (
                   <p className="muted">Ingen bild uppladdad.</p>
                 )}
+                <div className="field-row hero-overlay-toggles">
+                  <label className="field checkbox-field">
+                    <span className="field-label">Visa eventnamn</span>
+                    <input
+                      name="showEventName"
+                      type="checkbox"
+                      checked={heroOverlay.showEventName}
+                      onChange={handleHeroOverlayChange}
+                    />
+                  </label>
+                  <label className="field checkbox-field">
+                    <span className="field-label">Visa knapp</span>
+                    <input
+                      name="showCtaButton"
+                      type="checkbox"
+                      checked={heroOverlay.showCtaButton}
+                      onChange={handleHeroOverlayChange}
+                    />
+                  </label>
+                  <label className="field checkbox-field">
+                    <span className="field-label">Visa datum och plats</span>
+                    <input
+                      name="showDatePlace"
+                      type="checkbox"
+                      checked={heroOverlay.showDatePlace}
+                      onChange={handleHeroOverlayChange}
+                    />
+                  </label>
+                </div>
+                <p className="muted hero-overlay-toggles-hint">
+                  Styr vad som läggs ovanpå eventbilden på eventsidan. Alla tre är aktiverade som standard.
+                </p>
               </div>
               <div className="section">
                 <h2>Språk</h2>
@@ -12823,7 +13067,14 @@ function App() {
   const [galleryImages, setGalleryImages] = useState([]);
   const [galleryMode, setGalleryMode] = useState("grid");
   const [prices, setPrices] = useState([]);
-  const [hero, setHero] = useState({ title: "", bodyHtml: "", imageUrl: "" });
+  const [hero, setHero] = useState({
+    title: "",
+    bodyHtml: "",
+    imageUrl: "",
+    showEventName: true,
+    showCtaButton: true,
+    showDatePlace: true
+  });
   const [heroImageError, setHeroImageError] = useState(false);
   const [sectionVisibility, setSectionVisibility] = useState({
     showProgram: true,
@@ -12876,6 +13127,149 @@ function App() {
   const mapRef = useRef(null);
   const markerRef = useRef(null);
   const pageRef = useRef(null);
+  const heroBannerRef = useRef(null);
+  const heroBannerContentRef = useRef(null);
+  const heroBannerTitleRef = useRef(null);
+  const heroBannerCtaRef = useRef(null);
+  const heroScrollHintRef = useRef(null);
+  const heroBgParallaxRef = useRef(null);
+  const heroParallaxRafRef = useRef(null);
+  const [heroScrollHintVisible, setHeroScrollHintVisible] = useState(true);
+
+  const heroEventDateLabel = useMemo(
+    () => formatEventDateHeroRange(event?.event_start_date, event?.event_end_date),
+    [event?.event_start_date, event?.event_end_date]
+  );
+  const heroPlaceLabel = place.address?.trim() || "";
+  const heroTitleText = event?.name || hero.title || "Event";
+
+  // Hero-banner: parallax på loggan så den scrollar långsammare än texten.
+  useEffect(() => {
+    if (!hero.imageUrl) return undefined;
+
+    const prefersReduced =
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (prefersReduced) return undefined;
+
+    const parallaxFactor = 0.38;
+
+    const updateHeroParallax = () => {
+      heroParallaxRafRef.current = null;
+      const bgEl = heroBgParallaxRef.current;
+      const heroEl = heroBannerRef.current;
+      if (!bgEl || !heroEl) return;
+      const scrollY = window.scrollY;
+      const heroHeight = heroEl.offsetHeight;
+      if (scrollY > heroHeight * 1.25) {
+        bgEl.style.transform = "";
+        return;
+      }
+      bgEl.style.transform = `translate3d(0, ${scrollY * parallaxFactor}px, 0)`;
+    };
+
+    const onScroll = () => {
+      if (heroParallaxRafRef.current != null) return;
+      heroParallaxRafRef.current = requestAnimationFrame(updateHeroParallax);
+    };
+
+    updateHeroParallax();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", updateHeroParallax, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", updateHeroParallax);
+      if (heroParallaxRafRef.current != null) {
+        cancelAnimationFrame(heroParallaxRafRef.current);
+      }
+      if (heroBgParallaxRef.current) {
+        heroBgParallaxRef.current.style.transform = "";
+      }
+    };
+  }, [hero.imageUrl]);
+
+  useLayoutEffect(() => {
+    const titleEl = heroBannerTitleRef.current;
+    if (!titleEl || !hero.imageUrl || hero.showEventName === false) {
+      return undefined;
+    }
+
+    const sync = () => syncHeroBannerTitleSize(titleEl);
+
+    sync();
+    window.addEventListener("resize", sync);
+    const resizeObserver =
+      typeof ResizeObserver !== "undefined" ? new ResizeObserver(sync) : null;
+    resizeObserver?.observe(titleEl);
+    if (heroBannerRef.current) {
+      resizeObserver?.observe(heroBannerRef.current);
+    }
+    if (document.fonts?.ready) {
+      document.fonts.ready.then(sync).catch(() => {});
+    }
+
+    return () => {
+      window.removeEventListener("resize", sync);
+      resizeObserver?.disconnect();
+      titleEl.classList.remove("hero-banner-title--compact", "hero-banner-title--compact-extra");
+    };
+  }, [hero.imageUrl, hero.showEventName, heroTitleText]);
+
+  useLayoutEffect(() => {
+    const contentEl = heroBannerContentRef.current;
+    const hintEl = heroScrollHintRef.current;
+    if (!contentEl || !hintEl || !hero.imageUrl || !heroScrollHintVisible) {
+      return undefined;
+    }
+
+    const sync = () => {
+      const anchor = heroBannerCtaRef.current || heroBannerTitleRef.current;
+      syncHeroScrollHintPosition(contentEl, anchor, hintEl);
+    };
+
+    sync();
+    window.addEventListener("resize", sync);
+    const resizeObserver =
+      typeof ResizeObserver !== "undefined" ? new ResizeObserver(sync) : null;
+    resizeObserver?.observe(contentEl);
+    if (heroBannerCtaRef.current) {
+      resizeObserver?.observe(heroBannerCtaRef.current);
+    }
+    if (heroBannerTitleRef.current) {
+      resizeObserver?.observe(heroBannerTitleRef.current);
+    }
+    if (document.fonts?.ready) {
+      document.fonts.ready.then(sync).catch(() => {});
+    }
+
+    return () => {
+      window.removeEventListener("resize", sync);
+      resizeObserver?.disconnect();
+    };
+  }, [
+    hero.imageUrl,
+    heroScrollHintVisible,
+    hero.showEventName,
+    hero.showCtaButton,
+    hero.showDatePlace,
+    heroTitleText,
+    sectionLabels.formButton,
+    heroEventDateLabel,
+    heroPlaceLabel
+  ]);
+
+  useEffect(() => {
+    if (!hero.imageUrl) return undefined;
+    setHeroScrollHintVisible(true);
+    const onScroll = () => {
+      if (window.scrollY > 48) {
+        setHeroScrollHintVisible(false);
+      }
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, [hero.imageUrl]);
 
   // Scroll-reveal: sektioner tonas in och glider uppåt när de rullas in i vyn.
   // Styrs via inline-styles (inte className) så att React inte skriver över
@@ -12890,7 +13284,7 @@ function App() {
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
     const sections = Array.from(
-      container.querySelectorAll(":scope > .hero, :scope > .section")
+      container.querySelectorAll(":scope > .section")
     );
     if (sections.length === 0) return undefined;
 
@@ -13177,7 +13571,14 @@ function App() {
       throw new Error("Hero fetch failed");
     }
     const data = await response.json();
-    setHero({ title: data.title || "", bodyHtml: data.bodyHtml || "", imageUrl: data.imageUrl || "" });
+    setHero({
+      title: data.title || "",
+      bodyHtml: data.bodyHtml || "",
+      imageUrl: data.imageUrl || "",
+      showEventName: data.showEventName !== false,
+      showCtaButton: data.showCtaButton !== false,
+      showDatePlace: data.showDatePlace !== false
+    });
   };
 
   const loadSectionVisibility = async (eventId) => {
@@ -13359,7 +13760,16 @@ function App() {
     loadPartners(event.id).catch(() => setPartners([]));
     loadGallery(event.id).catch(() => setGalleryImages([]));
     loadPrices(event.id).catch(() => setPrices([]));
-    loadHero(event.id).catch(() => setHero({ title: "", bodyHtml: "" }));
+    loadHero(event.id).catch(() =>
+      setHero({
+        title: "",
+        bodyHtml: "",
+        imageUrl: "",
+        showEventName: true,
+        showCtaButton: true,
+        showDatePlace: true
+      })
+    );
     loadCustomFields(event.id).catch(() => setCustomFields([]));
     return () => {
       alive = false;
@@ -13425,7 +13835,16 @@ function App() {
         loadSectionVisibility(event.id).catch(() => {});
       }
       if (storageEvent.key === buildStorageKey("heroUpdatedAt", currentEventId)) {
-        loadHero(event.id).catch(() => setHero({ title: "", bodyHtml: "" }));
+        loadHero(event.id).catch(() =>
+      setHero({
+        title: "",
+        bodyHtml: "",
+        imageUrl: "",
+        showEventName: true,
+        showCtaButton: true,
+        showDatePlace: true
+      })
+    );
       }
       if (storageEvent.key === buildStorageKey("pricesUpdatedAt", currentEventId)) {
         loadPrices(event.id).catch(() => setPrices([]));
@@ -13671,20 +14090,68 @@ function App() {
 
   return (
     <div className="page" ref={pageRef}>
-      {sectionVisibility.showTranslate && eventSectionsLoaded ? (
+      {hero.imageUrl && !heroImageError ? (
+        <div className="hero hero--banner" ref={heroBannerRef}>
+          {sectionVisibility.showTranslate && eventSectionsLoaded ? (
+            <div className="translate-row translate-row--overlay notranslate">
+              <div id="google_translate_element" className="notranslate" />
+            </div>
+          ) : null}
+          <div className="hero-banner-bg" aria-hidden="true">
+            <div className="hero-banner-bg-parallax" ref={heroBgParallaxRef}>
+              <img
+                className="hero-image"
+                src={resolveAssetUrl(hero.imageUrl)}
+                alt=""
+                onError={() => setHeroImageError(true)}
+              />
+              <div className="hero-banner-shade" aria-hidden="true" />
+            </div>
+          </div>
+          <div className="hero-banner-content" ref={heroBannerContentRef}>
+            <div className="hero-banner-stack">
+              {hero.showEventName !== false ? (
+                <h1 className="hero-banner-title" ref={heroBannerTitleRef}>
+                  {heroTitleText}
+                </h1>
+              ) : null}
+              {hero.showCtaButton !== false ? (
+                <button
+                  type="button"
+                  className="button hero-banner-cta"
+                  ref={heroBannerCtaRef}
+                  onClick={scrollToRegistrationForm}
+                >
+                  {sectionLabels.formButton.trim() || "Anmäl dig här"}
+                </button>
+              ) : null}
+              {hero.showDatePlace !== false && (heroEventDateLabel || heroPlaceLabel) ? (
+                <p className="hero-banner-meta">
+                  {[heroEventDateLabel, heroPlaceLabel].filter(Boolean).join(" • ")}
+                </p>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              ref={heroScrollHintRef}
+              className={`hero-scroll-hint${heroScrollHintVisible ? "" : " is-hidden"}`}
+              aria-label="Scrolla ner för mer innehåll"
+              onClick={() => {
+                setHeroScrollHintVisible(false);
+                scrollPastHeroBanner();
+              }}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" aria-hidden="true">
+                <path d="M12 5v14" strokeLinecap="round" />
+                <path d="M6 13l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      ) : sectionVisibility.showTranslate && eventSectionsLoaded ? (
         <div className="translate-row notranslate">
           <span className="translate-label">Språk</span>
           <div id="google_translate_element" className="notranslate" />
-        </div>
-      ) : null}
-      {hero.imageUrl ? (
-        <div className="hero">
-          <img
-            className="hero-image"
-            src={resolveAssetUrl(hero.imageUrl)}
-            alt={hero.title || "Eventbild"}
-            onError={() => setHeroImageError(true)}
-          />
         </div>
       ) : null}
       {eventLoading ? <p className="muted">Laddar event...</p> : null}
@@ -13877,12 +14344,7 @@ function App() {
               <button
                 type="button"
                 className="button full-width"
-                onClick={() => {
-                  const target = document.getElementById("form-section");
-                  if (target) {
-                    target.scrollIntoView({ behavior: "smooth", block: "start" });
-                  }
-                }}
+                onClick={scrollToRegistrationForm}
               >
                 {sectionLabels.formButton.trim() || "Anmäl dig här"}
               </button>

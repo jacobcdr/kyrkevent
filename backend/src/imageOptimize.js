@@ -9,6 +9,33 @@ const PRESETS = {
   partner: { maxWidth: 640, maxHeight: 640, quality: 85 }
 };
 
+const HERO_MIN_HEIGHT_RATIO = 0.35;
+
+const HERO_PORTRAIT_ERROR =
+  "Eventbilden får inte vara högre än den är bred. Välj en liggande eller kvadratisk bild.";
+
+const HERO_TOO_WIDE_ERROR =
+  "Eventbilden är för låg i förhållande till bredden. Höjden måste vara minst 35 % av bredden (t.ex. minst 420 px på en 1200 px bred bild).";
+
+function validateHeroImageDimensions(width, height) {
+  if (width <= 0 || height <= 0) {
+    throw new Error("Kunde inte läsa bildens mått.");
+  }
+  if (height > width) {
+    throw new Error(HERO_PORTRAIT_ERROR);
+  }
+  if (height < width * HERO_MIN_HEIGHT_RATIO) {
+    throw new Error(HERO_TOO_WIDE_ERROR);
+  }
+  return { width, height };
+}
+
+/** Reject hero images taller than wide or too wide/flat (height must be >= 35% of width). */
+export async function assertHeroImageAspectRatio(filePath) {
+  const { width = 0, height = 0 } = await sharp(filePath).rotate().metadata();
+  return validateHeroImageDimensions(width, height);
+}
+
 /**
  * Resize/compress an uploaded image in place. Returns final filename (may change ext to .jpg).
  */

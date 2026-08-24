@@ -23,7 +23,7 @@ import { Resend } from "resend";
 import PDFDocument from "pdfkit";
 import QRCode from "qrcode";
 import { startHealthMonitor, sendDbMonitorAlert } from "./healthMonitor.js";
-import { optimizeImageFile } from "./imageOptimize.js";
+import { assertHeroImageAspectRatio, optimizeImageFile } from "./imageOptimize.js";
 import { getUploadDirectoryStats, getVolumeStats } from "./uploadStats.js";
 import {
   ANALYTICS_TZ,
@@ -1857,7 +1857,7 @@ app.get("/hero", async (req, res) => {
       return;
     }
     const result = await pool.query(
-      "SELECT title, body_html, image_url FROM hero_section WHERE event_id = $1",
+      "SELECT title, body_html, image_url, show_event_name, show_cta_button, show_date_place FROM hero_section WHERE event_id = $1",
       [eventId]
     );
     const row = result.rows[0] || { title: "", body_html: "", image_url: "" };
@@ -1865,7 +1865,10 @@ app.get("/hero", async (req, res) => {
       ok: true,
       title: row.title,
       bodyHtml: row.body_html,
-      imageUrl: row.image_url || ""
+      imageUrl: row.image_url || "",
+      showEventName: row.show_event_name !== false,
+      showCtaButton: row.show_cta_button !== false,
+      showDatePlace: row.show_date_place !== false
     });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to load hero" });
@@ -7903,6 +7906,51 @@ app.put("/admin/hero", requireAdmin, async (req, res) => {
   }
 });
 
+app.put("/admin/hero/overlay", requireAdmin, async (req, res) => {
+  const { eventId, showEventName, showCtaButton, showDatePlace } = req.body || {};
+  const parsedEventId = await ensureEventOwnership(eventId, req.userId, res);
+  if (!parsedEventId) {
+    return;
+  }
+  try {
+    const result = await pool.query(
+      `
+        INSERT INTO hero_section (
+          id,
+          event_id,
+          title,
+          body_html,
+          image_url,
+          show_event_name,
+          show_cta_button,
+          show_date_place
+        )
+        VALUES ($1, $1, '', '', '', $2, $3, $4)
+        ON CONFLICT (id) DO UPDATE SET
+          show_event_name = EXCLUDED.show_event_name,
+          show_cta_button = EXCLUDED.show_cta_button,
+          show_date_place = EXCLUDED.show_date_place
+        RETURNING show_event_name, show_cta_button, show_date_place
+      `,
+      [
+        parsedEventId,
+        showEventName !== false,
+        showCtaButton !== false,
+        showDatePlace !== false
+      ]
+    );
+    const row = result.rows[0] || {};
+    res.json({
+      ok: true,
+      showEventName: row.show_event_name !== false,
+      showCtaButton: row.show_cta_button !== false,
+      showDatePlace: row.show_date_place !== false
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Failed to update hero overlay" });
+  }
+});
+
 app.put(
   "/admin/hero/image",
   requireAdmin,
@@ -7918,6 +7966,13 @@ app.put(
     return;
   }
   try {
+    try {
+      await assertHeroImageAspectRatio(req.file.path);
+    } catch (aspectError) {
+      fs.unlink(req.file.path, () => {});
+      res.status(400).json({ ok: false, error: aspectError.message });
+      return;
+    }
     const filename = await finalizeUploadedImage(req.file, "hero");
     const imageUrl = `/uploads/${filename}`;
     const existing = await pool.query(
@@ -10043,7 +10098,10 @@ const ensureBookingsTable = async () => {
   await pool.query(`
     ALTER TABLE hero_section
       ADD COLUMN IF NOT EXISTS event_id INTEGER,
-      ADD COLUMN IF NOT EXISTS image_url TEXT NOT NULL DEFAULT ''
+      ADD COLUMN IF NOT EXISTS image_url TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS show_event_name BOOLEAN NOT NULL DEFAULT true,
+      ADD COLUMN IF NOT EXISTS show_cta_button BOOLEAN NOT NULL DEFAULT true,
+      ADD COLUMN IF NOT EXISTS show_date_place BOOLEAN NOT NULL DEFAULT true
   `);
   if (defaultEventId) {
     await pool.query(

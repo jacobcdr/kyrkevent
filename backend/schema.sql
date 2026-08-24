@@ -392,7 +392,10 @@ CREATE TABLE IF NOT EXISTS hero_section (
 
 ALTER TABLE hero_section
   ADD COLUMN IF NOT EXISTS event_id INTEGER,
-  ADD COLUMN IF NOT EXISTS image_url TEXT NOT NULL DEFAULT '';
+  ADD COLUMN IF NOT EXISTS image_url TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS show_event_name BOOLEAN NOT NULL DEFAULT true,
+  ADD COLUMN IF NOT EXISTS show_cta_button BOOLEAN NOT NULL DEFAULT true,
+  ADD COLUMN IF NOT EXISTS show_date_place BOOLEAN NOT NULL DEFAULT true;
 
 INSERT INTO hero_section (id, event_id, title, body_html, image_url)
 VALUES (
