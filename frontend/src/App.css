@@ -146,7 +146,7 @@ body {
 .landing-pricing {
   margin-top: 4rem;
   padding-top: 2rem;
-  max-width: 960px;
+  max-width: 1100px;
   margin-left: auto;
   margin-right: auto;
 }
@@ -182,17 +182,18 @@ body {
 
 .landing-pricing-cards {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 1.5rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2rem;
   align-items: stretch;
+  max-width: 1000px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 768px) {
   .landing-pricing-cards {
     grid-template-columns: 1fr;
-    max-width: 320px;
-    margin-left: auto;
-    margin-right: auto;
+    max-width: 420px;
   }
 }
 
@@ -247,11 +248,10 @@ body {
 
 .landing-pricing-features {
   list-style: none;
-  margin: 0 1.25rem 1.25rem;
+  margin: 0 1.5rem 1.25rem;
   padding: 0;
   text-align: left;
-  width: 100%;
-  max-width: 240px;
+  width: calc(100% - 3rem);
   flex: 1;
 }
 
@@ -3438,6 +3438,27 @@ select.goog-te-combo {
   font-size: 0.95rem;
   line-height: 1.45;
   color: var(--text);
+}
+
+.admin-service-fee-settings-form {
+  max-width: 52rem;
+}
+
+.admin-service-fee-settings-table input {
+  width: 100%;
+  min-width: 6rem;
+}
+
+.admin-service-fee-settings-hint {
+  margin-top: 0.75rem;
+}
+
+.admin-service-fee-tiers ul {
+  margin: 0.5rem 0 0.75rem 1.1rem;
+}
+
+.admin-service-fee-preview {
+  margin: -0.25rem 0 1rem;
 }
 
 .admin-subscription-block {

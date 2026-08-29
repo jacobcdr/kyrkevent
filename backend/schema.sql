@@ -63,14 +63,14 @@ CREATE TABLE IF NOT EXISTS admin_user_profiles (
   email TEXT NOT NULL DEFAULT '',
   phone TEXT NOT NULL DEFAULT '',
   bg_number TEXT NOT NULL DEFAULT '',
-  subscription_plan TEXT NOT NULL DEFAULT 'gratis',
+  subscription_plan TEXT NOT NULL DEFAULT 'bas',
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 ALTER TABLE admin_user_profiles
   ADD COLUMN IF NOT EXISTS profile_id TEXT UNIQUE,
   ADD COLUMN IF NOT EXISTS org_number TEXT NOT NULL DEFAULT '',
-  ADD COLUMN IF NOT EXISTS subscription_plan TEXT NOT NULL DEFAULT 'gratis',
+      ADD COLUMN IF NOT EXISTS subscription_plan TEXT NOT NULL DEFAULT 'bas',
   ADD COLUMN IF NOT EXISTS bas_event_credits INTEGER NOT NULL DEFAULT 0,
   ADD COLUMN IF NOT EXISTS premium_activated_at TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS premium_ends_at TIMESTAMPTZ,
@@ -457,3 +457,21 @@ WHERE event_id IS NULL;
 UPDATE discount_codes
 SET event_id = (SELECT id FROM events WHERE slug = 'default')
 WHERE event_id IS NULL;
+
+CREATE TABLE IF NOT EXISTS platform_settings (
+  key TEXT PRIMARY KEY,
+  value JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO platform_settings (key, value)
+VALUES (
+  'service_fee_tiers',
+  '[
+    {"minAmount": 0, "maxAmount": 499, "fee": 15},
+    {"minAmount": 500, "maxAmount": 999, "fee": 25},
+    {"minAmount": 1000, "maxAmount": 2000, "fee": 35},
+    {"minAmount": 2001, "maxAmount": null, "fee": 45}
+  ]'::jsonb
+)
+ON CONFLICT (key) DO NOTHING;

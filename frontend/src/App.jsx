@@ -17,6 +17,14 @@ import { EventGallery } from "./EventGallery";
 import { EventAnalytics } from "./EventAnalytics";
 import { EventActivityLog } from "./EventActivityLog";
 import { getOrCreateVisitorId } from "./visitorId";
+import {
+  buildServiceFeeTierLines,
+  calcServiceFeeAmount,
+  fetchServiceFeeTiers,
+  serviceFeeTiersFromFormRows,
+  serviceFeeTiersToFormRows,
+  setServiceFeeTiers
+} from "./serviceFee";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 const API_BASE_NORMALIZED = API_BASE.replace(/\/+$/, "");
@@ -98,6 +106,11 @@ function formatStorageBytes(bytes) {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function roundCartMoney(value) {
+  const amount = typeof value === "number" && Number.isFinite(value) ? value : 0;
+  return Math.round(amount * 100) / 100;
 }
 
 function formatUptime(seconds) {
@@ -452,33 +465,31 @@ function formatAdminProfileDisplayValue(value) {
 }
 
 function formatAdminSubscriptionPlanLabel(plan) {
-  const key = (plan || "gratis").toLowerCase();
-  if (key === "bas") return "Bas";
+  const key = normalizeSubscriptionPlan(plan);
   if (key === "premium") return "Premium";
-  return "Gratis";
+  return "Bas";
+}
+
+function normalizeSubscriptionPlan(plan) {
+  const key = String(plan || "bas").trim().toLowerCase();
+  if (key === "premium") return "premium";
+  return "bas";
 }
 
 const SUBSCRIPTION_PLAN_INFO = [
   {
-    id: "gratis",
-    title: "Gratis",
-    price: "0 kr",
-    description:
-      "Två aktiva event samtidigt. Anmälningssida, listor och mailbekräftelse. Ingen onlinebetalning via plattformen och inga rabattkoder."
-  },
-  {
     id: "bas",
     title: "Bas",
-    price: "129 kr/betalevent",
+    price: "0 kr/månad",
     description:
-      "Obegränsat antal event. Köp eventkrediter (1–5 åt gången) för att lägga till biljettpriser och ta betalt online. En kredit gäller per event med priser. Rabattkoder och anpassade betalningslistor ingår."
+      "Ingår vid registrering. Abonnemang med begränsade funktioner."
   },
   {
     id: "premium",
     title: "Premium",
     price: "1995 kr/år",
     description:
-      "Obegränsat antal event och betalevent utan att köpa eventkrediter. Onlinebetalning, rabattkoder och anpassade betalningslistor ingår. Betalas 1995 kr/år via onlinebetalning."
+      "Samma grundfunktioner som Bas. Betalas 1995 kr/år via onlinebetalning. Ytterligare premiumfunktioner kan tillkomma framöver."
   }
 ];
 
@@ -1221,25 +1232,6 @@ const LandingPage = () => {
       <section className="landing-pricing" aria-labelledby="landing-pricing-heading">
         <h2 id="landing-pricing-heading" className="landing-pricing-title">Välj abonnemangsplan</h2>
         <div className="landing-pricing-cards">
-          <div className="landing-pricing-card landing-pricing-card-gratis">
-            <div className="landing-pricing-card-header">
-              <h3 className="landing-pricing-card-title">Gratis</h3>
-            </div>
-            <ul className="landing-pricing-features">
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Två aktiva event samtidigt</li>
-              <li className="landing-pricing-feature excluded"><span className="landing-pricing-icon" aria-hidden="true">✕</span> Onlinebetalning via plattformen</li>
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Mailbekräftelse till deltagare</li>
-              <li className="landing-pricing-feature excluded"><span className="landing-pricing-icon" aria-hidden="true">✕</span> Rabattkoder</li>
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Anmälningssida &amp; listor</li>
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Bygg dina egna formulär</li>
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Bildgalleri</li>
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Besökarstatistik</li>
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Möjlighet att checka in deltagare med QR-kod</li>
-            </ul>
-            <p className="landing-pricing-price">0 kr</p>
-            <a href="/admin?view=signup" className="landing-pricing-btn">Kom igång</a>
-          </div>
-
           <div className="landing-pricing-card landing-pricing-card-bas">
             <div className="landing-pricing-card-header">
               <h3 className="landing-pricing-card-title">Bas</h3>
@@ -1252,12 +1244,9 @@ const LandingPage = () => {
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Anmälningssida &amp; listor</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Bygg dina egna formulär</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Bildgalleri</li>
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Besökarstatistik</li>
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Köp av enstaka betalevent</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Anpassade listor om vilka som har betalat</li>
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Möjlighet att checka in deltagare med QR-kod</li>
             </ul>
-            <p className="landing-pricing-price">129 kr/betalevent</p>
+            <p className="landing-pricing-price">Gratis</p>
             <a href="/admin?view=signup" className="landing-pricing-btn">Kom igång</a>
           </div>
 
@@ -1274,7 +1263,6 @@ const LandingPage = () => {
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Bygg dina egna formulär</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Bildgalleri</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Besökarstatistik</li>
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Tillgång till obegränsat antal betalevent</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Anpassade listor om vilka som har betalat</li>
               <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Möjlighet att checka in deltagare med QR-kod</li>
             </ul>
@@ -1419,15 +1407,13 @@ const PaymentStatusPage = () => {
       localStorage.removeItem("pendingVerifyToken");
       const paymentStatus = String(data.status || "pending").toLowerCase();
       const orderType = data.summary?.orderType;
-      if (orderType === "bas" || orderType === "premium") {
+      if (orderType === "premium") {
         setReturnToProfile(true);
       }
       if (paymentStatus === "paid") {
         setStatus("paid");
         if (data.summary?.orderType === "premium") {
           setMessage("Premium-abonnemang aktiverat. Du har nu full funktionalitet i ett år.");
-        } else if (data.summary?.orderType === "bas") {
-          setMessage(`Bas-köp genomfört. ${data.summary.quantity || 0} eventkredit(er) är tillagda. Du kan nu lägga till priser på biljetter under Dina event.`);
         } else {
           const attendeeCount = Array.isArray(data.summary?.names)
             ? data.summary.names.filter(Boolean).length
@@ -1582,7 +1568,7 @@ const PaymentStatusPage = () => {
   })();
 
   const isSubscriptionOrder =
-    summary?.orderType === "bas" || summary?.orderType === "premium" || returnToProfile;
+    summary?.orderType === "premium" || returnToProfile;
 
   return (
     <div className="page">
@@ -1602,7 +1588,7 @@ const PaymentStatusPage = () => {
                     <strong>{summary.eventName}</strong>
                   </div>
                 ) : null}
-                {summary?.orderType === "bas" || summary?.orderType === "premium" ? (
+                {summary?.orderType === "premium" ? (
                   <>
                     <div className="summary-row">
                       <span>Organisation</span>
@@ -1818,15 +1804,6 @@ const PaymentStatusPage = () => {
                 >
                   Tillbaka till profilen
                 </button>
-                {summary?.orderType === "bas" && status === "paid" ? (
-                  <button
-                    type="button"
-                    className="button button-outline"
-                    onClick={() => goToAdminSection("home")}
-                  >
-                    Gå till Dina event
-                  </button>
-                ) : null}
                 {status !== "paid" ? (
                   <p className="muted payment-status-actions-note">
                     {status === "pending" || status === "open"
@@ -2426,6 +2403,11 @@ const AdminPage = () => {
   const [statusMessage, setStatusMessage] = useState("");
   const [adminSection, setAdminSection] = useState("bookings");
   const [adminPanelTab, setAdminPanelTab] = useState("start");
+  const [serviceFeeTierFormRows, setServiceFeeTierFormRows] = useState(() => serviceFeeTiersToFormRows());
+  const [serviceFeeTierLines, setServiceFeeTierLines] = useState(() => buildServiceFeeTierLines());
+  const [serviceFeeTierLoading, setServiceFeeTierLoading] = useState(false);
+  const [serviceFeeTierSaving, setServiceFeeTierSaving] = useState(false);
+  const [serviceFeeTierMessage, setServiceFeeTierMessage] = useState("");
   const [eventSettingsTab, setEventSettingsTab] = useState("general");
   const [adminMenuOpen, setAdminMenuOpen] = useState(false);
   const adminMenuTimerRef = useRef(null);
@@ -2679,7 +2661,7 @@ const AdminPage = () => {
   }, [customFieldsAdmin]);
   const [profileForm, setProfileForm] = useState({
     profileId: "",
-    subscriptionPlan: "gratis",
+    subscriptionPlan: "bas",
     firstName: "",
     lastName: "",
     organization: "",
@@ -2693,12 +2675,9 @@ const AdminPage = () => {
     vatExempt: false
   });
   const profileShowsVatRate = profileForm.vatExempt !== true;
-  const [activeSubscriptionPlan, setActiveSubscriptionPlan] = useState("gratis");
+  const [activeSubscriptionPlan, setActiveSubscriptionPlan] = useState("bas");
   const [showPremiumConfirm, setShowPremiumConfirm] = useState(false);
   const [showPremiumAvslutaInfo, setShowPremiumAvslutaInfo] = useState(false);
-  const [showBasConfirm, setShowBasConfirm] = useState(false);
-  const [basQuantity, setBasQuantity] = useState(1);
-  const [basPaymentLoading, setBasPaymentLoading] = useState(false);
   const [premiumPaymentLoading, setPremiumPaymentLoading] = useState(false);
   const [passwordForm, setPasswordForm] = useState({
     currentPassword: "",
@@ -2762,7 +2741,6 @@ const AdminPage = () => {
   const [adminAnonymizeConfirmRequestId, setAdminAnonymizeConfirmRequestId] = useState(null);
   const [adminOrganizations, setAdminOrganizations] = useState([]);
   const [adminOrganizationsLoading, setAdminOrganizationsLoading] = useState(false);
-  const [adminOrgCreditsEdit, setAdminOrgCreditsEdit] = useState({});
   const [adminOrgSavingProfileId, setAdminOrgSavingProfileId] = useState(null);
   const [adminDeleteProfileConfirm, setAdminDeleteProfileConfirm] = useState(null);
   const [adminDeleteProfileLoading, setAdminDeleteProfileLoading] = useState(false);
@@ -2892,12 +2870,23 @@ const AdminPage = () => {
       (s, e) => s + (Number(e.remainingRevenue ?? e.totalRevenue) || 0),
       0
     );
-    const threshold = payoutSummary.payoutFeeThreshold ?? 500;
-    const feeAmount = payoutSummary.payoutFeeAmount ?? 50;
-    const fee = selectedSum > threshold ? feeAmount : 0;
+    const feeExclVat = payoutSummary.payoutFeeAmount ?? 45;
+    const vatRate = payoutSummary.payoutFeeVatRatePercent ?? 25;
+    const feeInclVat =
+      payoutSummary.payoutFeeAmountInclVat ??
+      Math.round(feeExclVat * (1 + vatRate / 100) * 100) / 100;
+    const fee = selectedSum > 0.009 ? Math.min(feeInclVat, selectedSum) : 0;
+    const feeVat = fee > 0 ? Math.round((fee - fee / (1 + vatRate / 100)) * 100) / 100 : 0;
+    const feeExclFromFee = fee > 0 ? Math.round((fee - feeVat) * 100) / 100 : 0;
     const net = Math.round((selectedSum - fee) * 100) / 100;
-    return { selectedSum, fee, net };
-  }, [payoutEventsToShow, payoutSelectedEventIds, payoutSummary.payoutFeeThreshold, payoutSummary.payoutFeeAmount]);
+    return { selectedSum, fee, feeExclVat: feeExclFromFee, feeVat, feeInclVat: fee, net };
+  }, [
+    payoutEventsToShow,
+    payoutSelectedEventIds,
+    payoutSummary.payoutFeeAmount,
+    payoutSummary.payoutFeeVatRatePercent,
+    payoutSummary.payoutFeeAmountInclVat
+  ]);
   const adminPartialSelectedCandidate = useMemo(
     () => adminPartialCandidates.find((row) => String(row.eventId) === adminPartialForm.eventId) || null,
     [adminPartialCandidates, adminPartialForm.eventId]
@@ -3166,9 +3155,7 @@ const AdminPage = () => {
     }
     const data = await response.json();
     const profile = data.profile || {};
-    const plan = ["gratis", "bas", "premium"].includes((profile.subscription_plan || "").toLowerCase())
-      ? (profile.subscription_plan || "gratis").toLowerCase()
-      : "gratis";
+    const plan = normalizeSubscriptionPlan(profile.subscription_plan);
     setActiveSubscriptionPlan(plan);
     setProfileForm({
       profileId: profile.profile_id || "",
@@ -3184,7 +3171,6 @@ const AdminPage = () => {
       phone: profile.phone || "",
       bgNumber: profile.bg_number || "",
       vatExempt: profile.vat_exempt === true,
-      bas_event_credits: profile.bas_event_credits ?? 0,
       premium_activated_at: profile.premium_activated_at || null,
       premium_ends_at: profile.premium_ends_at || null
     });
@@ -3198,14 +3184,18 @@ const AdminPage = () => {
       throw new Error("Payout summary failed");
     }
     const data = await response.json();
-    const threshold = Number(data.payoutFeeThreshold);
     const amount = Number(data.payoutFeeAmount);
+    const vatRate = Number(data.payoutFeeVatRatePercent);
+    const amountInclVat = Number(data.payoutFeeAmountInclVat);
     setPayoutSummary({
       events: data.events || [],
       grandTotal: data.grandTotal ?? 0,
       payoutDaysAfterEvent: data.payoutDaysAfterEvent ?? 1,
-      payoutFeeThreshold: Number.isFinite(threshold) ? threshold : 500,
-      payoutFeeAmount: Number.isFinite(amount) ? amount : 50
+      payoutFeeAmount: Number.isFinite(amount) ? amount : 45,
+      payoutFeeVatRatePercent: Number.isFinite(vatRate) ? vatRate : 25,
+      payoutFeeAmountInclVat: Number.isFinite(amountInclVat)
+        ? amountInclVat
+        : Math.round((Number.isFinite(amount) ? amount : 45) * 1.25 * 100) / 100
     });
   };
 
@@ -3557,36 +3547,6 @@ const AdminPage = () => {
     }
   };
 
-  const handleSaveOrgBasCredits = async (profileId, value) => {
-    if (!token || profileId == null || profileId === "") return;
-    setAdminOrgSavingProfileId(profileId);
-    try {
-      const response = await fetch(`${API_BASE}/admin/profiles/${encodeURIComponent(profileId)}/bas-credits`, {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({ bas_event_credits: value })
-      });
-      const data = await response.json();
-      if (data.ok) {
-        setAdminOrganizations((prev) =>
-          prev.map((row) =>
-            row.profileId === profileId ? { ...row, basEventCredits: data.basEventCredits ?? value } : row
-          )
-        );
-        setAdminOrgCreditsEdit((prev) => {
-          const next = { ...prev };
-          delete next[profileId];
-          return next;
-        });
-      }
-    } finally {
-      setAdminOrgSavingProfileId(null);
-    }
-  };
-
   const handleDeleteOrgAccount = (row) => {
     if (!row?.profileId) return;
     setAdminDeleteProfileConfirm({ profileId: row.profileId, organization: row.organization || "denna organisation" });
@@ -3714,6 +3674,122 @@ const AdminPage = () => {
       }
     } catch {
       // ignore
+    }
+  };
+
+  useEffect(() => {
+    fetchServiceFeeTiers(API_BASE)
+      .then((tiers) => {
+        setServiceFeeTierFormRows(serviceFeeTiersToFormRows(tiers));
+        setServiceFeeTierLines(buildServiceFeeTierLines(tiers));
+      })
+      .catch(() => {});
+  }, []);
+
+  const loadServiceFeeTierSettings = async (authToken) => {
+    setServiceFeeTierLoading(true);
+    setServiceFeeTierMessage("");
+    try {
+      const response = await fetch(`${API_BASE}/admin/platform-settings/service-fee-tiers`, {
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "Kunde inte ladda serviceavgiftsnivåer.");
+      }
+      const tiers = setServiceFeeTiers(data.tiers || []);
+      setServiceFeeTierFormRows(serviceFeeTiersToFormRows(tiers));
+      setServiceFeeTierLines(buildServiceFeeTierLines(tiers));
+    } catch (err) {
+      setServiceFeeTierMessage(err.message || "Kunde inte ladda serviceavgiftsnivåer.");
+    } finally {
+      setServiceFeeTierLoading(false);
+    }
+  };
+
+  const handleServiceFeeTierFieldChange = (index, field, value) => {
+    setServiceFeeTierFormRows((prev) => {
+      const next = prev.map((row, rowIndex) => {
+        if (rowIndex !== index) return row;
+        return { ...row, [field]: value };
+      });
+      if (field === "maxAmount") {
+        const parsedMax = Number(value);
+        if (Number.isFinite(parsedMax) && next[index + 1]) {
+          next[index + 1] = {
+            ...next[index + 1],
+            minAmount: String(Math.round(parsedMax + 1))
+          };
+        }
+      }
+      return next;
+    });
+  };
+
+  const handleAddServiceFeeTierRow = () => {
+    setServiceFeeTierFormRows((prev) => {
+      if (prev.length === 0) {
+        return [{ minAmount: "0", maxAmount: "", fee: "0" }];
+      }
+      const last = prev[prev.length - 1];
+      const lastMax = Number(last.maxAmount);
+      const nextMin = Number.isFinite(lastMax) ? String(Math.round(lastMax + 1)) : "";
+      return [
+        ...prev.slice(0, -1),
+        { ...last, maxAmount: last.maxAmount || String(Math.max(0, Number(last.minAmount) || 0)) },
+        { minAmount: nextMin, maxAmount: "", fee: last.fee || "0" }
+      ];
+    });
+  };
+
+  const handleRemoveServiceFeeTierRow = (index) => {
+    setServiceFeeTierFormRows((prev) => {
+      if (prev.length <= 1) return prev;
+      const next = prev.filter((_, rowIndex) => rowIndex !== index);
+      if (index === 0) {
+        next[0] = { ...next[0], minAmount: "0" };
+      } else if (next[index]) {
+        const prevMax = Number(next[index - 1]?.maxAmount);
+        next[index] = {
+          ...next[index],
+          minAmount: Number.isFinite(prevMax) ? String(Math.round(prevMax + 1)) : next[index].minAmount
+        };
+      }
+      return next;
+    });
+  };
+
+  const handleSaveServiceFeeTierSettings = async (event) => {
+    event.preventDefault();
+    if (!token) return;
+    const validation = serviceFeeTiersFromFormRows(serviceFeeTierFormRows);
+    if (!validation.ok) {
+      setServiceFeeTierMessage(validation.error || "Ogiltiga nivåer.");
+      return;
+    }
+    setServiceFeeTierSaving(true);
+    setServiceFeeTierMessage("");
+    try {
+      const response = await fetch(`${API_BASE}/admin/platform-settings/service-fee-tiers`, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ tiers: validation.tiers })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "Kunde inte spara serviceavgiftsnivåer.");
+      }
+      const tiers = setServiceFeeTiers(data.tiers || validation.tiers);
+      setServiceFeeTierFormRows(serviceFeeTiersToFormRows(tiers));
+      setServiceFeeTierLines(buildServiceFeeTierLines(tiers));
+      setServiceFeeTierMessage("Serviceavgiftsnivåerna sparades.");
+    } catch (err) {
+      setServiceFeeTierMessage(err.message || "Kunde inte spara serviceavgiftsnivåer.");
+    } finally {
+      setServiceFeeTierSaving(false);
     }
   };
 
@@ -4185,11 +4261,11 @@ const AdminPage = () => {
         .finally(() => setProfileLoading(false));
       return;
     }
-    const plan = (profileForm.subscriptionPlan || "gratis").toLowerCase();
-    const activePlan = (activeSubscriptionPlan || "gratis").toLowerCase();
-    if (plan === "gratis" && activePlan === "gratis") {
+    const plan = normalizeSubscriptionPlan(profileForm.subscriptionPlan);
+    const activePlan = normalizeSubscriptionPlan(activeSubscriptionPlan);
+    if (plan === "bas" && activePlan === "bas") {
       setError("");
-      showToast("Välj Bas eller Premium ovan innan du går vidare med ett annat abonnemang.");
+      showToast("Du har redan Bas-abonnemang.");
       return;
     }
     if (plan === "premium") {
@@ -4204,60 +4280,11 @@ const AdminPage = () => {
       setShowPremiumConfirm(true);
       return;
     }
-    if (plan === "bas") {
-      const firstName = (profileForm.firstName ?? "").toString().trim();
-      const lastName = (profileForm.lastName ?? "").toString().trim();
-      const organization = (profileForm.organization ?? "").toString().trim();
-      if (!firstName || !lastName || !organization) {
-        setError("");
-        showToast("Fyll i förnamn, efternamn och organisation och spara profilen först. Välj sedan Bas och klicka Fortsätt.");
-        return;
-      }
-      setError("");
-      setProfileLoading(true);
-      performProfileSave()
-        .then(() => setShowBasConfirm(true))
-        .catch(() => setError("Kunde inte spara profilen."))
-        .finally(() => setProfileLoading(false));
-      return;
-    }
     setError("");
     setProfileLoading(true);
     performProfileSave()
       .catch(() => setError("Kunde inte spara profilen."))
       .finally(() => setProfileLoading(false));
-  };
-
-  const handleBasKop = async () => {
-    if (!token || basPaymentLoading) return;
-    setBasPaymentLoading(true);
-    setError("");
-    try {
-      const response = await fetch(`${API_BASE}/admin/payments/start-bas`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({ quantity: basQuantity })
-      });
-      const data = await response.json();
-      if (!data.ok || !data.checkoutUrl || !data.verifyToken) {
-        const errMsg = data.error || "Kunde inte starta betalning.";
-        setError(errMsg);
-        if (errMsg.includes("förnamn") || errMsg.includes("organisation")) {
-          showToast(errMsg);
-        }
-        return;
-      }
-      localStorage.setItem("pendingVerifyToken", data.verifyToken);
-      sessionStorage.setItem("paymentReturnTo", "profile");
-      window.location.href = data.checkoutUrl;
-    } catch (err) {
-      setError(err?.message || "Kunde inte starta betalning.");
-    } finally {
-      setBasPaymentLoading(false);
-    }
   };
 
   const handlePremiumKop = async () => {
@@ -4303,7 +4330,7 @@ const AdminPage = () => {
     setShowPremiumConfirm(false);
     setError("");
     setProfileLoading(true);
-    const keepPlan = (activeSubscriptionPlan || "gratis").toLowerCase();
+    const keepPlan = normalizeSubscriptionPlan(activeSubscriptionPlan);
     performProfileSave(keepPlan)
       .then(() => handlePremiumKop())
       .catch(() => setError("Kunde inte spara profilen."))
@@ -4506,13 +4533,6 @@ const AdminPage = () => {
       }
       const profileData = await profileRes.json();
       const profile = profileData.profile || {};
-      const plan = (profile.subscription_plan || "gratis").toLowerCase();
-      if (plan === "gratis") {
-        setPriceSectionError(
-          "Priser är endast tillgängligt för abonnemang Bas eller Premium. Byt abonnemang under Profil."
-        );
-        return;
-      }
       const org = (profile.organization || "").trim();
       const orgNr = (profile.org_number || "").trim();
       const bg = (profile.bg_number || "").trim();
@@ -6781,10 +6801,6 @@ const AdminPage = () => {
                               label="Abonnemangsform"
                               value={formatAdminSubscriptionPlanLabel(adminOrgProfileModal.profile.subscriptionPlan)}
                             />
-                            <AdminProfileInfoRow
-                              label="Antal event med pris kvar"
-                              value={adminOrgProfileModal.profile.basEventCredits}
-                            />
                           </div>
                           <div className="field-row">
                             <AdminProfileInfoRow
@@ -6882,6 +6898,18 @@ const AdminPage = () => {
                   onClick={() => setAdminPanelTab("logging")}
                 >
                   Loggning
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  className={`admin-main-tab ${adminPanelTab === "settings" ? "is-active" : ""}`}
+                  aria-selected={adminPanelTab === "settings"}
+                  onClick={() => {
+                    setAdminPanelTab("settings");
+                    if (token) loadServiceFeeTierSettings(token).catch(() => {});
+                  }}
+                >
+                  Inställningar
                 </button>
               </nav>
             </div>
@@ -7391,7 +7419,7 @@ const AdminPage = () => {
             <h3 className="admin-subsection-title admin-subsection-title-spaced">Delutbetalning event</h3>
             <p className="muted" style={{ marginBottom: "1rem" }}>
               Registrera delutbetalning endast för pågående event med kvarvarande intäkter. Avslutade event utbetalas i sin helhet
-              via vanlig utbetalningsbegäran. Varje event kan endast delutbetalas en gång och högst med 70% av eventets totala intäkter.
+              via vanlig utbetalningsbegäran. Delutbetalningar är avgiftsfria. Varje event kan endast delutbetalas en gång och högst med 70% av eventets totala intäkter.
             </p>
             {adminPartialCandidatesLoading ? (
               <p className="muted">Laddar event...</p>
@@ -8195,12 +8223,114 @@ const AdminPage = () => {
               </div>
             ) : null}
 
+            {adminPanelTab === "settings" ? (
+              <div className="admin-panel admin-panel-settings">
+                <h2>Inställningar</h2>
+                <h3 className="admin-subsection-title">Serviceavgift – pristrappa</h3>
+                <p className="muted">
+                  Styr serviceavgiften per beställning baserat på biljettbelopp efter rabatt. Ändringar gäller
+                  nya köp direkt i checkout, kvitto och utbetalningsrapporter.
+                </p>
+                {serviceFeeTierMessage ? (
+                  <p className={serviceFeeTierMessage.includes("sparades") ? "admin-info-text" : "admin-error admin-error-inline"}>
+                    {serviceFeeTierMessage}
+                  </p>
+                ) : null}
+                {serviceFeeTierLoading ? (
+                  <p className="muted">Laddar nivåer…</p>
+                ) : (
+                  <form className="admin-form admin-service-fee-settings-form" onSubmit={handleSaveServiceFeeTierSettings}>
+                    <div className="table-wrap">
+                      <table className="table admin-service-fee-settings-table">
+                        <thead>
+                          <tr>
+                            <th>Från biljettbelopp (kr)</th>
+                            <th>Till biljettbelopp (kr)</th>
+                            <th>Serviceavgift (kr)</th>
+                            <th aria-label="Åtgärder"></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {serviceFeeTierFormRows.map((row, index) => {
+                            const isLast = index === serviceFeeTierFormRows.length - 1;
+                            return (
+                              <tr key={`service-fee-tier-${index}`}>
+                                <td>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="1"
+                                    value={row.minAmount}
+                                    onChange={(e) => handleServiceFeeTierFieldChange(index, "minAmount", e.target.value)}
+                                    disabled={index === 0}
+                                    required
+                                  />
+                                </td>
+                                <td>
+                                  {isLast ? (
+                                    <span className="muted">Obegränsat</span>
+                                  ) : (
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      step="1"
+                                      value={row.maxAmount}
+                                      onChange={(e) => handleServiceFeeTierFieldChange(index, "maxAmount", e.target.value)}
+                                      required
+                                    />
+                                  )}
+                                </td>
+                                <td>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="1"
+                                    value={row.fee}
+                                    onChange={(e) => handleServiceFeeTierFieldChange(index, "fee", e.target.value)}
+                                    required
+                                  />
+                                </td>
+                                <td>
+                                  {serviceFeeTierFormRows.length > 1 ? (
+                                    <button
+                                      type="button"
+                                      className="icon-button danger"
+                                      onClick={() => handleRemoveServiceFeeTierRow(index)}
+                                      aria-label="Ta bort nivå"
+                                    >
+                                      Ta bort
+                                    </button>
+                                  ) : null}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                    <p className="muted admin-service-fee-settings-hint">
+                      Nivåerna måste följa direkt efter varandra utan glapp. Sista raden gäller från angivet belopp
+                      och uppåt utan övre gräns.
+                    </p>
+                    <div className="admin-actions">
+                      <button type="button" className="button button-outline" onClick={handleAddServiceFeeTierRow}>
+                        Lägg till nivå
+                      </button>
+                      <button type="submit" className="button" disabled={serviceFeeTierSaving}>
+                        {serviceFeeTierSaving ? "Sparar…" : "Spara nivåer"}
+                      </button>
+                    </div>
+                  </form>
+                )}
+              </div>
+            ) : null}
+
             {adminPanelTab === "start" ? (
               <div className="admin-panel admin-panel-start">
                 <h2>Start</h2>
-                <h3 className="admin-subsection-title">Organisationer – abonnemang och eventkrediter</h3>
+                <h3 className="admin-subsection-title">Organisationer – abonnemang</h3>
             <p className="muted" style={{ marginBottom: "1rem" }}>
-              Antal event med pris kvar = hur många event (med biljettpriser) organisationen kan lägga till. Du kan ändra värdet och spara för att tilldela krediter utan att kunden betalar.
+              Alla nya konton får Bas. Premium kan köpas av kunden eller tilldelas här av admin.
             </p>
             {adminOrganizationsLoading ? (
               <p className="muted">Laddar...</p>
@@ -8218,8 +8348,6 @@ const AdminPage = () => {
                       <th>Startdatum</th>
                       <th>Slutdatum</th>
                       <th>Avslut anmält</th>
-                      <th>Antal event med pris kvar</th>
-                      <th style={{ width: "6rem" }}></th>
                       <th style={{ width: "2.5rem" }} aria-label="Profilinfo"></th>
                       <th style={{ width: "2.5rem" }} aria-label="Ta bort konto"></th>
                     </tr>
@@ -8227,11 +8355,9 @@ const AdminPage = () => {
                   <tbody>
                     {adminOrganizations.map((row) => {
                       const rowKey = row.profileId || `user-${row.userId}`;
-                      const draft = adminOrgCreditsEdit[rowKey];
-                      const value = draft !== undefined ? draft : row.basEventCredits;
                       const isSaving = adminOrgSavingProfileId === row.profileId;
-                      const isOwnProfile = row.profileId && profileForm.profileId && row.profileId === profileForm.profileId;
                       const fmt = (iso) => (iso ? new Date(iso).toLocaleDateString("sv-SE", { year: "numeric", month: "short", day: "numeric" }) : "–");
+                      const planValue = normalizeSubscriptionPlan(row.subscriptionPlan);
                       return (
                         <tr key={rowKey}>
                           <td>{row.organization || "–"}</td>
@@ -8239,15 +8365,14 @@ const AdminPage = () => {
                           <td>{row.profileId || "–"}</td>
                           <td>
                             <select
-                              value={(row.subscriptionPlan || "gratis").toLowerCase()}
+                              value={planValue}
                               onChange={(e) => handleSaveOrgSubscriptionPlan(row.profileId, e.target.value)}
                               disabled={adminOrgSavingProfileId === row.profileId || !row.profileId}
-                              className={`field-input admin-org-plan-select admin-org-plan-select-${(row.subscriptionPlan || "gratis").toLowerCase()}`}
+                              className={`field-input admin-org-plan-select admin-org-plan-select-${planValue}`}
                               style={{ minWidth: "6rem" }}
                               aria-label="Abonnemangsform"
-                              data-plan={(row.subscriptionPlan || "gratis").toLowerCase()}
+                              data-plan={planValue}
                             >
-                              <option value="gratis">Gratis</option>
                               <option value="bas">Bas</option>
                               <option value="premium">Premium</option>
                             </select>
@@ -8258,27 +8383,6 @@ const AdminPage = () => {
                           <td className="admin-org-date">{fmt(row.premiumActivatedAt)}</td>
                           <td className="admin-org-date">{fmt(row.premiumEndsAt)}</td>
                           <td className="admin-org-date">{fmt(row.premiumAvslutRequestedAt)}</td>
-                          <td>
-                            <input
-                              type="number"
-                              min={0}
-                              step={1}
-                              value={value}
-                              onChange={(e) => setAdminOrgCreditsEdit((prev) => ({ ...prev, [rowKey]: Math.max(0, parseInt(e.target.value, 10) || 0) }))}
-                              className="field-input admin-org-credits-input"
-                              style={{ width: "4.5rem", padding: "0.35rem 0.5rem" }}
-                            />
-                          </td>
-                          <td>
-                            <button
-                              type="button"
-                              className="button button-small"
-                              disabled={isSaving || !row.profileId || value === row.basEventCredits}
-                              onClick={() => handleSaveOrgBasCredits(row.profileId, value)}
-                            >
-                              {isSaving ? "Sparar…" : "Spara"}
-                            </button>
-                          </td>
                           <td>
                             {row.profileId ? (
                               <button
@@ -8617,7 +8721,17 @@ const AdminPage = () => {
           <div className="section">
             <h2>Utbetalning</h2>
             <p className="muted">
-              Här ser du intäkterna från betalda anmälningar för alla dina event. För att begära utbetalning måste du godkänna villkoren nedan och skicka begäran. Var noga med att du har angett rätt organisation och bankuppgifter i din profil
+              Här ser du intäkterna från betalda anmälningar för alla dina event. För att begära utbetalning måste du godkänna villkoren nedan och skicka begäran. Var noga med att du har angett rätt organisation och bankuppgifter i din profil.
+              Vid slututbetalning efter avslutat event dras en utbetalningsavgift på{" "}
+              <strong>{(payoutSummary.payoutFeeAmount ?? 45).toLocaleString("sv-SE")} kr exkl. moms</strong>{" "}
+              (totalt{" "}
+              <strong>
+                {(payoutSummary.payoutFeeAmountInclVat ??
+                  Math.round((payoutSummary.payoutFeeAmount ?? 45) * 1.25 * 100) / 100
+                ).toLocaleString("sv-SE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{" "}
+                kr inkl. {payoutSummary.payoutFeeVatRatePercent ?? 25} % moms
+              </strong>
+              ). Delutbetalningar är avgiftsfria.
             </p>
             <div className="table-wrap" style={{ marginBottom: "1.5rem" }}>
               <table className="table">
@@ -8768,6 +8882,17 @@ const AdminPage = () => {
                 ) : null}
               </table>
             </div>
+            {payoutSelectedEventIds.length > 0 && payoutTotals.fee > 0 ? (
+              <p className="muted admin-info-text" style={{ marginTop: "-0.25rem", marginBottom: "1.5rem" }}>
+                Utbetalningsavgift (slututbetalning):{" "}
+                {payoutTotals.feeExclVat.toLocaleString("sv-SE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{" "}
+                kr exkl. moms +{" "}
+                {payoutTotals.feeVat.toLocaleString("sv-SE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{" "}
+                kr moms ({payoutSummary.payoutFeeVatRatePercent ?? 25} %) ={" "}
+                {payoutTotals.feeInclVat.toLocaleString("sv-SE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{" "}
+                kr inkl. moms
+              </p>
+            ) : null}
             {showPayoutTermsToaster ? (
               <div
                 className="admin-toaster-overlay"
@@ -8804,11 +8929,16 @@ const AdminPage = () => {
                       Utbetalning sker enligt gällande avtal. Du begär att intäkterna från valda event betalas ut till din angivna organisation och bankkonto.
                     </p>
                     <p style={{ margin: "0 0 0.75rem 0" }}>
-                      Om det sammanlagda utbetalningsbeloppet överstiger{" "}
-                      <strong>{(payoutSummary.payoutFeeThreshold ?? 500).toLocaleString("sv-SE")} kr</strong>{" "}
-                      dras en administrationsavgift på{" "}
-                      <strong>{(payoutSummary.payoutFeeAmount ?? 50).toLocaleString("sv-SE")} kr</strong>{" "}
-                      per utbetalning. Det belopp som faktiskt utbetalas är intäkterna minus denna avgift.
+                      Vid slututbetalning efter avslutat event dras en utbetalningsavgift på{" "}
+                      <strong>{(payoutSummary.payoutFeeAmount ?? 45).toLocaleString("sv-SE")} kr exkl. moms</strong>{" "}
+                      plus moms ({payoutSummary.payoutFeeVatRatePercent ?? 25} %), totalt{" "}
+                      <strong>
+                        {(payoutSummary.payoutFeeAmountInclVat ??
+                          Math.round((payoutSummary.payoutFeeAmount ?? 45) * 1.25 * 100) / 100
+                        ).toLocaleString("sv-SE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{" "}
+                        kr inkl. moms
+                      </strong>{" "}
+                      per begäran. Avgiften gäller inte delutbetalningar. Det belopp som faktiskt utbetalas är intäkterna minus denna avgift.
                     </p>
                     <p style={{ margin: 0 }}>
                       Genom att skicka begäran godkänner du dessa villkor.
@@ -9029,29 +9159,17 @@ const AdminPage = () => {
                     const premiumEndsAt = profileForm.premium_ends_at ? new Date(profileForm.premium_ends_at) : null;
                     const todayStart = new Date();
                     todayStart.setHours(0, 0, 0, 0);
-                    const isPremiumActive = (activeSubscriptionPlan || "gratis") === "premium" && (!premiumEndsAt || premiumEndsAt >= todayStart);
-                    const gratisDisabled = (profileForm.bas_event_credits ?? 0) > 0 || isPremiumActive;
+                    const activePlan = normalizeSubscriptionPlan(activeSubscriptionPlan);
+                    const isPremiumActive = activePlan === "premium" && (!premiumEndsAt || premiumEndsAt >= todayStart);
                     const basDisabled = isPremiumActive;
                     return (
                       <>
-                        <label className={`subscription-plan-option ${gratisDisabled ? "is-disabled" : ""}`} title={gratisDisabled ? ((profileForm.bas_event_credits ?? 0) > 0 ? "Gratis kan inte väljas när du har obrukade Bas-eventkrediter." : "Gratis kan inte väljas med aktivt Premium-abonnemang.") : ""}>
-                          <input
-                            type="radio"
-                            name="subscriptionPlan"
-                            value="gratis"
-                            checked={(profileForm.subscriptionPlan || "gratis") === "gratis"}
-                            onChange={() => setProfileForm((prev) => ({ ...prev, subscriptionPlan: "gratis" }))}
-                            disabled={gratisDisabled}
-                            aria-disabled={gratisDisabled}
-                          />
-                          <span>Gratis</span>
-                        </label>
                         <label className={`subscription-plan-option ${basDisabled ? "is-disabled" : ""}`} title={basDisabled ? "Bas kan inte väljas med aktivt Premium-abonnemang." : ""}>
                           <input
                             type="radio"
                             name="subscriptionPlan"
                             value="bas"
-                            checked={(profileForm.subscriptionPlan || "gratis") === "bas"}
+                            checked={normalizeSubscriptionPlan(profileForm.subscriptionPlan) === "bas"}
                             onChange={() => setProfileForm((prev) => ({ ...prev, subscriptionPlan: "bas" }))}
                             disabled={basDisabled}
                             aria-disabled={basDisabled}
@@ -9063,7 +9181,7 @@ const AdminPage = () => {
                             type="radio"
                             name="subscriptionPlan"
                             value="premium"
-                            checked={(profileForm.subscriptionPlan || "gratis") === "premium"}
+                            checked={normalizeSubscriptionPlan(profileForm.subscriptionPlan) === "premium"}
                             onChange={() => setProfileForm((prev) => ({ ...prev, subscriptionPlan: "premium" }))}
                           />
                           <span>Premium</span>
@@ -9077,47 +9195,27 @@ const AdminPage = () => {
                   name="action"
                   value="subscription"
                   className={`button subscription-plan-activate${
-                    (activeSubscriptionPlan || "gratis") === "gratis" || (activeSubscriptionPlan || "gratis") === "bas"
+                    normalizeSubscriptionPlan(activeSubscriptionPlan) === "bas"
                       ? " subscription-plan-activate-flash"
                       : ""
                   }`}
                   disabled={profileLoading}
                 >
-                  Gå vidare med annat Abonnemang
+                  Uppgradera till Premium
                 </button>
                 <div className="subscription-plan-status">
                   <div className="subscription-plan-status-row">
                     <span className="subscription-plan-status-label">Abonnemang:</span>
-                    <span className={`subscription-plan-badge subscription-plan-badge-${(activeSubscriptionPlan || "gratis").toLowerCase()}`}>
-                      {(activeSubscriptionPlan || "gratis") === "gratis" ? "Gratis" : (activeSubscriptionPlan || "gratis") === "bas" ? "Bas" : "Premium"}
+                    <span className={`subscription-plan-badge subscription-plan-badge-${normalizeSubscriptionPlan(activeSubscriptionPlan)}`}>
+                      {formatAdminSubscriptionPlanLabel(activeSubscriptionPlan)}
                     </span>
                   </div>
-                  {(activeSubscriptionPlan || "gratis") === "bas" ? (
-                    <>
-                      <div className="subscription-plan-credits">Bas-eventkrediter: {profileForm.bas_event_credits ?? 0}</div>
-                      <div className="subscription-plan-bas-credits-action">
-                        <p className="subscription-plan-upgrade-hint muted">
-                          Du behöver även köpa eventkrediter för att kunna lägga till biljettpriser och ta betalt på dina event.
-                        </p>
-                        <button
-                          type="button"
-                          className="button subscription-plan-bas-buy-btn"
-                          onClick={() => setShowBasConfirm(true)}
-                        >
-                          Köp
-                        </button>
-                      </div>
-                      <p className="subscription-plan-upgrade-hint muted">
-                        Uppdatera abonnemanget ovan till Premium för full funktionalitet med obegränsat antal betalevent.
-                      </p>
-                    </>
-                  ) : null}
-                  {(activeSubscriptionPlan || "gratis") === "gratis" ? (
+                  {normalizeSubscriptionPlan(activeSubscriptionPlan) === "bas" ? (
                     <p className="subscription-plan-upgrade-hint muted">
-                      Uppdatera abonnemanget ovan till Bas eller Premium för att få full funktionalitet, t.ex. onlinebetalning och rabattkoder.
+                      Bas ingår vid registrering – abonnemang med begränsade funktioner.
                     </p>
                   ) : null}
-                  {(activeSubscriptionPlan || "gratis") === "premium" && (profileForm.premium_activated_at || profileForm.premium_ends_at) ? (
+                  {normalizeSubscriptionPlan(activeSubscriptionPlan) === "premium" && (profileForm.premium_activated_at || profileForm.premium_ends_at) ? (
                     <div className="subscription-plan-premium-dates">
                       {profileForm.premium_activated_at ? (
                         <div className="subscription-plan-credits">Aktiv från {new Date(profileForm.premium_activated_at).toLocaleDateString("sv-SE", { year: "numeric", month: "long", day: "numeric" })}</div>
@@ -9320,7 +9418,7 @@ const AdminPage = () => {
                       const pe = profileForm.premium_ends_at ? new Date(profileForm.premium_ends_at) : null;
                       const todayStart = new Date();
                       todayStart.setHours(0, 0, 0, 0);
-                      const hasActivePremium = (activeSubscriptionPlan || "gratis") === "premium" && pe && pe >= todayStart;
+                      const hasActivePremium = normalizeSubscriptionPlan(activeSubscriptionPlan) === "premium" && pe && pe >= todayStart;
                       return hasActivePremium ? "Premium-abonnemang" : "Aktivera Premium";
                     })()}</h3>
                     <button
@@ -9337,7 +9435,7 @@ const AdminPage = () => {
                       const pe = profileForm.premium_ends_at ? new Date(profileForm.premium_ends_at) : null;
                       const todayStart = new Date();
                       todayStart.setHours(0, 0, 0, 0);
-                      const hasActivePremium = (activeSubscriptionPlan || "gratis") === "premium" && pe && pe >= todayStart;
+                      const hasActivePremium = normalizeSubscriptionPlan(activeSubscriptionPlan) === "premium" && pe && pe >= todayStart;
                       if (hasActivePremium && showPremiumAvslutaInfo) {
                         return (
                           <p className="premium-confirm-text">
@@ -9367,7 +9465,7 @@ const AdminPage = () => {
                       const pe = profileForm.premium_ends_at ? new Date(profileForm.premium_ends_at) : null;
                       const todayStart = new Date();
                       todayStart.setHours(0, 0, 0, 0);
-                      const hasActivePremium = (activeSubscriptionPlan || "gratis") === "premium" && pe && pe >= todayStart;
+                      const hasActivePremium = normalizeSubscriptionPlan(activeSubscriptionPlan) === "premium" && pe && pe >= todayStart;
                       if (hasActivePremium && showPremiumAvslutaInfo) {
                         return (
                           <button type="button" className="button" onClick={() => { setShowPremiumConfirm(false); setShowPremiumAvslutaInfo(false); }}>
@@ -9398,53 +9496,6 @@ const AdminPage = () => {
               </div>
             ) : null}
 
-            {showBasConfirm ? (
-              <div className="modal-overlay" onClick={() => setShowBasConfirm(false)}>
-                <div className="modal premium-confirm-modal bas-confirm-modal" onClick={(e) => e.stopPropagation()}>
-                  <div className="modal-header">
-                    <h3>Köp Bas – eventkrediter</h3>
-                    <button
-                      type="button"
-                      className="icon-button"
-                      onClick={() => setShowBasConfirm(false)}
-                      aria-label="Stäng"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                  <div className="modal-body">
-                    {(profileForm.bas_event_credits ?? 0) > 0 ? (
-                      <p className="premium-confirm-text bas-confirm-has-credits">
-                        Du har redan {profileForm.bas_event_credits ?? 0} {((profileForm.bas_event_credits ?? 0) === 1 ? "användbar eventkredit" : "användbara eventkrediter")} till ditt event, vill du ändå köpa mer?
-                      </p>
-                    ) : null}
-                    <p className="premium-confirm-text">
-                      Med Bas-abonnemang så kan du lägga till biljettpriser på dina event, för varje kredit kan du skapa en eller flera priser per event. Välj hur många eventsidor (1–5) du vill aktivera biljettpriser för. Betalning sker via onlinebetalning och krediter dras av när du lägger till priser för ditt event.
-                    </p>
-                    <label className="field">
-                      <span className="field-label">Antal eventsidor med biljettpriser (1–5)</span>
-                      <select
-                        value={basQuantity}
-                        onChange={(e) => setBasQuantity(Number(e.target.value))}
-                        className="field-input"
-                      >
-                        {[1, 2, 3, 4, 5].map((n) => (
-                          <option key={n} value={n}>{n}</option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-                  <div className="modal-footer">
-                    <button type="button" className="button button-outline" onClick={() => setShowBasConfirm(false)}>
-                      Avbryt
-                    </button>
-                    <button type="button" className="button" onClick={handleBasKop} disabled={basPaymentLoading}>
-                      {basPaymentLoading ? "Startar…" : "Köp"}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ) : null}
 
             <h2 className="profile-password-title">Byt lösenord</h2>
             <form className="admin-form" onSubmit={handlePasswordSubmit}>
@@ -9505,8 +9556,7 @@ const AdminPage = () => {
                 referensen till betalningsleverantören).
               </li>
               <li>
-                <strong>Abonnemang</strong> – välj Gratis, Bas eller Premium. Gratis passar om du bara vill ha gratis-event utan priser,
-                Bas/Premium krävs om du vill ta betalt via plattformen.
+                <strong>Abonnemang</strong> – alla konton får Bas vid registrering med biljettpriser och onlinebetalning. Serviceavgift tas ut per beställning enligt pristrappan. Premium (1995 kr/år) kan köpas för utökad funktionalitet framöver.
               </li>
             </ul>
 
@@ -9559,16 +9609,10 @@ const AdminPage = () => {
                 antal platser.
               </li>
               <li>
-                <strong>Gratis vs betalt event</strong> – med Gratis-abonnemang kan du bara ha gratis-biljetter (ingen betalning via
-                plattformen). För betalda biljetter krävs Bas eller Premium.
+                <strong>Biljettpriser</strong> – med Bas (ingår vid registrering) kan du lägga till betalda biljetter direkt. Vid onlinebetalning tas en serviceavgift ut av deltagaren (se avsnitt 7).
               </li>
               <li>
-                <strong>Bas-abonnemang</strong> – du köper ett antal eventkrediter och kan lägga till priser på motsvarande antal event.
-                En kredit dras när du aktiverar ett eller flera priser på ett event.
-              </li>
-              <li>
-                <strong>Premium-abonnemang</strong> – ger tillgång till betalda event enligt din prisplan utan att behöva köpa
-                engångskrediter.
+                <strong>Premium-abonnemang</strong> – valfritt tillägg (1995 kr/år) med samma grundfunktioner som Bas. Ytterligare premiumfunktioner kan tillkomma framöver.
               </li>
               <li>
                 <strong>Rabattkoder</strong> – rabattkoder är knutna till ett specifikt event. Samma kod (t.ex. EARLYBIRD) kan användas på
@@ -9608,8 +9652,15 @@ const AdminPage = () => {
                 avgifter läggs till.
               </li>
               <li>
-                <strong>Serviceavgift</strong> – vid onlinebetalning kan en serviceavgift tas ut per beställning enligt din prisplan.
-                Denna visas tydligt för deltagaren på betalningssidan och i kvittot.
+                <strong>Serviceavgift</strong> – vid onlinebetalning tas en serviceavgift ut per beställning (efter eventuell rabatt).
+                Avgiften betalas av deltagaren och ingår inte i din utbetalning. Nivåerna baseras på biljettbeloppet:
+                <ul>
+                  {serviceFeeTierLines.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+                Vid flera biljetter i samma beställning baseras avgiften på det totala biljettbeloppet efter rabatt. Avgiften
+                visas tydligt för deltagaren på betalningssidan och i kvittot.
               </li>
               <li>
                 <strong>Sammanställning</strong> – i betalningsbekräftelsen (och kvittot på e-post) ser deltagaren uppdelning mellan
@@ -9632,10 +9683,16 @@ const AdminPage = () => {
                 ihop intäkterna från de valda eventen och visar summa, eventuell avgift och nettoutbetalning.
               </li>
               <li>
-                <strong>Administrationsavgift vid utbetalning</strong> – om den sammanlagda utbetalningssumman överstiger{" "}
-                <strong> 1000 kr</strong> dras en
-                administrationsavgift på <strong>100 kr</strong> från
-                utbetalningen. Under gränsen är utbetalningen avgiftsfri. Värdena visas i Utbetalning-vyn innan du skickar din begäran.
+                <strong>Utbetalningsavgift</strong> – vid slututbetalning efter avslutat event dras en avgift på{" "}
+                <strong>{(payoutSummary.payoutFeeAmount ?? 45).toLocaleString("sv-SE")} kr exkl. moms</strong> plus{" "}
+                {payoutSummary.payoutFeeVatRatePercent ?? 25} % moms (totalt{" "}
+                <strong>
+                  {(payoutSummary.payoutFeeAmountInclVat ??
+                    Math.round((payoutSummary.payoutFeeAmount ?? 45) * 1.25 * 100) / 100
+                  ).toLocaleString("sv-SE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{" "}
+                  kr inkl. moms
+                </strong>
+                ) per utbetalningsbegäran. Delutbetalningar under pågående event är avgiftsfria. Momsuppdelningen visas på utbetalningskvittot.
               </li>
               <li>
                 <strong>Utbetalningskvitto (PDF)</strong> – när du markerar en utbetalning som betald kan du ladda ner ett
@@ -9780,10 +9837,10 @@ const AdminPage = () => {
                   <div className="admin-events-plan-wrap">
                     <div className="admin-events-plan-card">
                       <span className="admin-events-plan-label">Abonnemang</span>
-                      <span className={`admin-events-plan-badge subscription-plan-badge subscription-plan-badge-${(activeSubscriptionPlan || "gratis").toLowerCase()}`}>
-                        {(activeSubscriptionPlan || "gratis") === "gratis" ? "Gratis" : (activeSubscriptionPlan || "gratis") === "bas" ? "Bas" : "Premium"}
+                      <span className={`admin-events-plan-badge subscription-plan-badge subscription-plan-badge-${normalizeSubscriptionPlan(activeSubscriptionPlan)}`}>
+                        {formatAdminSubscriptionPlanLabel(activeSubscriptionPlan)}
                       </span>
-                      {(activeSubscriptionPlan || "gratis") === "gratis" || (activeSubscriptionPlan || "gratis") === "bas" ? (
+                      {normalizeSubscriptionPlan(activeSubscriptionPlan) === "bas" ? (
                         <button
                           type="button"
                           className="admin-events-plan-update-link"
@@ -9795,7 +9852,7 @@ const AdminPage = () => {
                           Uppdatera
                         </button>
                       ) : null}
-                      {(activeSubscriptionPlan || "gratis") === "premium" && (profileForm.premium_activated_at || profileForm.premium_ends_at) ? (
+                      {normalizeSubscriptionPlan(activeSubscriptionPlan) === "premium" && (profileForm.premium_activated_at || profileForm.premium_ends_at) ? (
                         <div className="admin-events-premium-dates">
                           {profileForm.premium_activated_at ? (
                             <span className="admin-events-date">Från {new Date(profileForm.premium_activated_at).toLocaleDateString("sv-SE", { year: "numeric", month: "short", day: "numeric" })}</span>
@@ -12384,10 +12441,14 @@ const AdminPage = () => {
                   <>
               <div className="section">
                 <h2>Biljettpriser</h2>
-                {(profileForm.subscriptionPlan || "gratis").toLowerCase() === "gratis" ? (
-                  <p className="admin-info-text admin-subscription-block">
-                    Priser är endast tillgängligt för abonnemang Bas eller Premium. Byt abonnemang under Profil för att kunna lägga till och redigera priser.
-                  </p>
+                {(normalizeSubscriptionPlan(profileForm.subscriptionPlan) === "bas" ||
+                  normalizeSubscriptionPlan(profileForm.subscriptionPlan) === "premium") ? (
+                  <div className="admin-info-text admin-service-fee-tiers">
+                    <p className="muted">
+                      Vid onlinebetalning tillkommer en serviceavgift per beställning. Avgiften betalas av deltagaren och
+                      ingår inte i din utbetalning.
+                    </p>
+                  </div>
                 ) : null}
                 {priceSectionError ? (
                   <p className="admin-error admin-error-inline">
@@ -12411,7 +12472,6 @@ const AdminPage = () => {
                       value={priceForm.name}
                       onChange={handlePriceChange}
                       required
-                      disabled={(profileForm.subscriptionPlan || "gratis").toLowerCase() === "gratis"}
                     />
                   </label>
                   <label className="field">
@@ -12424,9 +12484,19 @@ const AdminPage = () => {
                       value={priceForm.amount}
                       onChange={handlePriceChange}
                       required
-                      disabled={(profileForm.subscriptionPlan || "gratis").toLowerCase() === "gratis"}
                     />
                   </label>
+                  {(() => {
+                    const previewAmount = Number(priceForm.amount);
+                    if (!Number.isFinite(previewAmount) || previewAmount <= 0) return null;
+                    const previewFee = calcServiceFeeAmount(previewAmount);
+                    return (
+                      <p className="admin-info-text admin-service-fee-preview">
+                        Serviceavgift vid köp av en biljett till detta pris (utan rabatt):{" "}
+                        <strong>{previewFee.toLocaleString("sv-SE")} kr</strong> per beställning.
+                      </p>
+                    );
+                  })()}
                   <label className="field">
                     <span className="field-label">Beskrivning</span>
                     <textarea
@@ -12434,14 +12504,12 @@ const AdminPage = () => {
                       rows="3"
                       value={priceForm.description}
                       onChange={handlePriceChange}
-                      disabled={(profileForm.subscriptionPlan || "gratis").toLowerCase() === "gratis"}
                     ></textarea>
                   </label>
                   <div className="admin-actions">
                     <button
                       className="button"
                       type="submit"
-                      disabled={(profileForm.subscriptionPlan || "gratis").toLowerCase() === "gratis"}
                     >
                       {priceEditingId ? "Spara" : "Lägg till"}
                     </button>
@@ -12474,7 +12542,6 @@ const AdminPage = () => {
                                 type="button"
                                 className="icon-button edit"
                                 onClick={() => handlePriceEdit(price)}
-                                disabled={(profileForm.subscriptionPlan || "gratis").toLowerCase() === "gratis"}
                               >
                                 Redigera
                               </button>
@@ -12482,7 +12549,6 @@ const AdminPage = () => {
                                 type="button"
                                 className="icon-button danger"
                                 onClick={() => handlePriceDelete(price)}
-                                disabled={(profileForm.subscriptionPlan || "gratis").toLowerCase() === "gratis"}
                               >
                                 Ta bort
                               </button>
@@ -13044,6 +13110,7 @@ function App() {
   const [cartDiscountCode, setCartDiscountCode] = useState("");
   const [cartDiscountPercent, setCartDiscountPercent] = useState(0);
   const [isEventInPast, setIsEventInPast] = useState(false);
+  const [serviceFeeTierLines, setServiceFeeTierLines] = useState(() => buildServiceFeeTierLines());
 
   const pathNorm = normalizePublicPath(window.location.pathname);
   const urlRequestsEnglish = isEnglishUrlPath(window.location.pathname);
@@ -13142,6 +13209,12 @@ function App() {
   );
   const heroPlaceLabel = place.address?.trim() || "";
   const heroTitleText = event?.name || hero.title || "Event";
+
+  useEffect(() => {
+    fetchServiceFeeTiers(API_BASE)
+      .then((tiers) => setServiceFeeTierLines(buildServiceFeeTierLines(tiers)))
+      .catch(() => {});
+  }, []);
 
   // Hero-banner: parallax på loggan så den scrollar långsammare än texten.
   useEffect(() => {
@@ -14653,7 +14726,7 @@ function App() {
                         0
                       );
                       const percent = cartDiscountPercent || 0;
-                      const discountedTotal =
+                      const discountedTotal = roundCartMoney(
                         percent === 100
                           ? 0
                           : percent > 0
@@ -14662,9 +14735,10 @@ function App() {
                               const d = Math.max(0.01, base * (1 - percent / 100));
                               return sum + d;
                             }, 0)
-                          : baseTotal;
+                          : baseTotal
+                      );
                       const rabattTotal = Math.max(0, baseTotal - discountedTotal);
-                      const serviceFeeCart = percent === 100 ? 0 : discountedTotal > 0 ? 15 : 0;
+                      const serviceFeeCart = percent === 100 ? 0 : calcServiceFeeAmount(discountedTotal);
                       const payableTotal = discountedTotal + serviceFeeCart;
                       return (
                         <>
@@ -14765,8 +14839,9 @@ function App() {
 
               <h4>Betalning och serviceavgift</h4>
               <p>
-                Vid köp av biljett online kan en serviceavgift tillkomma. Avgiften används för
-                att hantera de digitala tjänsterna kring anmälan och betalning (t.ex. plattform,
+                Vid köp av biljett online kan en serviceavgift tillkomma per beställning. Avgiften baseras på
+                biljettbeloppet efter eventuell rabatt enligt följande nivåer: {serviceFeeTierLines.join("; ")}.
+                Avgiften används för att hantera de digitala tjänsterna kring anmälan och betalning (t.ex. plattform,
                 betalningsflöde och administrativ hantering).
               </p>
 

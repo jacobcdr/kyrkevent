@@ -38,6 +38,12 @@ import {
   resolveAnalyticsRange,
   resolveGeoFromRequest
 } from "./analyticsUtils.js";
+import {
+  calcServiceFeeAmount,
+  DEFAULT_SERVICE_FEE_TIERS,
+  normalizeServiceFeeTiers,
+  validateServiceFeeTiers
+} from "./serviceFee.js";
 
 const MAX_GALLERY_IMAGES_PER_EVENT = 10;
 const DEFAULT_UPLOAD_DISK_LIMIT_BYTES = 1024 * 1024 * 1024;
@@ -58,9 +64,43 @@ const BAS_PRICE_DEFAULT = 95;
 const BAS_PRICE_PER_EVENT = Math.max(1, Number(process.env.BAS_PRICE_PER_EVENT || String(BAS_PRICE_DEFAULT)) || BAS_PRICE_DEFAULT);
 const PREMIUM_PRICE_DEFAULT = 1995;
 const PREMIUM_PRICE_YEAR = Math.max(1, Number(process.env.PREMIUM_PRICE_YEAR || String(PREMIUM_PRICE_DEFAULT)) || PREMIUM_PRICE_DEFAULT);
-const SERVICE_FEE_AMOUNT =
-  Math.max(0, Number(process.env.SERVICE_FEE_AMOUNT || "15") || 0);
 const SERVICE_FEE_VAT_RATE_PERCENT = 25;
+const PLATFORM_SETTINGS_SERVICE_FEE_KEY = "service_fee_tiers";
+let cachedServiceFeeTiers = DEFAULT_SERVICE_FEE_TIERS.map((tier) => ({ ...tier }));
+
+const getServiceFeeTiers = () => cachedServiceFeeTiers;
+
+const loadServiceFeeTiersFromDb = async () => {
+  try {
+    const result = await pool.query(
+      "SELECT value FROM platform_settings WHERE key = $1",
+      [PLATFORM_SETTINGS_SERVICE_FEE_KEY]
+    );
+    if (result.rowCount > 0 && Array.isArray(result.rows[0].value)) {
+      cachedServiceFeeTiers = normalizeServiceFeeTiers(result.rows[0].value);
+    } else {
+      cachedServiceFeeTiers = DEFAULT_SERVICE_FEE_TIERS.map((tier) => ({ ...tier }));
+    }
+  } catch {
+    cachedServiceFeeTiers = DEFAULT_SERVICE_FEE_TIERS.map((tier) => ({ ...tier }));
+  }
+  return cachedServiceFeeTiers;
+};
+
+const saveServiceFeeTiersToDb = async (tiers) => {
+  await pool.query(
+    `
+      INSERT INTO platform_settings (key, value, updated_at)
+      VALUES ($1, $2::jsonb, NOW())
+      ON CONFLICT (key) DO UPDATE SET
+        value = EXCLUDED.value,
+        updated_at = NOW()
+    `,
+    [PLATFORM_SETTINGS_SERVICE_FEE_KEY, JSON.stringify(tiers)]
+  );
+  cachedServiceFeeTiers = tiers.map((tier) => ({ ...tier }));
+  return cachedServiceFeeTiers;
+};
 const FRONTEND_URL = process.env.FRONTEND_URL || "";
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.resolve("uploads");
 const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
@@ -81,16 +121,17 @@ const parseAmountEnv = (value, fallback) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.max(0, parsed) : fallback;
 };
-const PAYOUT_FEE_THRESHOLD = parseAmountEnv(process.env.PAYOUT_FEE_THRESHOLD, 500);
-const PAYOUT_FEE_AMOUNT = parseAmountEnv(process.env.PAYOUT_FEE_AMOUNT, 50);
+const PAYOUT_FEE_AMOUNT = parseAmountEnv(process.env.PAYOUT_FEE_AMOUNT, 45);
+const PAYOUT_FEE_VAT_RATE_PERCENT = 25;
 const PARTIAL_PAYOUT_MAX_PERCENT = Math.min(
   100,
   Math.max(1, Number(process.env.PARTIAL_PAYOUT_MAX_PERCENT || "70") || 70)
 );
-const GRATIS_MAX_ACTIVE_EVENTS = Math.max(
-  1,
-  parseInt(process.env.GRATIS_MAX_ACTIVE_EVENTS || "2", 10) || 2
-);
+const normalizeSubscriptionPlan = (plan) => {
+  const key = String(plan || "bas").trim().toLowerCase();
+  if (key === "premium") return "premium";
+  return "bas";
+};
 const app = express();
 const useSsl =
   String(process.env.PGSSL || "").toLowerCase() === "true" ||
@@ -470,6 +511,93 @@ function formatOrgNumberDisplay(value) {
   }
   const trimmed = String(value || "").trim();
   return trimmed || "–";
+}
+
+function formatSekPdf(value) {
+  return `${(Math.round((Number(value) || 0) * 100) / 100).toLocaleString("sv-SE", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  })} kr`;
+}
+
+function payoutPdfPageMetrics(doc) {
+  const left = doc.page.margins.left;
+  const right = doc.page.width - doc.page.margins.right;
+  return { left, right, width: right - left };
+}
+
+function drawPayoutPdfHorizontalRule(doc, y, color = "#cbd5e1") {
+  const { left, width } = payoutPdfPageMetrics(doc);
+  doc.save().strokeColor(color).lineWidth(1).moveTo(left, y).lineTo(left + width, y).stroke().restore();
+  return y + 10;
+}
+
+function drawPayoutPdfSectionTitle(doc, title, y) {
+  const { left } = payoutPdfPageMetrics(doc);
+  doc.fillColor("#334155").font("Helvetica-Bold").fontSize(11).text(title, left, y, { width: 500 });
+  return doc.y + 8;
+}
+
+function drawPayoutPdfPartyColumn(doc, { x, width, heading, lines }) {
+  const startY = doc.y;
+  doc.fillColor("#64748b").font("Helvetica-Bold").fontSize(9).text(heading.toUpperCase(), x, startY, { width });
+  let y = startY + 14;
+  doc.fillColor("#334155").font("Helvetica").fontSize(10);
+  for (const line of lines) {
+    if (!line) continue;
+    doc.text(line, x, y, { width });
+    y = doc.y + 2;
+  }
+  return Math.max(y, startY + 14);
+}
+
+function drawPayoutPdfAmountTable(doc, startY, rows, options = {}) {
+  const { left, width } = payoutPdfPageMetrics(doc);
+  const labelWidth = width * 0.68;
+  const amountWidth = width * 0.32;
+  const rowHeight = 18;
+  let y = startY;
+
+  doc.save();
+  doc.rect(left, y, width, rowHeight).fill("#f1f5f9");
+  doc.fillColor("#334155").font("Helvetica-Bold").fontSize(9);
+  doc.text("Beskrivning", left + 8, y + 5, { width: labelWidth - 16 });
+  doc.text("Belopp", left + labelWidth, y + 5, { width: amountWidth - 8, align: "right" });
+  y += rowHeight;
+
+  rows.forEach((row, index) => {
+    const isEmphasis = row.emphasis === true;
+    const isDeduction = row.deduction === true;
+    if (row.divider) {
+      y = drawPayoutPdfHorizontalRule(doc, y + 2, "#e2e8f0") - 2;
+      return;
+    }
+    if (index % 2 === 1 && !isEmphasis) {
+      doc.rect(left, y, width, rowHeight).fill("#fafafa");
+    }
+    doc.fillColor(isDeduction ? "#991b1b" : isEmphasis ? "#0f172a" : "#334155");
+    doc.font(isEmphasis ? "Helvetica-Bold" : "Helvetica").fontSize(isEmphasis ? 10 : 9.5);
+    const amountText = `${isDeduction ? "− " : ""}${formatSekPdf(row.amount)}`;
+    doc.text(row.label, left + 8, y + 5, { width: labelWidth - 16 });
+    doc.text(amountText, left + labelWidth, y + 5, { width: amountWidth - 8, align: "right" });
+    y += rowHeight;
+  });
+
+  if (options.totalRow) {
+    y = drawPayoutPdfHorizontalRule(doc, y, "#cbd5e1") - 2;
+    doc.rect(left, y, width, rowHeight + 2).fill("#eef2ff");
+    doc.fillColor("#0f172a").font("Helvetica-Bold").fontSize(10);
+    doc.text(options.totalRow.label, left + 8, y + 6, { width: labelWidth - 16 });
+    doc.text(formatSekPdf(options.totalRow.amount), left + labelWidth, y + 6, {
+      width: amountWidth - 8,
+      align: "right"
+    });
+    y += rowHeight + 4;
+  }
+
+  doc.restore();
+  doc.fillColor("#334155");
+  return y + 6;
 }
 
 function writeSubscriptionPurchaseReceiptPdf(
@@ -2402,7 +2530,7 @@ app.post("/payments/start", paymentLimiter, async (req, res) => {
     const discountedAmount = isFullDiscount
       ? 0
       : Math.max(0.01, parsed.payload.priceAmount * (1 - percentOff / 100));
-    const serviceFee = discountedAmount > 0 ? SERVICE_FEE_AMOUNT : 0;
+    const serviceFee = calcServiceFeeAmount(discountedAmount, getServiceFeeTiers());
     const chargeAmount = discountedAmount + serviceFee;
     const discountLabel = discount ? ` (${discount.code})` : "";
     const eventRow = await pool.query(
@@ -2787,7 +2915,7 @@ app.post("/payments/start-cart", paymentLimiter, async (req, res) => {
     }
 
     const allFullDiscount = processedItems.length > 0 && processedItems.every((p) => p.discountPercent === 100);
-    const serviceFee = totalAmount > 0 ? SERVICE_FEE_AMOUNT : 0;
+    const serviceFee = calcServiceFeeAmount(totalAmount, getServiceFeeTiers());
     const chargeAmount = totalAmount + serviceFee;
 
     const eventRow = await pool.query(
@@ -3121,45 +3249,7 @@ app.get("/payments/verify", async (req, res) => {
         const stillUnfulfilled = !current.booking_id && (!current.booking_ids || current.booking_ids.length === 0);
         if (stillUnfulfilled) {
           const pay = current.payload;
-          if (pay && pay.type === "bas" && pay.profile_id && pay.quantity >= 1 && pay.quantity <= 5) {
-            const qty = Math.floor(Number(pay.quantity)) || 1;
-            await client.query(
-              "UPDATE admin_user_profiles SET bas_event_credits = bas_event_credits + $1, subscription_plan = 'bas' WHERE profile_id = $2",
-              [qty, pay.profile_id]
-            );
-            await client.query(
-              "UPDATE payment_orders SET status = $1, booking_id = -1 WHERE payment_id = $2",
-              [status, paymentId]
-            );
-
-            // Skicka kvitto för köp av Bas-eventkrediter
-            try {
-              const profileRow = await client.query(
-                `
-                  SELECT first_name, last_name, email, organization, org_number
-                  FROM admin_user_profiles
-                  WHERE profile_id = $1
-                `,
-                [pay.profile_id]
-              );
-              const profile = profileRow.rows[0];
-              if (profile && profile.email && resend && RESEND_FROM) {
-                const createdDate = new Date();
-                const orderNumber = formatOrderNumber(createdDate);
-                await sendSubscriptionPurchaseReceiptEmail({
-                  profile,
-                  purchaseType: "bas",
-                  quantity: qty,
-                  amountSek: qty * BAS_PRICE_PER_EVENT,
-                  orderNumber,
-                  createdDate
-                });
-              }
-            } catch (err) {
-              // eslint-disable-next-line no-console
-              console.error("Failed to send Bas credits receipt email", err);
-            }
-          } else if (pay && pay.type === "premium" && pay.profile_id) {
+          if (pay && pay.type === "premium" && pay.profile_id) {
             await client.query(
               `UPDATE admin_user_profiles
                SET subscription_plan = 'premium',
@@ -3538,8 +3628,8 @@ app.post("/admin/users", async (req, res) => {
         const profileId = generateShortProfileId();
         try {
           await pool.query(
-            `INSERT INTO admin_user_profiles (user_id, profile_id, email)
-             VALUES ($1, $2, $3)`,
+            `INSERT INTO admin_user_profiles (user_id, profile_id, email, subscription_plan)
+             VALUES ($1, $2, $3, 'bas')`,
             [newUserId, profileId, normalizedEmail]
           );
           break;
@@ -3864,10 +3954,10 @@ app.get("/admin/profile", requireAdmin, async (req, res) => {
       );
       if (expired.rows[0]?.expired === true) {
         await pool.query(
-          "UPDATE admin_user_profiles SET subscription_plan = 'gratis' WHERE user_id = $1",
+          "UPDATE admin_user_profiles SET subscription_plan = 'bas' WHERE user_id = $1",
           [req.userId]
         );
-        profile = { ...profile, subscription_plan: "gratis" };
+        profile = { ...profile, subscription_plan: "bas" };
       }
     }
     if (profile && !profile.profile_id) {
@@ -3898,14 +3988,15 @@ app.get("/admin/profile", requireAdmin, async (req, res) => {
       email: "",
       phone: "",
       bg_number: "",
-      subscription_plan: "gratis",
+      subscription_plan: "bas",
       bas_event_credits: 0,
       premium_activated_at: null,
       premium_ends_at: null,
       premium_avslut_requested_at: null,
       vat_exempt: false
     };
-    if (!out.subscription_plan) out.subscription_plan = "gratis";
+    if (!out.subscription_plan) out.subscription_plan = "bas";
+    out.subscription_plan = normalizeSubscriptionPlan(out.subscription_plan);
     if (out.vat_exempt == null) out.vat_exempt = false;
     if (out.bas_event_credits == null) out.bas_event_credits = 0;
     res.json({ ok: true, profile: out });
@@ -3914,58 +4005,11 @@ app.get("/admin/profile", requireAdmin, async (req, res) => {
   }
 });
 
-app.post("/admin/payments/start-bas", requireAdmin, paymentLimiter, async (req, res) => {
-  if (!mollie) {
-    res.status(500).json({ ok: false, error: "MOLLIE_API_KEY is not set" });
-    return;
-  }
-  const quantity = Math.min(5, Math.max(1, Math.floor(Number(req.body?.quantity) || 1)));
-  try {
-    const profileRow = await pool.query(
-      "SELECT profile_id, first_name, last_name, organization FROM admin_user_profiles WHERE user_id = $1",
-      [req.userId]
-    );
-    const row = profileRow.rows[0];
-    const profileId = row?.profile_id || "";
-    if (!profileId) {
-      res.status(400).json({ ok: false, error: "Profil saknas. Spara profilen först." });
-      return;
-    }
-    const firstName = String(row?.first_name ?? "").trim();
-    const lastName = String(row?.last_name ?? "").trim();
-    const organization = String(row?.organization ?? "").trim();
-    if (!firstName || !lastName || !organization) {
-      res.status(400).json({
-        ok: false,
-        error: "Fyll i förnamn, efternamn och organisation under Profil och spara innan du köper Bas-eventkrediter."
-      });
-      return;
-    }
-    const amountSek = quantity * BAS_PRICE_PER_EVENT;
-    const origin = (req.get("origin") || FRONTEND_URL || req.protocol + "://" + req.get("host") || "").replace(/\/$/, "");
-    const payment = await mollie.payments.create({
-      amount: { currency: MOLLIE_CURRENCY, value: amountSek.toFixed(2) },
-      description: `${profileId} Bas ${quantity}`,
-      redirectUrl: `${origin}/payment-status`
-    });
-    const checkoutUrl = payment.getCheckoutUrl ? payment.getCheckoutUrl() : payment?._links?.checkout?.href;
-    if (!checkoutUrl) {
-      res.status(500).json({ ok: false, error: "Missing checkout URL" });
-      return;
-    }
-    const verifyToken = crypto.randomBytes(32).toString("hex");
-    await pool.query(
-      `INSERT INTO payment_orders (payment_id, payload, status, verify_token) VALUES ($1, $2, $3, $4)
-       ON CONFLICT (payment_id) DO UPDATE SET
-         payload = EXCLUDED.payload,
-         status = EXCLUDED.status,
-         verify_token = COALESCE(payment_orders.verify_token, EXCLUDED.verify_token)`,
-      [payment.id, { type: "bas", profile_id: profileId, quantity }, payment.status, verifyToken]
-    );
-    res.json({ ok: true, checkoutUrl, verifyToken });
-  } catch (error) {
-    res.status(500).json({ ok: false, error: error?.message || "Kunde inte starta betalning." });
-  }
+app.post("/admin/payments/start-bas", requireAdmin, paymentLimiter, async (_req, res) => {
+  res.status(410).json({
+    ok: false,
+    error: "Köp av eventkrediter är borttaget. Bas-abonnemang ingår vid registrering och biljettpriser aktiveras utan krediter."
+  });
 });
 
 app.post("/admin/payments/start-premium", requireAdmin, paymentLimiter, async (req, res) => {
@@ -4045,9 +4089,9 @@ app.put("/admin/profile", requireAdmin, async (req, res) => {
     vatExempt
   } = req.body || {};
   const vatExemptBool = vatExempt === true || vatExempt === "true" || vatExempt === 1 || vatExempt === "1";
-  const plan = ["gratis", "bas", "premium"].includes(String(subscriptionPlan || "").toLowerCase())
+  const plan = ["bas", "premium"].includes(String(subscriptionPlan || "").toLowerCase())
     ? String(subscriptionPlan).toLowerCase()
-    : "gratis";
+    : normalizeSubscriptionPlan(subscriptionPlan);
   try {
     const existing = await pool.query(
       "SELECT profile_id, subscription_plan, premium_activated_at, premium_ends_at FROM admin_user_profiles WHERE user_id = $1",
@@ -4058,9 +4102,9 @@ app.put("/admin/profile", requireAdmin, async (req, res) => {
     const todayStr = new Date().toISOString().slice(0, 10);
     const endsAtStr = premiumEndsAt ? new Date(premiumEndsAt).toISOString().slice(0, 10) : "";
     const premiumStillActive = wasPremium && endsAtStr && endsAtStr >= todayStr;
-    let effectivePlan = premiumStillActive && (plan === "gratis" || plan === "bas") ? "premium" : plan;
+    let effectivePlan = premiumStillActive && plan === "bas" ? "premium" : plan;
     if (plan === "premium" && !premiumStillActive) {
-      effectivePlan = (existing.rows[0]?.subscription_plan || "gratis").toLowerCase();
+      effectivePlan = normalizeSubscriptionPlan(existing.rows[0]?.subscription_plan);
     }
     let profileId = existing.rows[0]?.profile_id;
     for (let attempt = 0; attempt < 10; attempt++) {
@@ -4521,18 +4565,51 @@ app.get("/admin/payout-summary", requireAdmin, async (req, res) => {
       events: eventsWithRevenue,
       grandTotal,
       payoutDaysAfterEvent: PAYOUT_DAYS_AFTER_EVENT,
-      payoutFeeThreshold: PAYOUT_FEE_THRESHOLD,
-      payoutFeeAmount: PAYOUT_FEE_AMOUNT
+      payoutFeeAmount: PAYOUT_FEE_AMOUNT,
+      payoutFeeVatRatePercent: PAYOUT_FEE_VAT_RATE_PERCENT,
+      payoutFeeAmountInclVat: getStandardPayoutFeeBreakdown().feeInclVat
     });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to load payout summary" });
   }
 });
 
-function computePayoutFee(grossAmount) {
-  const fee = grossAmount > PAYOUT_FEE_THRESHOLD ? PAYOUT_FEE_AMOUNT : 0;
-  const net = Math.round((grossAmount - fee) * 100) / 100;
-  return { fee, net };
+function getStandardPayoutFeeBreakdown() {
+  const feeExclVat = roundMoney(PAYOUT_FEE_AMOUNT);
+  const feeVat = roundMoney((feeExclVat * PAYOUT_FEE_VAT_RATE_PERCENT) / 100);
+  const feeInclVat = roundMoney(feeExclVat + feeVat);
+  return { feeExclVat, feeVat, feeInclVat };
+}
+
+function breakdownPayoutFeeDeduction(deductionInclVat) {
+  const total = roundMoney(deductionInclVat);
+  if (total <= 0) {
+    return { feeExclVat: 0, feeVat: 0, feeInclVat: 0 };
+  }
+  const standard = getStandardPayoutFeeBreakdown();
+  if (total >= standard.feeInclVat - 0.009) {
+    return standard;
+  }
+  const feeExclVat = roundMoney(total / (1 + PAYOUT_FEE_VAT_RATE_PERCENT / 100));
+  const feeVat = roundMoney(total - feeExclVat);
+  return { feeExclVat, feeVat, feeInclVat: total };
+}
+
+function computeFinalPayoutFee(grossAmount) {
+  const gross = roundMoney(grossAmount);
+  if (gross <= 0.009) {
+    return { fee: 0, feeExclVat: 0, feeVat: 0, net: 0 };
+  }
+  const standard = getStandardPayoutFeeBreakdown();
+  const fee = roundMoney(Math.min(standard.feeInclVat, gross));
+  const { feeExclVat, feeVat } = breakdownPayoutFeeDeduction(fee);
+  const net = roundMoney(gross - fee);
+  return { fee, feeExclVat, feeVat, net };
+}
+
+function computePartialPayoutAmount(grossAmount) {
+  const gross = roundMoney(grossAmount);
+  return { fee: 0, net: gross };
 }
 
 function computePartialPayoutMaxGross(totalRevenue) {
@@ -4874,7 +4951,7 @@ app.post("/admin/payout-request", requireAdmin, async (req, res) => {
         });
         return;
       }
-      ({ fee: payoutFee, net: netAmount } = computePayoutFee(grandTotal));
+      ({ fee: payoutFee, net: netAmount } = computeFinalPayoutFee(grandTotal));
       eventNamesStr = eventsWithRevenue.map((e) => e.name).join(", ");
       await client.query(
         "INSERT INTO payout_requests (user_id, profile_id, organization, org_number, status, event_ids, event_names, amount, payout_fee, net_amount) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
@@ -4905,7 +4982,17 @@ app.post("/admin/payout-request", requireAdmin, async (req, res) => {
       (e) =>
         `  ${e.name}: ${e.totalRevenue.toFixed(2)} SEK (${e.paidCount} betalda anmälningar)`
     );
-    const feeLine = payoutFee > 0 ? `  Avgift (utbetalning över ${PAYOUT_FEE_THRESHOLD} SEK): ${payoutFee.toFixed(2)} SEK` : null;
+    const feeLine =
+      payoutFee > 0
+        ? (() => {
+            const { feeExclVat, feeVat, feeInclVat } = breakdownPayoutFeeDeduction(payoutFee);
+            return [
+              `  Utbetalningsavgift exkl. moms: ${feeExclVat.toFixed(2)} SEK`,
+              `  Moms på utbetalningsavgift (${PAYOUT_FEE_VAT_RATE_PERCENT}%): ${feeVat.toFixed(2)} SEK`,
+              `  Utbetalningsavgift inkl. moms: ${feeInclVat.toFixed(2)} SEK`
+            ];
+          })()
+        : null;
     const body = [
       "En användare har begärt utbetalning av intäkter. Efter att vi har godkänt utbetalningen så genomförs överföringen. Det tar normalt upp till 10 dagar.",
       "",
@@ -4922,7 +5009,7 @@ app.post("/admin/payout-request", requireAdmin, async (req, res) => {
       ...lines,
       "",
       `Summa intäkter: ${grandTotal.toFixed(2)} SEK`,
-      ...(feeLine ? [feeLine, `Utbetalning (netto): ${netAmount.toFixed(2)} SEK`] : [])
+      ...(feeLine ? [...feeLine, `Utbetalning (netto): ${netAmount.toFixed(2)} SEK`] : [])
     ].join("\n");
     try {
       await resend.emails.send({
@@ -4961,6 +5048,37 @@ const requireSuperAdmin = async (req, res, next) => {
     res.status(500).json({ ok: false, error: "Failed to check admin" });
   }
 };
+
+app.get("/service-fee/tiers", async (_req, res) => {
+  try {
+    res.json({ ok: true, tiers: getServiceFeeTiers() });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Failed to load service fee tiers" });
+  }
+});
+
+app.get("/admin/platform-settings/service-fee-tiers", requireAdmin, requireSuperAdmin, async (_req, res) => {
+  try {
+    res.json({ ok: true, tiers: getServiceFeeTiers() });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Failed to load service fee tiers" });
+  }
+});
+
+app.put("/admin/platform-settings/service-fee-tiers", requireAdmin, requireSuperAdmin, async (req, res) => {
+  const body = req.body || {};
+  const validation = validateServiceFeeTiers(body.tiers);
+  if (!validation.ok) {
+    res.status(400).json({ ok: false, error: validation.error });
+    return;
+  }
+  try {
+    const tiers = await saveServiceFeeTiersToDb(validation.tiers);
+    res.json({ ok: true, tiers });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Failed to save service fee tiers" });
+  }
+});
 
 app.get("/admin/admin-payments", requireAdmin, requireSuperAdmin, async (req, res) => {
   const fromDate = (req.query.fromDate || "").toString().trim() || null;
@@ -5558,7 +5676,7 @@ app.get("/admin/organizations", requireAdmin, requireSuperAdmin, async (_req, re
       profileId: row.profile_id || "",
       organization: row.organization || "",
       username: row.username || "",
-      subscriptionPlan: (row.subscription_plan || "gratis").toLowerCase(),
+      subscriptionPlan: normalizeSubscriptionPlan(row.subscription_plan),
       basEventCredits: Number(row.bas_event_credits) || 0,
       premiumActivatedAt: row.premium_activated_at ? row.premium_activated_at.toISOString() : null,
       premiumEndsAt: row.premium_ends_at ? row.premium_ends_at.toISOString() : null,
@@ -5608,7 +5726,7 @@ app.get("/admin/profiles/:profileId", requireAdmin, requireSuperAdmin, async (re
         email: row.email || "",
         phone: row.phone || "",
         bgNumber: row.bg_number || "",
-        subscriptionPlan: (row.subscription_plan || "gratis").toLowerCase(),
+        subscriptionPlan: normalizeSubscriptionPlan(row.subscription_plan),
         basEventCredits: Number(row.bas_event_credits) || 0,
         premiumActivatedAt: row.premium_activated_at ? row.premium_activated_at.toISOString() : null,
         premiumEndsAt: row.premium_ends_at ? row.premium_ends_at.toISOString() : null,
@@ -5623,28 +5741,8 @@ app.get("/admin/profiles/:profileId", requireAdmin, requireSuperAdmin, async (re
   }
 });
 
-app.patch("/admin/profiles/:profileId/bas-credits", requireAdmin, requireSuperAdmin, async (req, res) => {
-  const profileId = (req.params.profileId || "").toString().trim();
-  if (!profileId) {
-    return res.status(400).json({ ok: false, error: "Profil-ID saknas" });
-  }
-  let value = req.body?.bas_event_credits ?? req.body?.basEventCredits;
-  if (value === undefined || value === null) {
-    return res.status(400).json({ ok: false, error: "bas_event_credits saknas" });
-  }
-  const num = Math.max(0, Math.floor(Number(value)) || 0);
-  try {
-    const result = await pool.query(
-      "UPDATE admin_user_profiles SET bas_event_credits = $1 WHERE profile_id = $2 RETURNING profile_id, bas_event_credits",
-      [num, profileId]
-    );
-    if (result.rowCount === 0) {
-      return res.status(404).json({ ok: false, error: "Profil hittades inte" });
-    }
-    res.json({ ok: true, profileId, basEventCredits: result.rows[0].bas_event_credits });
-  } catch (error) {
-    res.status(500).json({ ok: false, error: "Kunde inte uppdatera krediter" });
-  }
+app.patch("/admin/profiles/:profileId/bas-credits", requireAdmin, requireSuperAdmin, async (_req, res) => {
+  res.status(410).json({ ok: false, error: "Eventkrediter används inte längre." });
 });
 
 app.patch("/admin/profiles/:profileId/subscription-plan", requireAdmin, requireSuperAdmin, async (req, res) => {
@@ -5653,10 +5751,10 @@ app.patch("/admin/profiles/:profileId/subscription-plan", requireAdmin, requireS
     return res.status(400).json({ ok: false, error: "Profil-ID saknas" });
   }
   const raw = (req.body?.subscription_plan ?? req.body?.subscriptionPlan ?? "").toString().trim().toLowerCase();
-  const allowed = ["gratis", "bas", "premium"];
-  const plan = allowed.includes(raw) ? raw : null;
+  const allowed = ["bas", "premium"];
+  const plan = allowed.includes(raw) || raw === "gratis" ? (raw === "gratis" ? "bas" : raw) : null;
   if (!plan) {
-    return res.status(400).json({ ok: false, error: "Ogiltig abonnemangsform. Använd gratis, bas eller premium." });
+    return res.status(400).json({ ok: false, error: "Ogiltig abonnemangsform. Använd bas eller premium." });
   }
   try {
     let result;
@@ -6037,7 +6135,7 @@ app.post("/admin/events/:eventId/partial-payout", requireAdmin, requireSuperAdmi
         error: `Beloppet överstiger kvarvarande intäkter (${remaining.toFixed(2)} SEK).`
       });
     }
-    const { fee: payoutFee, net: netAmount } = computePayoutFee(grossAmount);
+    const { fee: payoutFee, net: netAmount } = computePartialPayoutAmount(grossAmount);
     const insertResult = await client.query(
       `
         INSERT INTO event_payout_disbursements (
@@ -6125,79 +6223,194 @@ function writePayoutReceiptPdf(doc, {
   vatAmount,
   vatInclusiveAmount
 }) {
-  const isVatExempt = vatExempt === true;
+  const { left, right, width } = payoutPdfPageMetrics(doc);
+  const paidAtLabel = paidAt
+    ? new Date(paidAt).toLocaleString("sv-SE", { dateStyle: "medium", timeStyle: "short" })
+    : "–";
+  const payoutTypeLabel = isPartial
+    ? "Delutbetalning"
+    : isFinalPayout
+      ? "Slututbetalning"
+      : "Utbetalning";
+  const feeBreakdown = payoutFee > 0 ? breakdownPayoutFeeDeduction(payoutFee) : null;
+
   const logoPath = path.resolve(__dirname, "..", "..", "frontend", "public", "kyrkevent2.png");
+  const headerTop = 42;
+  const titleColumnLeft = left + Math.max(width * 0.34, 170);
+  const titleColumnWidth = left + width - titleColumnLeft;
+  let headerBottom = headerTop + 12;
+
   if (fs.existsSync(logoPath)) {
-    doc.image(logoPath, 50, 50, { width: 120 });
-    doc.y = 50 + 55;
-    doc.moveDown(1);
+    doc.image(logoPath, left, headerTop, { width: 105 });
+    headerBottom = Math.max(headerBottom, headerTop + 58);
   }
-  doc.fontSize(20).text(title, { continued: false });
-  doc.moveDown();
-  doc.fontSize(11);
-  doc.text(`${receiptLabel}: ${receiptId}`);
-  doc.moveDown(0.5);
-  doc.text("Utbetalande organisation: Lonetec AB");
-  doc.text("Organisationsnummer: 556907-4189");
-  doc.text(`Mottagande organisation: ${organization || "–"}`);
-  if (orgNumber) {
-    doc.text(`Organisationsnummer (mottagare): ${orgNumber}`);
-  }
-  doc.moveDown(0.5);
-  doc.text(`Event: ${eventNames || "–"}`);
-  doc.text(`Antal bokningar: ${bookingCount}`);
-  doc.text("Betalmetod: online (swish/kort)");
-  if (eventDates.length > 0) {
-    doc.text("Eventdatum: " + eventDates.join("; "));
-  }
-  doc.text(
-    `Datum för utbetalning: ${paidAt ? new Date(paidAt).toLocaleString("sv-SE", { dateStyle: "medium", timeStyle: "short" }) : "–"}`
-  );
-  if (isPartial) {
-    doc.text("Typ: Delutbetalning");
-    if (grossAmount != null) {
-      doc.text(`Bruttobelopp (del): ${Number(grossAmount).toFixed(2)} SEK`);
-    }
-    if (payoutFee > 0) {
-      doc.text(`Avgift: ${Number(payoutFee).toFixed(2)} SEK`);
-    }
-    if (remainingRevenue != null) {
-      doc.text(`Kvar att utbetala: ${Number(remainingRevenue).toFixed(2)} SEK`);
-    }
-  } else if (isFinalPayout) {
-    doc.text("Typ: Slututbetalning");
-    if (priorPartialGross != null && Number(priorPartialGross) > 0) {
-      doc.text(`Tidigare delutbetalning: ${Number(priorPartialNet || 0).toFixed(2)} SEK (netto)`);
-    }
-    if (grossAmount != null) {
-      doc.text(`Bruttobelopp (slut): ${Number(grossAmount).toFixed(2)} SEK`);
-    }
-    if (payoutFee > 0) {
-      doc.text(`Avgift (slut): ${Number(payoutFee).toFixed(2)} SEK`);
-    }
-  }
-  doc.moveDown(0.5);
-  if (isFinalPayout && combinedNetAmount != null) {
-    doc.text(`Utbetalt belopp (denna utbetalning): ${Number(netAmount).toFixed(2)} SEK`);
-    doc.text(`Totalt utbetalt inkl. delutbetalning: ${Number(combinedNetAmount).toFixed(2)} SEK`);
-  } else {
-    doc.text(`Utbetalt belopp: ${Number(netAmount).toFixed(2)} SEK`);
-  }
-  doc.moveDown(0.5);
-  if (isVatExempt) {
-    doc.text("Moms: Ingen moms utgår (momsbefriad verksamhet)");
-  } else {
-    const vatLabel = vatRatePercent != null ? `${vatRatePercent}%` : "blandade satser";
-    doc.text(`Belopp exkl. moms: ${Number(vatExclAmount || 0).toFixed(2)} SEK`);
-    doc.text(`Moms (${vatLabel}): ${Number(vatAmount || 0).toFixed(2)} SEK`);
-    doc.text(`Belopp inkl. moms: ${Number(vatInclusiveAmount || 0).toFixed(2)} SEK`);
-  }
-  doc.moveDown();
-  doc.fontSize(9).fillColor("#666");
-  doc.text("Kontakt: kontakt@lonetec.se", { continued: false });
-  doc.text(`Lonetec AB - bokning - ${isPartial ? "delutbetalningskvitto" : "utbetalningskvitto"}`, {
-    continued: false
+
+  const titleText = isPartial ? "Delutbetalningskvitto" : "Utbetalningskvitto";
+  doc.fillColor("#0f172a").font("Helvetica-Bold").fontSize(20);
+  doc.text(titleText, titleColumnLeft, headerTop + 6, {
+    width: titleColumnWidth,
+    align: "right"
   });
+  doc.fillColor("#64748b").font("Helvetica").fontSize(10);
+  doc.text("Specifikation via Kyrkevent.se", titleColumnLeft, doc.y + 6, {
+    width: titleColumnWidth,
+    align: "right"
+  });
+  headerBottom = Math.max(headerBottom, doc.y + 10);
+
+  let y = headerBottom + 8;
+  y = drawPayoutPdfHorizontalRule(doc, y);
+
+  doc.fillColor("#334155").font("Helvetica").fontSize(10);
+  doc.text(`${receiptLabel}: ${receiptId}`, left, y, { width: width * 0.5 });
+  doc.text(`Utbetalningsdatum: ${paidAtLabel}`, left + width * 0.5, y, {
+    width: width * 0.5,
+    align: "right"
+  });
+  y = doc.y + 14;
+
+  const partyStartY = y;
+  const colGap = 24;
+  const colWidth = (width - colGap) / 2;
+  doc.y = partyStartY;
+  const leftBottom = drawPayoutPdfPartyColumn(doc, {
+    x: left,
+    width: colWidth,
+    heading: "Utbetalande",
+    lines: [
+      RECEIPT_SELLER,
+      `Org.nr: ${formatOrgNumberDisplay(RECEIPT_SELLER_ORG_NUMBER)}`,
+      `Momsreg.nr: ${RECEIPT_SELLER_VAT_NUMBER}`,
+      RECEIPT_SELLER_ADDRESS,
+      "kontakt@lonetec.se"
+    ]
+  });
+  doc.y = partyStartY;
+  const rightBottom = drawPayoutPdfPartyColumn(doc, {
+    x: left + colWidth + colGap,
+    width: colWidth,
+    heading: "Mottagare",
+    lines: [
+      organization || "–",
+      orgNumber ? `Org.nr: ${formatOrgNumberDisplay(orgNumber)}` : null,
+      "Mottagare enligt registrerad profil i Kyrkevent.se"
+    ]
+  });
+  y = Math.max(leftBottom, rightBottom) + 12;
+  y = drawPayoutPdfHorizontalRule(doc, y);
+
+  y = drawPayoutPdfSectionTitle(doc, "Event och utbetalning", y);
+  doc.fillColor("#334155").font("Helvetica").fontSize(10);
+  const eventInfo = [
+    ["Event", eventNames || "–"],
+    ["Eventdatum", eventDates.length > 0 ? eventDates.join("; ") : "–"],
+    ["Antal betalda bokningar", String(bookingCount ?? "–")],
+    ["Betalmetod", "Online (Swish/kort)"],
+    ["Utbetalningstyp", payoutTypeLabel]
+  ];
+  eventInfo.forEach(([label, value]) => {
+    doc.fillColor("#64748b").font("Helvetica-Bold").fontSize(9).text(`${label}:`, left, y, { continued: true, width: 130 });
+    doc.fillColor("#334155").font("Helvetica").fontSize(10).text(` ${value}`, { width: width - 130 });
+    y = doc.y + 4;
+  });
+  y += 8;
+
+  y = drawPayoutPdfSectionTitle(doc, "Ekonomisk sammanställning", y);
+  const amountRows = [];
+  if (!isPartial && priorPartialGross != null && Number(priorPartialGross) > 0) {
+    amountRows.push({
+      label: "Tidigare delutbetalning (netto)",
+      amount: Number(priorPartialNet || 0)
+    });
+  }
+  if (isPartial) {
+    amountRows.push({ label: "Bruttobelopp (delutbetalning)", amount: Number(grossAmount || 0) });
+    if (remainingRevenue != null) {
+      amountRows.push({ label: "Kvar att utbetala efter delutbetalning", amount: Number(remainingRevenue) });
+    }
+  } else {
+    amountRows.push({
+      label: isFinalPayout ? "Bruttobelopp (slututbetalning)" : "Bruttobelopp",
+      amount: Number(grossAmount || 0)
+    });
+    if (feeBreakdown) {
+      amountRows.push({ divider: true });
+      amountRows.push({
+        label: "Utbetalningsavgift exkl. moms",
+        amount: feeBreakdown.feeExclVat,
+        deduction: true
+      });
+      amountRows.push({
+        label: `Moms på utbetalningsavgift (${PAYOUT_FEE_VAT_RATE_PERCENT} %)`,
+        amount: feeBreakdown.feeVat,
+        deduction: true
+      });
+      amountRows.push({
+        label: "Utbetalningsavgift inkl. moms",
+        amount: feeBreakdown.feeInclVat,
+        deduction: true
+      });
+    }
+  }
+
+  const tableTotal = isPartial
+    ? { label: "Utbetalt belopp", amount: Number(netAmount || 0) }
+    : isFinalPayout && combinedNetAmount != null
+      ? { label: "Totalt utbetalt inkl. tidigare delutbetalning", amount: Number(combinedNetAmount) }
+      : { label: "Utbetalt belopp", amount: Number(netAmount || 0) };
+
+  y = drawPayoutPdfAmountTable(doc, y, amountRows, { totalRow: tableTotal });
+
+  if (!isPartial && isFinalPayout && combinedNetAmount != null) {
+    doc.fillColor("#64748b").font("Helvetica").fontSize(9);
+    doc.text(
+      `Varav denna slututbetalning: ${formatSekPdf(netAmount)}.`,
+      left,
+      y,
+      { width }
+    );
+    y = doc.y + 10;
+  }
+
+  if (!isPartial) {
+    y = drawPayoutPdfSectionTitle(doc, "Momsspecifikation – utbetald biljettintäkt", y);
+    doc.fillColor("#334155").font("Helvetica").fontSize(10);
+    if (vatExempt === true) {
+      doc.text(
+        "Ingen moms utgår på biljettintäkten (momsbefriad verksamhet enligt registrerad profil/event).",
+        left,
+        y,
+        { width }
+      );
+      y = doc.y + 8;
+    } else {
+      const vatLabel = vatRatePercent != null ? `${vatRatePercent} %` : "blandade satser";
+      doc.text(`Belopp exkl. moms: ${formatSekPdf(vatExclAmount)}`, left, y, { width: width * 0.5 });
+      doc.text(`Moms (${vatLabel}): ${formatSekPdf(vatAmount)}`, left + width * 0.5, y, {
+        width: width * 0.5,
+        align: "right"
+      });
+      y = doc.y + 4;
+      doc.font("Helvetica-Bold").text(`Belopp inkl. moms: ${formatSekPdf(vatInclusiveAmount)}`, left, y, { width });
+      doc.font("Helvetica");
+      y = doc.y + 8;
+    }
+  }
+
+  y = drawPayoutPdfHorizontalRule(doc, y + 4, "#e2e8f0");
+  doc.fillColor("#64748b").font("Helvetica").fontSize(8.5);
+  doc.text(
+    "Detta dokument utgör kvitto/specifikation för utbetalning av biljettintäkter som samlats in via Kyrkevent.se. Lonetec AB agerar som betalningsförmedlare. Utbetalning sker till angiven mottagare enligt registrerade uppgifter. Vid frågor, kontakta kontakt@lonetec.se.",
+    left,
+    y,
+    { width, lineGap: 2 }
+  );
+  y = doc.y + 10;
+  doc.text(`Lonetec AB · Org.nr ${formatOrgNumberDisplay(RECEIPT_SELLER_ORG_NUMBER)} · ${isPartial ? "Delutbetalningskvitto" : "Utbetalningskvitto"}`, left, y, {
+    width,
+    align: "center"
+  });
+  doc.fillColor("#334155");
 }
 
 function writeRevenueReportPdf(doc, {
@@ -6598,7 +6811,7 @@ app.get("/admin/payout-disbursements/:id/receipt.pdf", requireAdmin, async (req,
     const filename = `delutbetalningskvitto-${id}.pdf`;
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    const doc = new PDFDocument({ margin: 50 });
+    const doc = new PDFDocument({ margin: 50, size: "A4" });
     doc.pipe(res);
     writePayoutReceiptPdf(doc, {
       title: "Delutbetalningskvitto",
@@ -6710,7 +6923,7 @@ app.get("/admin/payout-requests/:id/receipt.pdf", requireAdmin, async (req, res)
     const filename = `utbetalningskvitto-${id}.pdf`;
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    const doc = new PDFDocument({ margin: 50 });
+    const doc = new PDFDocument({ margin: 50, size: "A4" });
     doc.pipe(res);
     writePayoutReceiptPdf(doc, {
       title: isFinalPayout ? "Utbetalningskvitto (slututbetalning)" : "Utbetalningskvitto",
@@ -7180,26 +7393,9 @@ app.post("/admin/events", requireAdmin, async (req, res) => {
     "SELECT subscription_plan, COALESCE(vat_exempt, false) AS vat_exempt FROM admin_user_profiles WHERE user_id = $1",
     [req.userId]
   );
-  const plan = (planRow.rows[0]?.subscription_plan || "gratis").toLowerCase();
+  const plan = normalizeSubscriptionPlan(planRow.rows[0]?.subscription_plan);
   const profileVatExempt = planRow.rows[0]?.vat_exempt === true;
   const vatRatePercent = profileVatExempt ? 25 : normalizeEventVatRatePercent(vatRatePercentBody);
-  if (plan === "gratis") {
-    const countResult = await pool.query(
-      `SELECT COUNT(*)::int AS count FROM events
-       WHERE user_id = $1 AND (event_end_date IS NULL OR event_end_date >= CURRENT_DATE)`,
-      [req.userId]
-    );
-    const activeCount = countResult.rows[0]?.count ?? 0;
-    if (activeCount >= GRATIS_MAX_ACTIVE_EVENTS) {
-      res.status(403).json({
-        ok: false,
-        error: `På gratis abonnemang får du ha max ${GRATIS_MAX_ACTIVE_EVENTS} aktiva event samtidigt. Använd Bas eller Premium för att kunna ha obegränsade event.`,
-        limit: GRATIS_MAX_ACTIVE_EVENTS,
-        activeCount
-      });
-      return;
-    }
-  }
 
   const client = await pool.connect();
   try {
@@ -7522,36 +7718,18 @@ app.get("/admin/prices", requireAdmin, async (req, res) => {
   }
 });
 
-const requireSubscriptionForPrices = async (req, res, eventId = null) => {
+const requireSubscriptionForPrices = async (req, res) => {
   const profileRow = await pool.query(
-    "SELECT subscription_plan, COALESCE(bas_event_credits, 0) AS bas_event_credits FROM admin_user_profiles WHERE user_id = $1",
+    "SELECT subscription_plan FROM admin_user_profiles WHERE user_id = $1",
     [req.userId]
   );
-  const plan = (profileRow.rows[0]?.subscription_plan || "gratis").toLowerCase();
-  const basCredits = Number(profileRow.rows[0]?.bas_event_credits) || 0;
-  if (plan === "gratis") {
+  const plan = normalizeSubscriptionPlan(profileRow.rows[0]?.subscription_plan);
+  if (plan !== "bas" && plan !== "premium") {
     res.status(403).json({
       ok: false,
-      error: "Priser är endast tillgängligt för abonnemang Bas eller Premium. Byt abonnemang under Profil."
+      error: "Priser är endast tillgängligt för abonnemang Bas eller Premium."
     });
     return false;
-  }
-  if (plan === "bas") {
-    let eventCreditUsed = false;
-    if (eventId) {
-      const eventRow = await pool.query(
-        "SELECT bas_credit_used FROM events WHERE id = $1 AND user_id = $2",
-        [eventId, req.userId]
-      );
-      eventCreditUsed = eventRow.rows[0]?.bas_credit_used === true;
-    }
-    if (basCredits <= 0 && !eventCreditUsed) {
-      res.status(403).json({
-        ok: false,
-        error: "Du har inga Bas-eventkrediter kvar. Köp fler under Profil → Abonnemang Bas eller Premium."
-      });
-      return false;
-    }
   }
   return true;
 };
@@ -7562,7 +7740,7 @@ app.post("/admin/prices", requireAdmin, async (req, res) => {
   if (!parsedEventId) {
     return;
   }
-  if (!(await requireSubscriptionForPrices(req, res, parsedEventId))) {
+  if (!(await requireSubscriptionForPrices(req, res))) {
     return;
   }
   if (!name || amount === undefined || amount === null || amount === "") {
@@ -7591,29 +7769,6 @@ app.post("/admin/prices", requireAdmin, async (req, res) => {
         parsedEventId
       ]
     );
-    const planRow = await pool.query(
-      "SELECT subscription_plan, COALESCE(bas_event_credits, 0) AS bas_event_credits FROM admin_user_profiles WHERE user_id = $1",
-      [req.userId]
-    );
-    const plan = (planRow.rows[0]?.subscription_plan || "gratis").toLowerCase();
-    const basCredits = Number(planRow.rows[0]?.bas_event_credits) || 0;
-    if (plan === "bas" && parsedAmount > 0 && basCredits > 0) {
-      const eventRow = await pool.query(
-        "SELECT bas_credit_used FROM events WHERE id = $1 AND user_id = $2",
-        [parsedEventId, req.userId]
-      );
-      const alreadyUsed = eventRow.rows[0]?.bas_credit_used === true;
-      if (!alreadyUsed) {
-        await pool.query(
-          "UPDATE admin_user_profiles SET bas_event_credits = bas_event_credits - 1 WHERE user_id = $1",
-          [req.userId]
-        );
-        await pool.query(
-          "UPDATE events SET bas_credit_used = true WHERE id = $1 AND user_id = $2",
-          [parsedEventId, req.userId]
-        );
-      }
-    }
     res.status(201).json({ ok: true, price: result.rows[0] });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to save price" });
@@ -7627,7 +7782,7 @@ app.put("/admin/prices/:id", requireAdmin, async (req, res) => {
   if (!parsedEventId) {
     return;
   }
-  if (!(await requireSubscriptionForPrices(req, res, parsedEventId))) {
+  if (!(await requireSubscriptionForPrices(req, res))) {
     return;
   }
   if (!name || amount === undefined || amount === null || amount === "") {
@@ -7666,7 +7821,7 @@ app.delete("/admin/prices/:id", requireAdmin, async (req, res) => {
   if (!eventId) {
     return;
   }
-  if (!(await requireSubscriptionForPrices(req, res, eventId))) {
+  if (!(await requireSubscriptionForPrices(req, res))) {
     return;
   }
   try {
@@ -7677,34 +7832,6 @@ app.delete("/admin/prices/:id", requireAdmin, async (req, res) => {
     if (result.rowCount === 0) {
       res.status(404).json({ ok: false, error: "Price not found" });
       return;
-    }
-    const planRow = await pool.query(
-      "SELECT subscription_plan FROM admin_user_profiles WHERE user_id = $1",
-      [req.userId]
-    );
-    const plan = (planRow.rows[0]?.subscription_plan || "gratis").toLowerCase();
-    if (plan === "bas") {
-      const countRow = await pool.query(
-        "SELECT COUNT(*)::int AS cnt FROM prices WHERE event_id = $1",
-        [eventId]
-      );
-      const remainingPrices = countRow.rows[0]?.cnt ?? 0;
-      if (remainingPrices === 0) {
-        const eventRow = await pool.query(
-          "SELECT bas_credit_used FROM events WHERE id = $1 AND user_id = $2",
-          [eventId, req.userId]
-        );
-        if (eventRow.rows[0]?.bas_credit_used === true) {
-          await pool.query(
-            "UPDATE admin_user_profiles SET bas_event_credits = bas_event_credits + 1 WHERE user_id = $1",
-            [req.userId]
-          );
-          await pool.query(
-            "UPDATE events SET bas_credit_used = false WHERE id = $1 AND user_id = $2",
-            [eventId, req.userId]
-          );
-        }
-      }
     }
     res.json({ ok: true });
   } catch (error) {
@@ -9616,7 +9743,7 @@ const ensureBookingsTable = async () => {
     ALTER TABLE admin_user_profiles
       ADD COLUMN IF NOT EXISTS profile_id TEXT UNIQUE,
       ADD COLUMN IF NOT EXISTS org_number TEXT NOT NULL DEFAULT '',
-      ADD COLUMN IF NOT EXISTS subscription_plan TEXT NOT NULL DEFAULT 'gratis',
+      ADD COLUMN IF NOT EXISTS subscription_plan TEXT NOT NULL DEFAULT 'bas',
       ADD COLUMN IF NOT EXISTS bas_event_credits INTEGER NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS premium_activated_at TIMESTAMPTZ,
       ADD COLUMN IF NOT EXISTS premium_ends_at TIMESTAMPTZ,
@@ -10176,6 +10303,32 @@ const ensureBookingsTable = async () => {
       ON event_payout_disbursements (event_id, created_at DESC)
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS platform_settings (
+      key TEXT PRIMARY KEY,
+      value JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(
+    `
+      INSERT INTO platform_settings (key, value)
+      VALUES ($1, $2::jsonb)
+      ON CONFLICT (key) DO NOTHING
+    `,
+    [PLATFORM_SETTINGS_SERVICE_FEE_KEY, JSON.stringify(DEFAULT_SERVICE_FEE_TIERS)]
+  );
+
+  await pool.query(`
+    ALTER TABLE admin_user_profiles
+      ALTER COLUMN subscription_plan SET DEFAULT 'bas'
+  `);
+  await pool.query(`
+    UPDATE admin_user_profiles
+    SET subscription_plan = 'bas'
+    WHERE subscription_plan IS NULL OR subscription_plan = 'gratis'
+  `);
+
   if (defaultEventId) {
     await pool.query("UPDATE bookings SET event_id = $1 WHERE event_id IS NULL", [
       defaultEventId
@@ -10207,6 +10360,7 @@ const ensureBookingsTable = async () => {
 
 waitForDatabase(pool)
   .then(() => ensureBookingsTable())
+  .then(() => loadServiceFeeTiersFromDb())
   .then(() => {
     startHealthMonitor(pool);
     startActivityLogRetention();
