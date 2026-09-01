@@ -2377,6 +2377,7 @@ const AdminPage = () => {
   const [discountEditingId, setDiscountEditingId] = useState(null);
   const [testEmail, setTestEmail] = useState("");
   const [bookingsPage, setBookingsPage] = useState(1);
+  const [bookingsSearchQuery, setBookingsSearchQuery] = useState("");
   const [bookingsRefreshLoading, setBookingsRefreshLoading] = useState(false);
   const [refundModal, setRefundModal] = useState(null);
   const [refundSubmitting, setRefundSubmitting] = useState(false);
@@ -2745,6 +2746,9 @@ const AdminPage = () => {
   const [adminDeleteProfileConfirm, setAdminDeleteProfileConfirm] = useState(null);
   const [adminDeleteProfileLoading, setAdminDeleteProfileLoading] = useState(false);
   const [adminOrgProfileModal, setAdminOrgProfileModal] = useState(null);
+  const [adminOrgPasswordForm, setAdminOrgPasswordForm] = useState({ newPassword: "", confirmPassword: "" });
+  const [adminOrgPasswordLoading, setAdminOrgPasswordLoading] = useState(false);
+  const [adminOrgPasswordMessage, setAdminOrgPasswordMessage] = useState("");
   const [adminEventLinks, setAdminEventLinks] = useState([]);
   const [adminEventLinksLoading, setAdminEventLinksLoading] = useState(false);
   const [adminEventLinksColumnFilters, setAdminEventLinksColumnFilters] = useState({
@@ -3521,7 +3525,6 @@ const AdminPage = () => {
       if (!response.ok) throw new Error("Failed to load");
       const data = await response.json();
       setAdminOrganizations(data.rows || []);
-      setAdminOrgCreditsEdit({});
     } catch {
       setAdminOrganizations([]);
     } finally {
@@ -3552,8 +3555,16 @@ const AdminPage = () => {
     setAdminDeleteProfileConfirm({ profileId: row.profileId, organization: row.organization || "denna organisation" });
   };
 
+  const closeAdminOrgProfileModal = () => {
+    setAdminOrgProfileModal(null);
+    setAdminOrgPasswordForm({ newPassword: "", confirmPassword: "" });
+    setAdminOrgPasswordMessage("");
+  };
+
   const handleOpenAdminOrgProfileModal = async (row) => {
     if (!token || !row?.profileId) return;
+    setAdminOrgPasswordForm({ newPassword: "", confirmPassword: "" });
+    setAdminOrgPasswordMessage("");
     setAdminOrgProfileModal({
       profileId: row.profileId,
       organization: row.organization || "",
@@ -3590,6 +3601,53 @@ const AdminPage = () => {
             }
           : null
       );
+    }
+  };
+
+  const handleAdminOrgPasswordChange = (event) => {
+    const { name, value } = event.target;
+    setAdminOrgPasswordForm((prev) => ({ ...prev, [name]: value }));
+    setAdminOrgPasswordMessage("");
+  };
+
+  const handleAdminOrgPasswordSubmit = async (event) => {
+    event.preventDefault();
+    const profileId = adminOrgProfileModal?.profileId;
+    if (!token || !profileId || adminOrgPasswordLoading) return;
+    const { newPassword, confirmPassword } = adminOrgPasswordForm;
+    if (!newPassword || !confirmPassword) {
+      setAdminOrgPasswordMessage("Fyll i nytt lösenord och bekräftelse.");
+      return;
+    }
+    if (newPassword.length < 8) {
+      setAdminOrgPasswordMessage("Lösenordet behöver vara minst 8 tecken.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setAdminOrgPasswordMessage("Lösenorden matchar inte.");
+      return;
+    }
+    setAdminOrgPasswordLoading(true);
+    setAdminOrgPasswordMessage("");
+    try {
+      const response = await fetch(`${API_BASE}/admin/profiles/${encodeURIComponent(profileId)}/password`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ newPassword })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "Kunde inte uppdatera lösenordet.");
+      }
+      setAdminOrgPasswordForm({ newPassword: "", confirmPassword: "" });
+      setAdminOrgPasswordMessage(data.message || "Lösenordet är uppdaterat.");
+    } catch (err) {
+      setAdminOrgPasswordMessage(err?.message || "Kunde inte uppdatera lösenordet.");
+    } finally {
+      setAdminOrgPasswordLoading(false);
     }
   };
 
@@ -3803,6 +3861,12 @@ const AdminPage = () => {
       loadAdminEventLinks();
     }
   }, [token, isAdminUser, adminSection]);
+
+  useEffect(() => {
+    if (token && isAdminUser && adminSection === "admin" && adminPanelTab === "start") {
+      loadAdminOrganizations();
+    }
+  }, [token, isAdminUser, adminSection, adminPanelTab]);
 
   useEffect(() => {
     return () => {
@@ -5912,7 +5976,33 @@ const AdminPage = () => {
     return String(value ?? "");
   };
 
-  const sortedBookings = [...bookings].sort((a, b) => {
+  const normalizedBookingsSearch = bookingsSearchQuery.trim().toLowerCase();
+  const bookingSearchHaystack = (booking) => {
+    const customValues = (Array.isArray(booking.custom_fields) ? booking.custom_fields : [])
+      .map((entry) => String(entry.value ?? ""))
+      .join(" ");
+    return [
+      booking.name,
+      booking.email,
+      booking.city,
+      booking.phone,
+      booking.organization,
+      booking.ticket,
+      booking.order_number,
+      booking.pris,
+      booking.payment_status,
+      booking.created_at ? new Date(booking.created_at).toLocaleString("sv-SE") : "",
+      customValues
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+  };
+  const filteredBookings = normalizedBookingsSearch
+    ? bookings.filter((booking) => bookingSearchHaystack(booking).includes(normalizedBookingsSearch))
+    : bookings;
+
+  const sortedBookings = [...filteredBookings].sort((a, b) => {
     const { key, dir } = sort;
     const direction = dir === "asc" ? 1 : -1;
     const aVal = getSortValue(key, a?.[key]);
@@ -5933,6 +6023,14 @@ const AdminPage = () => {
     (safeBookingsPage - 1) * bookingsPerPage,
     safeBookingsPage * bookingsPerPage
   );
+
+  useEffect(() => {
+    setBookingsSearchQuery("");
+  }, [selectedEventId]);
+
+  useEffect(() => {
+    setBookingsPage(1);
+  }, [bookingsSearchQuery, selectedEventId]);
 
   useEffect(() => {
     if (bookingsPage !== safeBookingsPage) {
@@ -6742,7 +6840,7 @@ const AdminPage = () => {
             {adminOrgProfileModal != null ? (
               <div
                 className="modal-overlay"
-                onClick={() => setAdminOrgProfileModal(null)}
+                onClick={closeAdminOrgProfileModal}
                 role="presentation"
               >
                 <div
@@ -6759,7 +6857,7 @@ const AdminPage = () => {
                     <button
                       type="button"
                       className="icon-button"
-                      onClick={() => setAdminOrgProfileModal(null)}
+                      onClick={closeAdminOrgProfileModal}
                       aria-label="Stäng"
                     >
                       ✕
@@ -6845,13 +6943,66 @@ const AdminPage = () => {
                             value={adminOrgProfileModal.profile.vatExempt ? "Momsbefriad" : "Momspliktig"}
                           />
                         </div>
+                        {adminOrgProfileModal.profile.userId &&
+                        profileForm.profileId &&
+                        adminOrgProfileModal.profile.profileId === profileForm.profileId ? (
+                          <p className="muted admin-profile-info-section">
+                            Byt ditt eget lösenord under fliken Profil.
+                          </p>
+                        ) : (
+                          <div className="admin-profile-info-section">
+                            <h4 className="admin-profile-info-section-title">Byt lösenord</h4>
+                            <form className="admin-form admin-org-password-form" onSubmit={handleAdminOrgPasswordSubmit}>
+                              <label className="field">
+                                <span className="field-label">Nytt lösenord</span>
+                                <input
+                                  type="password"
+                                  name="newPassword"
+                                  value={adminOrgPasswordForm.newPassword}
+                                  onChange={handleAdminOrgPasswordChange}
+                                  autoComplete="new-password"
+                                  minLength={8}
+                                  required
+                                />
+                              </label>
+                              <label className="field">
+                                <span className="field-label">Bekräfta nytt lösenord</span>
+                                <input
+                                  type="password"
+                                  name="confirmPassword"
+                                  value={adminOrgPasswordForm.confirmPassword}
+                                  onChange={handleAdminOrgPasswordChange}
+                                  autoComplete="new-password"
+                                  minLength={8}
+                                  required
+                                />
+                              </label>
+                              {adminOrgPasswordMessage ? (
+                                <p
+                                  className={
+                                    adminOrgPasswordMessage.includes("uppdaterat")
+                                      ? "admin-info-text"
+                                      : "field-hint-error"
+                                  }
+                                >
+                                  {adminOrgPasswordMessage}
+                                </p>
+                              ) : null}
+                              <div className="admin-actions">
+                                <button type="submit" className="button" disabled={adminOrgPasswordLoading}>
+                                  {adminOrgPasswordLoading ? "Sparar…" : "Uppdatera lösenord"}
+                                </button>
+                              </div>
+                            </form>
+                          </div>
+                        )}
                       </div>
                     ) : (
                       <p className="muted">Ingen profilinformation hittades.</p>
                     )}
                   </div>
                   <div className="modal-footer">
-                    <button type="button" className="button" onClick={() => setAdminOrgProfileModal(null)}>
+                    <button type="button" className="button" onClick={closeAdminOrgProfileModal}>
                       Stäng
                     </button>
                   </div>
@@ -8348,7 +8499,7 @@ const AdminPage = () => {
                       <th>Startdatum</th>
                       <th>Slutdatum</th>
                       <th>Avslut anmält</th>
-                      <th style={{ width: "2.5rem" }} aria-label="Profilinfo"></th>
+                      <th style={{ width: "2.5rem" }} aria-label="Kontaktuppgifter"></th>
                       <th style={{ width: "2.5rem" }} aria-label="Ta bort konto"></th>
                     </tr>
                   </thead>
@@ -8356,11 +8507,14 @@ const AdminPage = () => {
                     {adminOrganizations.map((row) => {
                       const rowKey = row.profileId || `user-${row.userId}`;
                       const isSaving = adminOrgSavingProfileId === row.profileId;
+                      const isOwnProfile =
+                        (row.profileId && profileForm.profileId && row.profileId === profileForm.profileId) ||
+                        (row.username && adminUsername && row.username === adminUsername);
                       const fmt = (iso) => (iso ? new Date(iso).toLocaleDateString("sv-SE", { year: "numeric", month: "short", day: "numeric" }) : "–");
                       const planValue = normalizeSubscriptionPlan(row.subscriptionPlan);
                       return (
                         <tr key={rowKey}>
-                          <td>{row.organization || "–"}</td>
+                          <td>{row.organization || row.username || "–"}</td>
                           <td>{row.username || "–"}</td>
                           <td>{row.profileId || "–"}</td>
                           <td>
@@ -10103,7 +10257,22 @@ const AdminPage = () => {
                   <strong>{adminEventViews}</strong>
                 </div>
               </div>
-              <div className="admin-actions">
+              <div className="admin-actions admin-bookings-toolbar">
+                <label className="field admin-bookings-search">
+                  <span className="field-label">Sök i listan</span>
+                  <input
+                    type="search"
+                    value={bookingsSearchQuery}
+                    onChange={(event) => setBookingsSearchQuery(event.target.value)}
+                    placeholder="Namn, e-post, organisation, biljett, ordernr…"
+                    aria-label="Sök i bokningslistan"
+                  />
+                </label>
+                {bookingsSearchQuery.trim() ? (
+                  <p className="muted admin-bookings-search-meta">
+                    Visar {sortedBookings.length} av {bookings.length} bokningar
+                  </p>
+                ) : null}
                 <button
                   className="button button-outline"
                   type="button"
@@ -10295,7 +10464,9 @@ const AdminPage = () => {
                           }
                           className="muted"
                         >
-                          Inga bokningar ännu.
+                          {bookings.length === 0
+                            ? "Inga bokningar ännu."
+                            : "Inga bokningar matchar sökningen."}
                         </td>
                       </tr>
                     ) : (

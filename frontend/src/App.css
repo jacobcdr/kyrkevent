@@ -3849,6 +3849,15 @@ select.goog-te-combo {
   color: var(--text);
 }
 
+.admin-org-password-form {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.admin-org-password-form .admin-actions {
+  margin-top: 0;
+}
+
 .premium-confirm-text {
   margin: 0 0 0.75rem 0;
   line-height: 1.5;
@@ -4480,6 +4489,26 @@ select.goog-te-combo {
 
 .admin-bookings-heading-row h2 {
   margin: 0;
+}
+
+.admin-bookings-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1rem;
+  margin-bottom: 1rem;
+}
+
+.admin-bookings-search {
+  flex: 1 1 220px;
+  min-width: 0;
+  max-width: 420px;
+}
+
+.admin-bookings-search-meta {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--muted, #64748b);
 }
 
 .admin-bookings-info-button {

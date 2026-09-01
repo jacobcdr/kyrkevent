@@ -5664,20 +5664,30 @@ app.get("/admin/event-links", requireAdmin, requireSuperAdmin, async (_req, res)
 app.get("/admin/organizations", requireAdmin, requireSuperAdmin, async (_req, res) => {
   try {
     const result = await pool.query(
-      `SELECT p.user_id, p.profile_id, p.organization, p.subscription_plan, COALESCE(p.bas_event_credits, 0) AS bas_event_credits,
+      `SELECT p.user_id, p.profile_id, p.organization, p.first_name, p.last_name, p.email, p.phone,
+              p.address, p.postal_code, p.city, p.org_number, p.bg_number, p.subscription_plan,
+              COALESCE(p.bas_event_credits, 0) AS bas_event_credits,
               p.premium_activated_at, p.premium_ends_at, p.premium_avslut_requested_at,
               u.username
        FROM admin_user_profiles p
        LEFT JOIN admin_users u ON u.id = p.user_id
-       ORDER BY p.organization ASC, p.profile_id ASC`
+       ORDER BY COALESCE(NULLIF(TRIM(p.organization), ''), u.username, p.profile_id) ASC, p.profile_id ASC`
     );
     const rows = (result.rows || []).map((row) => ({
       userId: row.user_id,
       profileId: row.profile_id || "",
       organization: row.organization || "",
       username: row.username || "",
+      firstName: row.first_name || "",
+      lastName: row.last_name || "",
+      email: row.email || "",
+      phone: row.phone || "",
+      address: row.address || "",
+      postalCode: row.postal_code || "",
+      city: row.city || "",
+      orgNumber: row.org_number || "",
+      bgNumber: row.bg_number || "",
       subscriptionPlan: normalizeSubscriptionPlan(row.subscription_plan),
-      basEventCredits: Number(row.bas_event_credits) || 0,
       premiumActivatedAt: row.premium_activated_at ? row.premium_activated_at.toISOString() : null,
       premiumEndsAt: row.premium_ends_at ? row.premium_ends_at.toISOString() : null,
       premiumAvslutRequestedAt: row.premium_avslut_requested_at ? row.premium_avslut_requested_at.toISOString() : null
@@ -5799,6 +5809,45 @@ app.patch("/admin/profiles/:profileId/subscription-plan", requireAdmin, requireS
     });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Kunde inte uppdatera abonnemangsform" });
+  }
+});
+
+app.patch("/admin/profiles/:profileId/password", requireAdmin, requireSuperAdmin, async (req, res) => {
+  const profileId = (req.params.profileId || "").toString().trim();
+  const newPassword = (req.body?.newPassword || req.body?.password || "").toString();
+  if (!profileId) {
+    return res.status(400).json({ ok: false, error: "Profil-ID saknas" });
+  }
+  if (!newPassword) {
+    return res.status(400).json({ ok: false, error: "Nytt lösenord krävs." });
+  }
+  if (newPassword.length < 8) {
+    return res.status(400).json({ ok: false, error: "Lösenordet behöver vara minst 8 tecken långt." });
+  }
+  try {
+    const profileRow = await pool.query(
+      "SELECT user_id FROM admin_user_profiles WHERE profile_id = $1",
+      [profileId]
+    );
+    if (profileRow.rowCount === 0) {
+      return res.status(404).json({ ok: false, error: "Profil hittades inte" });
+    }
+    const targetUserId = profileRow.rows[0].user_id;
+    if (targetUserId === req.userId) {
+      return res.status(400).json({ ok: false, error: "Byt ditt eget lösenord under Profil." });
+    }
+    const passwordHash = await bcrypt.hash(String(newPassword), 10);
+    await pool.query(
+      `UPDATE admin_users
+       SET password_hash = $1,
+           reset_password_token = NULL,
+           reset_password_expires_at = NULL
+       WHERE id = $2`,
+      [passwordHash, targetUserId]
+    );
+    res.json({ ok: true, message: "Lösenordet är uppdaterat." });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Kunde inte uppdatera lösenordet." });
   }
 });
 
@@ -9232,7 +9281,7 @@ app.get("/admin/bookings/export.xlsx", requireAdmin, async (_req, res) => {
     );
     const customFields = customFieldsResult.rows;
     const result = await pool.query(
-      "SELECT id, name, email, city, phone, organization, ticket, booth, terms, payment_status, pris, custom_fields, created_at, voided_at FROM bookings WHERE event_id = $1 ORDER BY created_at DESC",
+      "SELECT id, name, email, city, phone, organization, ticket, terms, payment_status, pris, custom_fields, created_at, voided_at FROM bookings WHERE event_id = $1 ORDER BY created_at DESC",
       [eventId]
     );
     const header = [
@@ -9243,7 +9292,6 @@ app.get("/admin/bookings/export.xlsx", requireAdmin, async (_req, res) => {
       "Telnr",
       "Organisation",
       "Biljett",
-      "Monterbord",
       "Villkor",
       "Betalning",
       "Pris",
@@ -9261,7 +9309,6 @@ app.get("/admin/bookings/export.xlsx", requireAdmin, async (_req, res) => {
         row.phone,
         row.organization,
         row.ticket || "",
-        row.booth ? "Ja" : "Nej",
         row.terms ? "Ja" : "Nej",
         row.payment_status || "",
         row.pris || "",
