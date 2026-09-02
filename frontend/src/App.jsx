@@ -14,7 +14,7 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "./App.css";
 import { EventGallery } from "./EventGallery";
-import { EventAnalytics } from "./EventAnalytics";
+import { EventAnalytics, EventOverviewStats } from "./EventAnalytics";
 import { EventActivityLog } from "./EventActivityLog";
 import { getOrCreateVisitorId } from "./visitorId";
 import {
@@ -10231,32 +10231,19 @@ const AdminPage = () => {
                   ℹ
                 </button>
               </div>
-              <div className="admin-summary">
-                <div className="summary-item">
-                  <span>Antal betalande</span>
-                  <strong>{paidCount}</strong>
-                </div>
-                <div className="summary-item">
-                  <span>Antal gratis</span>
-                  <strong>{freeCount}</strong>
-                </div>
-                <div className="summary-item">
-                  <span>Totalt antal</span>
-                  <strong>{totalBookingCount}</strong>
-                </div>
-                <div className="summary-item">
-                  <span>Totala intäkter</span>
-                  <strong>{paidTotalText} SEK</strong>
-                </div>
-                <div className="summary-item">
-                  <span>Momssats</span>
-                  <strong>{bookingsVatRateLabel}</strong>
-                </div>
-                <div className="summary-item">
-                  <span>Besök på eventsidan</span>
-                  <strong>{adminEventViews}</strong>
-                </div>
-              </div>
+              <EventOverviewStats
+                paidCount={paidCount}
+                freeCount={freeCount}
+                totalCount={totalBookingCount}
+                revenueText={paidTotalText}
+                vatLabel={bookingsVatRateLabel}
+                pageViews={adminEventViews}
+                onMoreClick={() => {
+                  setAdminSection("settings");
+                  setEventSettingsTab("statistics");
+                  window.scrollTo({ top: 0, behavior: "smooth" });
+                }}
+              />
               <div className="admin-actions admin-bookings-toolbar">
                 <label className="field admin-bookings-search">
                   <span className="field-label">Sök i listan</span>
@@ -13049,7 +13036,19 @@ const AdminPage = () => {
               </div>
                 ) : null}
                 {eventSettingsTab === "statistics" ? (
-                  <EventAnalytics apiBase={API_BASE} token={token} eventId={selectedEventId} />
+                  <EventAnalytics
+                    apiBase={API_BASE}
+                    token={token}
+                    eventId={selectedEventId}
+                    overview={{
+                      paidCount,
+                      freeCount,
+                      totalCount: totalBookingCount,
+                      revenueText: paidTotalText,
+                      vatLabel: bookingsVatRateLabel,
+                      pageViews: adminEventViews
+                    }}
+                  />
                 ) : null}
               </div>
             </div>

@@ -27,6 +27,7 @@ import { assertHeroImageAspectRatio, optimizeImageFile } from "./imageOptimize.j
 import { getUploadDirectoryStats, getVolumeStats } from "./uploadStats.js";
 import {
   ANALYTICS_TZ,
+  allocateWholePercents,
   buildFilterSql,
   fillDailySeries,
   fillHourlySeries,
@@ -9430,7 +9431,7 @@ app.get("/admin/event-analytics", requireAdmin, async (req, res) => {
       ORDER BY unique_count DESC, view_count DESC
     `;
 
-    const [seriesResult, deviceResult, referrerResult, locationResult, totalResult, lifetimeResult, lifetimeUniqueResult] =
+    const [seriesResult, deviceResult, referrerResult, locationResult, totalResult, lifetimeResult, lifetimeUniqueResult, ticketSalesResult] =
       await Promise.all([
       pool.query(seriesQuery, baseParams),
       pool.query(breakdownQuery("device_type"), baseParams),
@@ -9474,6 +9475,20 @@ app.get("/admin/event-analytics", requireAdmin, async (req, res) => {
           WHERE event_id = $1
         `,
         [eventId]
+      ),
+      pool.query(
+        `
+          SELECT
+            COALESCE(NULLIF(TRIM(ticket), ''), 'Anmälan') AS name,
+            COUNT(*)::int AS count
+          FROM bookings
+          WHERE event_id = $1
+            AND voided_at IS NULL
+            AND LOWER(payment_status) IN ('paid', 'manual')
+          GROUP BY 1
+          ORDER BY count DESC, name ASC
+        `,
+        [eventId]
       )
     ]);
 
@@ -9498,6 +9513,10 @@ app.get("/admin/event-analytics", requireAdmin, async (req, res) => {
       null
     );
 
+    const ticketCounts = (ticketSalesResult.rows || []).map((row) => Number(row.count) || 0);
+    const ticketTotal = ticketCounts.reduce((sum, n) => sum + n, 0);
+    const ticketPercents = allocateWholePercents(ticketCounts);
+
     res.json({
       ok: true,
       analytics: {
@@ -9508,6 +9527,14 @@ app.get("/admin/event-analytics", requireAdmin, async (req, res) => {
         totalUniqueVisitors,
         lifetimeViews: Number(lifetimeResult.rows[0]?.view_count) || 0,
         lifetimeUniqueVisitors: Number(lifetimeUniqueResult.rows[0]?.unique_count) || 0,
+        ticketSales: {
+          total: ticketTotal,
+          types: (ticketSalesResult.rows || []).map((row, index) => ({
+            name: row.name,
+            count: ticketCounts[index],
+            percent: ticketPercents[index]
+          }))
+        },
         series,
         devices: withPercents(deviceResult.rows),
         referrers: withPercents(referrerResult.rows),

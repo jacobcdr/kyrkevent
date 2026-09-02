@@ -3,6 +3,9 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
+  Pie,
+  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -72,7 +75,147 @@ function todayYmd() {
   return new Date().toISOString().slice(0, 10);
 }
 
-export function EventAnalytics({ apiBase, token, eventId }) {
+const TICKET_DONUT_COLORS = [
+  "#2ecc71",
+  "#f1c40f",
+  "#c17f4a",
+  "#ee8b8b",
+  "#5b8def",
+  "#9b59b6",
+  "#1abc9c",
+  "#e67e22",
+  "#34495e",
+  "#7f8c8d"
+];
+
+export function EventOverviewStats({
+  paidCount = 0,
+  freeCount = 0,
+  totalCount = 0,
+  revenueText = "0,00",
+  vatLabel = "–",
+  pageViews = 0,
+  onMoreClick
+}) {
+  const items = [
+    { key: "paid", label: "Antal betalande", value: Number(paidCount).toLocaleString("sv-SE"), tone: "green" },
+    { key: "free", label: "Antal gratis", value: Number(freeCount).toLocaleString("sv-SE"), tone: "slate" },
+    { key: "total", label: "Totalt antal", value: Number(totalCount).toLocaleString("sv-SE"), tone: "blue" },
+    { key: "revenue", label: "Totala intäkter", value: `${revenueText} SEK`, tone: "gold" },
+    { key: "vat", label: "Momssats", value: vatLabel || "–", tone: "slate" },
+    { key: "views", label: "Besök på eventsidan", value: Number(pageViews).toLocaleString("sv-SE"), tone: "teal" }
+  ];
+
+  return (
+    <div className={`stats-overview${onMoreClick ? "" : " stats-overview--divided"}`}>
+      <div className={`stats-overview-grid${onMoreClick ? " stats-overview-grid--with-more" : ""}`}>
+        {items.map((item) => (
+          <div key={item.key} className={`stats-overview-card stats-overview-card--${item.tone}`}>
+            <span>{item.label}</span>
+            <strong>{item.value}</strong>
+          </div>
+        ))}
+        {onMoreClick ? (
+          <button
+            type="button"
+            className="stats-overview-card stats-overview-card--more"
+            onClick={onMoreClick}
+          >
+            <span>Visa mer statistik</span>
+            <strong>→</strong>
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function TicketSalesDonut({ ticketSales }) {
+  const types = Array.isArray(ticketSales?.types) ? ticketSales.types : [];
+  const total = Number(ticketSales?.total) || 0;
+  const [activeIndex, setActiveIndex] = useState(0);
+  const highlighted = types[activeIndex] || types[0] || null;
+
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [ticketSales]);
+
+  return (
+    <div className="ticket-donut-section">
+      <h2>Biljettstatistik</h2>
+      <p className="muted" style={{ marginTop: 0 }}>
+        Fördelning av bekräftade biljetter per typ. Makulerade och helt återbetalda räknas inte
+        {total > 0 ? ` (${total.toLocaleString("sv-SE")} st totalt)` : ""}.
+      </p>
+      {types.length === 0 || total <= 0 ? (
+        <p className="muted">Inga sålda biljetter ännu.</p>
+      ) : (
+        <div className="ticket-donut">
+          <div className="ticket-donut-chart" aria-hidden="true">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart margin={{ top: 4, right: 4, bottom: 4, left: 4 }}>
+                <Pie
+                  data={types}
+                  dataKey="count"
+                  nameKey="name"
+                  cx="50%"
+                  cy="50%"
+                  innerRadius="68%"
+                  outerRadius="92%"
+                  paddingAngle={types.length > 1 ? 3 : 0}
+                  startAngle={90}
+                  endAngle={-270}
+                  stroke="#ffffff"
+                  strokeWidth={3}
+                  cornerRadius={types.length > 1 ? 4 : 0}
+                  style={{ cursor: "pointer", outline: "none" }}
+                  onMouseEnter={(_, index) => setActiveIndex(index)}
+                >
+                  {types.map((row, index) => (
+                    <Cell
+                      key={`${row.name}-${index}`}
+                      fill={TICKET_DONUT_COLORS[index % TICKET_DONUT_COLORS.length]}
+                      fillOpacity={index === activeIndex ? 1 : 0.88}
+                    />
+                  ))}
+                </Pie>
+              </PieChart>
+            </ResponsiveContainer>
+            {highlighted ? (
+              <div className="ticket-donut-center">
+                <strong>{highlighted.percent}%</strong>
+                <span>{highlighted.name}</span>
+              </div>
+            ) : null}
+          </div>
+          <ul className="ticket-donut-legend">
+            {types.map((row, index) => (
+              <li key={`${row.name}-${index}`}>
+                <button
+                  type="button"
+                  className={`ticket-donut-legend-item${index === activeIndex ? " is-active" : ""}`}
+                  onMouseEnter={() => setActiveIndex(index)}
+                  onFocus={() => setActiveIndex(index)}
+                  onClick={() => setActiveIndex(index)}
+                >
+                  <span
+                    className="ticket-donut-legend-swatch"
+                    style={{ background: TICKET_DONUT_COLORS[index % TICKET_DONUT_COLORS.length] }}
+                  />
+                  <span className="ticket-donut-legend-count">{row.count.toLocaleString("sv-SE")}</span>
+                  <span className="ticket-donut-legend-label">{row.name}</span>
+                  <span className="ticket-donut-legend-percent">{row.percent}%</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function EventAnalytics({ apiBase, token, eventId, overview }) {
   const [preset, setPreset] = useState("30d");
   const [fromDate, setFromDate] = useState(addDaysYmd(todayYmd(), -29));
   const [toDate, setToDate] = useState(todayYmd());
@@ -135,6 +278,10 @@ export function EventAnalytics({ apiBase, token, eventId }) {
   }, [apiBase, token, eventId, preset, fromDate, toDate, deviceFilter, referrerFilter, drillDay]);
 
   useEffect(() => {
+    setData(null);
+  }, [eventId]);
+
+  useEffect(() => {
     loadAnalytics();
   }, [loadAnalytics]);
 
@@ -176,6 +323,19 @@ export function EventAnalytics({ apiBase, token, eventId }) {
 
   return (
     <div className="section event-analytics">
+      {overview ? <EventOverviewStats {...overview} /> : null}
+
+      {data ? (
+        <TicketSalesDonut ticketSales={data.ticketSales} />
+      ) : loading ? (
+        <div className="ticket-donut-section">
+          <h2>Biljettstatistik</h2>
+          <p className="muted" style={{ marginTop: 0 }}>
+            Laddar biljettfördelning…
+          </p>
+        </div>
+      ) : null}
+
       <h2>Besöksstatistik</h2>
       <p className="muted" style={{ marginTop: 0 }}>
         Unika besökare räknas per webbläsare och dag. Uppdatering av sidan ökar sidvisningar men inte
@@ -289,18 +449,18 @@ export function EventAnalytics({ apiBase, token, eventId }) {
 
       {!loading && data ? (
         <>
-          <div className="event-analytics-summary">
-            <div className="event-analytics-summary-item">
-              <span className="muted">Unika besökare i perioden</span>
+          <div className="stats-overview-grid event-analytics-summary">
+            <div className="stats-overview-card stats-overview-card--blue">
+              <span>Unika besökare i perioden</span>
               <strong>{data.totalUniqueVisitors?.toLocaleString("sv-SE") ?? 0}</strong>
             </div>
-            <div className="event-analytics-summary-item">
-              <span className="muted">Sidvisningar i perioden</span>
+            <div className="stats-overview-card stats-overview-card--teal">
+              <span>Sidvisningar i perioden</span>
               <strong>{data.totalViews?.toLocaleString("sv-SE") ?? 0}</strong>
             </div>
             {data.peak?.count > 0 ? (
-              <div className="event-analytics-summary-item">
-                <span className="muted">Mest trafik</span>
+              <div className="stats-overview-card stats-overview-card--gold event-analytics-summary-peak">
+                <span>Mest trafik</span>
                 <strong>
                   {data.granularity === "hour"
                     ? `${data.peak.label} (${data.peak.count} unika`
@@ -309,14 +469,16 @@ export function EventAnalytics({ apiBase, token, eventId }) {
                 </strong>
               </div>
             ) : null}
-            <div className="event-analytics-summary-item">
-              <span className="muted">Totalt unika sedan start</span>
+            <div className="stats-overview-card stats-overview-card--slate">
+              <span>Totalt unika sedan start</span>
               <strong>{data.lifetimeUniqueVisitors?.toLocaleString("sv-SE") ?? 0}</strong>
             </div>
-            <div className="event-analytics-summary-item">
-              <span className="muted">Totalt sidvisningar sedan start</span>
-              <strong>{data.lifetimeViews?.toLocaleString("sv-SE") ?? 0}</strong>
-            </div>
+            {overview ? null : (
+              <div className="stats-overview-card stats-overview-card--teal">
+                <span>Totalt sidvisningar sedan start</span>
+                <strong>{data.lifetimeViews?.toLocaleString("sv-SE") ?? 0}</strong>
+              </div>
+            )}
           </div>
 
           {chartData.length > 0 ? (

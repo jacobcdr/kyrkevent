@@ -153,6 +153,26 @@ export function normalizeReferrerFilter(value) {
   return normalized === "all" || REFERRER_TYPES.has(normalized) ? normalized : "all";
 }
 
+/** Round share percents to whole numbers that always sum to 100. */
+export function allocateWholePercents(counts) {
+  const values = (counts || []).map((n) => Math.max(0, Number(n) || 0));
+  const total = values.reduce((sum, n) => sum + n, 0);
+  if (values.length === 0 || total <= 0) {
+    return values.map(() => 0);
+  }
+  const raw = values.map((n) => (n / total) * 100);
+  const floored = raw.map((p) => Math.floor(p));
+  let leftover = 100 - floored.reduce((sum, n) => sum + n, 0);
+  const order = raw
+    .map((p, i) => ({ i, frac: p - Math.floor(p), count: values[i] }))
+    .sort((a, b) => b.frac - a.frac || b.count - a.count || a.i - b.i);
+  const out = [...floored];
+  for (let k = 0; k < leftover; k++) {
+    out[order[k % order.length].i] += 1;
+  }
+  return out;
+}
+
 export function buildFilterSql(deviceFilter, referrerFilter, paramOffset = 3) {
   const clauses = [];
   const params = [];
