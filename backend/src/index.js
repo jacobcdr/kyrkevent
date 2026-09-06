@@ -259,6 +259,13 @@ const refundLimiter = rateLimit({
   legacyHeaders: false,
   message: { ok: false, error: "För många återbetalningsförsök. Försök igen om en stund." }
 });
+const receiptResendLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: "För många kvitto-utskick. Försök igen om en stund." }
+});
 
 if (!fs.existsSync(UPLOAD_DIR)) {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
@@ -1569,11 +1576,18 @@ const getEventCalendarData = async (eventId) => {
 
 const sendReceiptEmail = async (payload) => {
   if (!resend || !RESEND_FROM || !payload?.email) {
-    return;
+    return {
+      ok: false,
+      error: !payload?.email ? "Saknar e-postadress." : "E-post är inte konfigurerat."
+    };
   }
   try {
     const createdAtFallback =
-      payload.createdAt instanceof Date ? payload.createdAt : new Date();
+      payload.createdAt instanceof Date
+        ? payload.createdAt
+        : payload.createdAt
+          ? new Date(payload.createdAt)
+          : new Date();
     const resolvedOrderNumber =
       payload.orderNumber && String(payload.orderNumber).trim()
         ? String(payload.orderNumber).trim()
@@ -1694,9 +1708,11 @@ const sendReceiptEmail = async (payload) => {
         }
       });
     }
+    return { ok: true };
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Failed to send receipt email", error);
+    return { ok: false, error: "Kunde inte skicka kvitto." };
   }
 };
 
@@ -8799,6 +8815,174 @@ app.post("/admin/program/reorder", requireAdmin, async (req, res) => {
   }
 });
 
+const normalizeReceiptMatch = (value) => String(value || "").trim().toLowerCase();
+
+const loadPaymentOrderForBooking = async (bookingId) => {
+  const result = await pool.query(
+    `
+      SELECT payload, booking_id, booking_ids, status, created_at
+      FROM payment_orders
+      WHERE booking_id = $1 OR $1 = ANY(COALESCE(booking_ids, ARRAY[]::integer[]))
+      ORDER BY CASE WHEN status = 'paid' THEN 0 ELSE 1 END, created_at DESC
+      LIMIT 1
+    `,
+    [bookingId]
+  );
+  return result.rows[0] || null;
+};
+
+const findReceiptPayloadItem = (payload, booking) => {
+  if (!payload) return null;
+  if (Array.isArray(payload.items) && payload.items.length > 0) {
+    const email = normalizeReceiptMatch(booking.email);
+    const ticket = normalizeReceiptMatch(booking.ticket);
+    const name = normalizeReceiptMatch(booking.name);
+    return (
+      payload.items.find(
+        (item) =>
+          normalizeReceiptMatch(item.email) === email &&
+          normalizeReceiptMatch(item.priceName) === ticket &&
+          normalizeReceiptMatch(item.name) === name
+      ) ||
+      payload.items.find(
+        (item) =>
+          normalizeReceiptMatch(item.email) === email &&
+          normalizeReceiptMatch(item.priceName) === ticket
+      ) ||
+      payload.items.find((item) => normalizeReceiptMatch(item.email) === email) ||
+      null
+    );
+  }
+  if (payload.eventId || payload.priceAmount != null || payload.priceName) {
+    return payload;
+  }
+  return null;
+};
+
+const buildBookingReceiptContext = async (bookingId, userId) => {
+  const bookingResult = await pool.query(
+    `
+      SELECT b.id, b.event_id, b.name, b.email, b.ticket, b.pris, b.payment_status,
+             b.created_at, b.order_number, b.refund_amount, b.refunded_at, b.voided_at,
+             e.name AS event_name, e.confirmation_note
+      FROM bookings b
+      INNER JOIN events e ON e.id = b.event_id AND e.user_id = $2
+      WHERE b.id = $1
+    `,
+    [bookingId, userId]
+  );
+  if (bookingResult.rowCount === 0) {
+    return { ok: false, status: 404, error: "Bokning hittades inte." };
+  }
+  const booking = bookingResult.rows[0];
+  const email = String(booking.email || "").trim();
+  const order = await loadPaymentOrderForBooking(bookingId);
+  const payload = order?.payload || {};
+  const matchedItem = findReceiptPayloadItem(payload, booking);
+  const ticketFromBooking = Math.round(parsePrisToNumber(booking.pris) * 100) / 100;
+  const priceAmount =
+    typeof matchedItem?.priceAmount === "number" && Number.isFinite(matchedItem.priceAmount)
+      ? matchedItem.priceAmount
+      : ticketFromBooking;
+  const discountedAmount =
+    typeof matchedItem?.discountedAmount === "number" && Number.isFinite(matchedItem.discountedAmount)
+      ? matchedItem.discountedAmount
+      : ticketFromBooking;
+  const discountPercent =
+    typeof matchedItem?.discountPercent === "number" && matchedItem.discountPercent > 0
+      ? matchedItem.discountPercent
+      : null;
+  const priceName = String(matchedItem?.priceName || booking.ticket || "").trim();
+  const orderBookingIds =
+    Array.isArray(order?.booking_ids) && order.booking_ids.length > 0
+      ? order.booking_ids.map(Number).filter((id) => id > 0)
+      : order?.booking_id && Number(order.booking_id) > 0
+        ? [Number(order.booking_id)]
+        : [];
+  const serviceFee =
+    orderBookingIds.length <= 1 && typeof payload.serviceFee === "number" && payload.serviceFee > 0
+      ? payload.serviceFee
+      : 0;
+  const orderNumber =
+    (booking.order_number && String(booking.order_number).trim()) ||
+    (payload.orderNumber && String(payload.orderNumber).trim()) ||
+    formatOrderNumber(booking.created_at instanceof Date ? booking.created_at : new Date(booking.created_at));
+  const sellerInfo = await getSellerInfoForEvent(booking.event_id);
+  const vatCtx = await getEventVatContext(booking.event_id);
+  const pricesCountResult = await pool.query("SELECT COUNT(*)::int AS count FROM prices WHERE event_id = $1", [
+    booking.event_id
+  ]);
+  const pricesCount = Number(pricesCountResult.rows[0]?.count ?? 0);
+  const ticketAmount = Math.round((Number.isFinite(discountedAmount) ? discountedAmount : 0) * 100) / 100;
+  const eventHasPrices = pricesCount > 0 || ticketAmount > 0;
+  const eventConfirmationNote =
+    booking.confirmation_note && String(booking.confirmation_note).trim()
+      ? String(booking.confirmation_note).trim()
+      : "";
+  const priceTable = buildReceiptPriceTable({
+    ticketAmount,
+    serviceFee,
+    vatExempt: vatCtx.vatExempt,
+    vatRatePercent: vatCtx.vatRatePercent
+  });
+  const hasPrice = eventHasPrices && (ticketAmount > 0 || serviceFee > 0);
+
+  return {
+    ok: true,
+    booking,
+    emailPayload: {
+      name: booking.name,
+      email,
+      eventId: booking.event_id,
+      eventName: booking.event_name || "",
+      priceName,
+      priceAmount,
+      discountedAmount: ticketAmount,
+      discountPercent,
+      serviceFee,
+      createdAt: booking.created_at,
+      sellerName: sellerInfo.name,
+      sellerOrgNumber: sellerInfo.orgNumber,
+      sellerAddress: sellerInfo.address,
+      orderNumber,
+      eventHasPrices: hasPrice,
+      eventConfirmationNote
+    },
+    receipt: {
+      name: booking.name || "",
+      email,
+      eventName: booking.event_name || "",
+      ticket: priceName,
+      orderNumber,
+      createdAt: booking.created_at,
+      paymentMethod: RECEIPT_PAYMENT_METHOD,
+      sellerName: sellerInfo.name || "",
+      sellerOrgNumber: sellerInfo.orgNumber || "",
+      sellerAddress: sellerInfo.address || "",
+      issuerName: RECEIPT_ISSUER,
+      issuerOrgNumber: formatOrgNumberDisplay(RECEIPT_SELLER_ORG_NUMBER),
+      issuerAddress: RECEIPT_SELLER_ADDRESS,
+      discountPercent,
+      priceAmount,
+      ticketAmount,
+      serviceFee,
+      hasPrice,
+      vatExempt: vatCtx.vatExempt,
+      vatRatePercent: vatCtx.vatRatePercent,
+      ticketVat: priceTable.ticketVat,
+      serviceFeeVat: priceTable.serviceFeeVat,
+      ticketNet: priceTable.ticketNet,
+      serviceFeeNet: priceTable.serviceFeeNet,
+      netAmount: priceTable.netAmount,
+      vatAmount: priceTable.vatAmount,
+      totalAmount: priceTable.totalAmount,
+      priceTableRows: priceTable.rows,
+      showVatExemptNote: priceTable.showVatExemptNote,
+      canResend: Boolean(email)
+    }
+  };
+};
+
 app.get("/admin/bookings", requireAdmin, async (req, res) => {
   try {
     const eventId = await ensureEventOwnership(req.query.eventId, req.userId, res);
@@ -8854,6 +9038,56 @@ app.get("/admin/bookings/:bookingId/refund-eligibility", requireAdmin, async (re
   } catch (error) {
     console.error("GET refund-eligibility error:", error);
     res.status(500).json({ ok: false, error: "Kunde inte kontrollera återbetalning." });
+  }
+});
+
+app.get("/admin/bookings/:bookingId/receipt", requireAdmin, async (req, res) => {
+  const bookingId = Number(req.params.bookingId);
+  if (!Number.isFinite(bookingId) || bookingId <= 0) {
+    res.status(400).json({ ok: false, error: "Ogiltigt boknings-id." });
+    return;
+  }
+  try {
+    const ctx = await buildBookingReceiptContext(bookingId, req.userId);
+    if (!ctx.ok) {
+      res.status(ctx.status || 400).json({ ok: false, error: ctx.error });
+      return;
+    }
+    res.json({ ok: true, receipt: ctx.receipt });
+  } catch (error) {
+    console.error("GET booking receipt error:", error);
+    res.status(500).json({ ok: false, error: "Kunde inte hämta kvitto." });
+  }
+});
+
+app.post("/admin/bookings/:bookingId/resend-receipt", requireAdmin, receiptResendLimiter, async (req, res) => {
+  const bookingId = Number(req.params.bookingId);
+  if (!Number.isFinite(bookingId) || bookingId <= 0) {
+    res.status(400).json({ ok: false, error: "Ogiltigt boknings-id." });
+    return;
+  }
+  try {
+    const ctx = await buildBookingReceiptContext(bookingId, req.userId);
+    if (!ctx.ok) {
+      res.status(ctx.status || 400).json({ ok: false, error: ctx.error });
+      return;
+    }
+    if (!ctx.receipt.canResend || !ctx.emailPayload.email) {
+      res.status(400).json({ ok: false, error: "Bokningen saknar e-postadress." });
+      return;
+    }
+    const sent = await sendReceiptEmail(ctx.emailPayload);
+    if (!sent?.ok) {
+      res.status(500).json({ ok: false, error: sent?.error || "Kunde inte skicka kvitto." });
+      return;
+    }
+    res.json({
+      ok: true,
+      message: `Kvittot har skickats till ${ctx.emailPayload.email}.`
+    });
+  } catch (error) {
+    console.error("POST resend receipt error:", error);
+    res.status(500).json({ ok: false, error: "Kunde inte skicka kvitto." });
   }
 });
 

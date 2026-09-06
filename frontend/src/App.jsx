@@ -2383,6 +2383,7 @@ const AdminPage = () => {
   const [refundSubmitting, setRefundSubmitting] = useState(false);
   const [voidModal, setVoidModal] = useState(null);
   const [voidSubmitting, setVoidSubmitting] = useState(false);
+  const [receiptModal, setReceiptModal] = useState(null);
   const [bookingsInfoModalOpen, setBookingsInfoModalOpen] = useState(false);
   const [sort, setSort] = useState({ key: "created_at", dir: "desc" });
   const [error, setError] = useState("");
@@ -6256,6 +6257,82 @@ const AdminPage = () => {
   const handleVoidBooking = (booking, shouldVoid = true) => {
     if (!token || !booking?.id) return;
     setVoidModal({ booking, shouldVoid });
+  };
+
+  const formatReceiptSek = (value) => {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      return "–";
+    }
+    return `${value.toLocaleString("sv-SE", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    })} SEK`;
+  };
+
+  const openReceiptModal = async (booking) => {
+    if (!token || !booking?.id) return;
+    setReceiptModal({
+      booking,
+      loading: true,
+      error: "",
+      receipt: null,
+      confirmOpen: false,
+      sending: false,
+      sendError: ""
+    });
+    try {
+      const response = await fetch(`${API_BASE}/admin/bookings/${booking.id}/receipt`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error || "Kunde inte hämta kvitto.");
+      }
+      setReceiptModal({
+        booking,
+        loading: false,
+        error: "",
+        receipt: data.receipt,
+        confirmOpen: false,
+        sending: false,
+        sendError: ""
+      });
+    } catch (err) {
+      setReceiptModal({
+        booking,
+        loading: false,
+        error: err?.message || "Kunde inte hämta kvitto.",
+        receipt: null,
+        confirmOpen: false,
+        sending: false,
+        sendError: ""
+      });
+    }
+  };
+
+  const submitResendReceipt = async () => {
+    if (!token || !receiptModal?.booking?.id || receiptModal.sending) return;
+    setReceiptModal((prev) => (prev ? { ...prev, sending: true, sendError: "" } : prev));
+    try {
+      const response = await fetch(`${API_BASE}/admin/bookings/${receiptModal.booking.id}/resend-receipt`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        }
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error || "Kunde inte skicka kvittot.");
+      }
+      const sentTo = receiptModal.receipt?.email || receiptModal.booking.email || "den registrerade adressen";
+      setReceiptModal(null);
+      showToast(data.message || `Kvittot har skickats till ${sentTo}.`);
+    } catch (err) {
+      setReceiptModal((prev) =>
+        prev ? { ...prev, sending: false, sendError: err?.message || "Kunde inte skicka kvittot." } : prev
+      );
+    }
   };
 
   const confirmVoidBooking = async () => {
@@ -10523,6 +10600,20 @@ const AdminPage = () => {
                           )}
                           <td className="admin-booking-void-cell">
                             <div className="admin-booking-action-icons">
+                              <button
+                                type="button"
+                                className="admin-booking-receipt-button"
+                                title="Visa kvitto"
+                                aria-label="Visa kvitto"
+                                onClick={() => openReceiptModal(booking)}
+                              >
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                  <path d="M6 2.75h12a1 1 0 0 1 1 1v17.1l-2.1-1.15-2.1 1.15-2.1-1.15-2.1 1.15-2.1-1.15-2.5 1.35V3.75a1 1 0 0 1 1-1z" />
+                                  <line x1="8.5" y1="7.5" x2="15.5" y2="7.5" />
+                                  <line x1="8.5" y1="11" x2="15.5" y2="11" />
+                                  <line x1="8.5" y1="14.5" x2="13" y2="14.5" />
+                                </svg>
+                              </button>
                               {booking.voided_at ? (
                                 <button
                                   type="button"
@@ -10637,6 +10728,10 @@ const AdminPage = () => {
                     <section>
                       <h4>Åtgärdskolumnen längst till höger</h4>
                       <ul>
+                        <li>
+                          <strong>Kvitto</strong> (kvittoikon) – visar uträkningen för just den bokningen. Därifrån
+                          kan du skicka kvittot igen till den registrerade e-postadressen.
+                        </li>
                         <li>
                           <strong>Återbetala</strong> (ikon med cirkelpil och kr) – öppnar dialog där du anger belopp.
                           Pengarna går tillbaka via Mollie till kundens betalsätt. Detta kan inte ångras i systemet.
@@ -10784,6 +10879,258 @@ const AdminPage = () => {
                   </div>
                 </div>
               </div>
+            ) : null}
+            {receiptModal ? (
+              <>
+              <div
+                className="toaster-overlay"
+                onClick={() => {
+                  if (!receiptModal.sending && !receiptModal.confirmOpen) setReceiptModal(null);
+                }}
+              >
+                <div
+                  className="toaster admin-receipt-toaster"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="receipt-dialog-title"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <h3 id="receipt-dialog-title" className="toaster-title">
+                    Kvitto
+                  </h3>
+                  {receiptModal.loading ? (
+                    <p className="muted">Hämtar kvitto…</p>
+                  ) : receiptModal.error && !receiptModal.receipt ? (
+                    <p className="field-hint field-hint-error">{receiptModal.error}</p>
+                  ) : receiptModal.receipt ? (
+                    <>
+                      <p className="toaster-message admin-receipt-intro">
+                        <strong>{receiptModal.receipt.name || receiptModal.booking.name || "–"}</strong>
+                        {receiptModal.receipt.email ? ` (${receiptModal.receipt.email})` : ""}
+                      </p>
+                      <div className="receipt admin-receipt-preview">
+                        {receiptModal.receipt.createdAt ? (
+                          <div className="receipt-row">
+                            <span>Datum & tid</span>
+                            <strong>
+                              {new Date(receiptModal.receipt.createdAt).toLocaleString("sv-SE", {
+                                year: "numeric",
+                                month: "2-digit",
+                                day: "2-digit",
+                                hour: "2-digit",
+                                minute: "2-digit"
+                              })}
+                            </strong>
+                          </div>
+                        ) : null}
+                        <div className="receipt-row">
+                          <span>Ordernummer</span>
+                          <strong>{receiptModal.receipt.orderNumber || "–"}</strong>
+                        </div>
+                        {receiptModal.receipt.eventName ? (
+                          <div className="receipt-row">
+                            <span>Event</span>
+                            <strong>{receiptModal.receipt.eventName}</strong>
+                          </div>
+                        ) : null}
+                        {receiptModal.receipt.hasPrice ? (
+                          <>
+                            <div className="receipt-row">
+                              <span>Betalning</span>
+                              <strong>{receiptModal.receipt.paymentMethod || "Online"}</strong>
+                            </div>
+                            <div className="receipt-row">
+                              <span>Säljare</span>
+                              <strong>{receiptModal.receipt.sellerName || "–"}</strong>
+                            </div>
+                            {receiptModal.receipt.sellerOrgNumber ? (
+                              <div className="receipt-row">
+                                <span>Organisationsnummer</span>
+                                <strong>{receiptModal.receipt.sellerOrgNumber}</strong>
+                              </div>
+                            ) : null}
+                            {receiptModal.receipt.sellerAddress ? (
+                              <div className="receipt-row">
+                                <span>Adress</span>
+                                <strong>{receiptModal.receipt.sellerAddress}</strong>
+                              </div>
+                            ) : null}
+                            {receiptModal.receipt.ticket ? (
+                              <div className="receipt-row">
+                                <span>Biljett</span>
+                                <strong>{receiptModal.receipt.ticket}</strong>
+                              </div>
+                            ) : null}
+                            {receiptModal.receipt.discountPercent ? (
+                              <div className="receipt-row">
+                                <span>Rabatt</span>
+                                <strong>{receiptModal.receipt.discountPercent}%</strong>
+                              </div>
+                            ) : null}
+                            <div className="receipt-divider" aria-hidden="true" />
+                            <table className="receipt-price-table">
+                              <thead>
+                                <tr>
+                                  <th scope="col">Beskrivning</th>
+                                  <th scope="col">Exkl.moms</th>
+                                  <th scope="col">Moms</th>
+                                  <th scope="col">Total</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {(receiptModal.receipt.priceTableRows || []).map((row) => (
+                                  <tr key={row.label}>
+                                    <th scope="row">{row.label}</th>
+                                    <td>{formatReceiptSek(row.net)}</td>
+                                    <td>{formatReceiptSek(row.vatAmount)}</td>
+                                    <td>{formatReceiptSek(row.total)}</td>
+                                  </tr>
+                                ))}
+                                <tr className="receipt-price-table-total">
+                                  <th scope="row">Totalt att betala</th>
+                                  <td>{formatReceiptSek(receiptModal.receipt.netAmount)}</td>
+                                  <td />
+                                  <td>{formatReceiptSek(receiptModal.receipt.totalAmount)}</td>
+                                </tr>
+                              </tbody>
+                            </table>
+                            {receiptModal.receipt.showVatExemptNote ? (
+                              <p className="receipt-price-footnote">* Momsbefriad verksamhet (biljett).</p>
+                            ) : null}
+                          </>
+                        ) : (
+                          <>
+                            {receiptModal.receipt.ticket ? (
+                              <div className="receipt-row">
+                                <span>Biljett</span>
+                                <strong>{receiptModal.receipt.ticket}</strong>
+                              </div>
+                            ) : null}
+                            {receiptModal.receipt.sellerName ? (
+                              <div className="receipt-row">
+                                <span>Arrangör</span>
+                                <strong>{receiptModal.receipt.sellerName}</strong>
+                              </div>
+                            ) : null}
+                            <p className="receipt-price-footnote">Bokningsbekräftelse utan belopp.</p>
+                          </>
+                        )}
+                      </div>
+                      {receiptModal.receipt.hasPrice && receiptModal.receipt.issuerName ? (
+                        <div className="receipt-issuer-note">
+                          <div className="receipt-issuer-note-row">
+                            <span>Biljett såld genom</span>
+                            <em>{receiptModal.receipt.issuerName}</em>
+                          </div>
+                          {receiptModal.receipt.issuerOrgNumber ? (
+                            <div className="receipt-issuer-note-row">
+                              <span>Organisationsnummer</span>
+                              <em>{receiptModal.receipt.issuerOrgNumber}</em>
+                            </div>
+                          ) : null}
+                          {receiptModal.receipt.issuerAddress ? (
+                            <div className="receipt-issuer-note-row">
+                              <span>Adress</span>
+                              <em>{receiptModal.receipt.issuerAddress}</em>
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </>
+                  ) : null}
+                  {receiptModal.sendError && !receiptModal.confirmOpen ? (
+                    <p className="field-hint field-hint-error">{receiptModal.sendError}</p>
+                  ) : null}
+                  <div className="toaster-actions">
+                    <button
+                      type="button"
+                      className="button button-outline"
+                      disabled={receiptModal.sending}
+                      onClick={() => setReceiptModal(null)}
+                    >
+                      Stäng
+                    </button>
+                    <button
+                      type="button"
+                      className="button"
+                      disabled={
+                        receiptModal.loading ||
+                        receiptModal.sending ||
+                        !receiptModal.receipt?.canResend
+                      }
+                      title={
+                        receiptModal.receipt && !receiptModal.receipt.canResend
+                          ? "Bokningen saknar e-postadress"
+                          : undefined
+                      }
+                      onClick={() =>
+                        setReceiptModal((prev) =>
+                          prev ? { ...prev, confirmOpen: true, sendError: "" } : prev
+                        )
+                      }
+                    >
+                      Skicka igen
+                    </button>
+                  </div>
+                </div>
+              </div>
+              {receiptModal.confirmOpen ? (
+                <div
+                  className="toaster-overlay admin-receipt-confirm-overlay"
+                  onClick={() => {
+                    if (!receiptModal.sending) {
+                      setReceiptModal((prev) =>
+                        prev ? { ...prev, confirmOpen: false, sendError: "" } : prev
+                      );
+                    }
+                  }}
+                >
+                  <div
+                    className="toaster toaster-confirm admin-receipt-confirm"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="receipt-resend-confirm-title"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <h3 id="receipt-resend-confirm-title" className="toaster-title">
+                      Bekräfta utskick
+                    </h3>
+                    <p className="toaster-message">
+                      Vill du skicka kvittot igen till{" "}
+                      <strong>
+                        {receiptModal.receipt?.email || receiptModal.booking.email || "den registrerade adressen"}
+                      </strong>
+                      ?
+                    </p>
+                    {receiptModal.sendError ? (
+                      <p className="field-hint field-hint-error">{receiptModal.sendError}</p>
+                    ) : null}
+                    <div className="toaster-actions">
+                      <button
+                        type="button"
+                        className="button button-outline"
+                        disabled={receiptModal.sending}
+                        onClick={() =>
+                          setReceiptModal((prev) =>
+                            prev ? { ...prev, confirmOpen: false, sendError: "" } : prev
+                          )
+                        }
+                      >
+                        Avbryt
+                      </button>
+                      <button
+                        type="button"
+                        className="button"
+                        disabled={receiptModal.sending}
+                        onClick={submitResendReceipt}
+                      >
+                        {receiptModal.sending ? "Skickar…" : "Skicka kvitto"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+              </>
             ) : null}
             {voidModal ? (
               <div className="toaster-overlay" onClick={() => !voidSubmitting && setVoidModal(null)}>
