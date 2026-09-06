@@ -797,6 +797,97 @@ h2 {
   box-shadow: var(--shadow);
 }
 
+/* Publika eventsidan: en standardiserad yta oberoende av färgtema.
+   Sektionerna delas med luft och en tunn linje – temat syns i knappar
+   och accenter, inte som färgade bakgrundsband. */
+body.public-event-body {
+  background: #f6f5f2;
+}
+
+.public-event-page {
+  --public-canvas: #f6f5f2;
+  --public-hairline: rgba(28, 25, 23, 0.08);
+  --public-form-wash: #ffffff;
+  --section-fill: var(--public-canvas);
+  max-width: none;
+  padding: 0;
+  min-height: 100vh;
+  background: var(--public-canvas);
+}
+
+.public-event-page:not(:has(> .hero--banner)) {
+  padding-top: 1.5rem;
+}
+
+.public-event-page > .section,
+.public-event-page > .section:not(.section + .section),
+.public-event-page > .section:not(:has(~ .section)),
+.public-event-page:has(> .hero--banner) > .section,
+.public-event-page:has(> .hero--banner) > .section:not(.section + .section),
+.public-event-page:has(> .hero--banner) > .section:not(:has(~ .section)) {
+  margin-top: 0;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+  width: 100%;
+  max-width: none;
+  padding: 3.25rem max(1.25rem, calc((100% - 1100px) / 2));
+}
+
+.public-event-page > .section + .section {
+  box-shadow: inset 0 1px 0 var(--public-hairline);
+}
+
+.public-event-page > .section > h2 {
+  margin-top: 0;
+  letter-spacing: -0.02em;
+}
+
+.public-event-page > .section > h2::after {
+  content: "";
+  display: block;
+  width: 2.25rem;
+  height: 2px;
+  margin-top: 0.7rem;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.public-event-page > #form-section {
+  --section-fill: var(--public-form-wash);
+  background: var(--public-form-wash);
+}
+
+.public-event-page > .translate-row:not(.translate-row--overlay) {
+  padding: 0.75rem max(1.25rem, calc((100% - 1100px) / 2));
+}
+
+.public-event-page .public-host-footer {
+  margin-top: 0;
+  padding: 2rem 1rem 2.25rem;
+  box-shadow: inset 0 1px 0 var(--public-hairline);
+}
+
+.public-event-page .speaker-bio-fade {
+  background: linear-gradient(to bottom, transparent, var(--section-fill));
+}
+
+.public-event-page .partner-card {
+  background: transparent;
+}
+
+.public-event-page .section-gallery {
+  overflow: visible;
+}
+
+.public-event-page .section-gallery .event-gallery--marquee {
+  width: 100vw;
+  max-width: none;
+  margin-left: calc(50% - 50vw);
+  margin-right: calc(50% - 50vw);
+}
+
 .program {
   display: grid;
   gap: 0.75rem;
@@ -4204,6 +4295,23 @@ select.goog-te-combo {
 @media (max-width: 720px) {
   .page {
     padding: 1.5rem 1rem 2.5rem;
+  }
+
+  .public-event-page {
+    padding: 0;
+  }
+
+  .public-event-page:not(:has(> .hero--banner)) {
+    padding-top: 1rem;
+  }
+
+  .public-event-page > .section,
+  .public-event-page > .section:not(.section + .section),
+  .public-event-page > .section:not(:has(~ .section)),
+  .public-event-page:has(> .hero--banner) > .section,
+  .public-event-page:has(> .hero--banner) > .section:not(.section + .section),
+  .public-event-page:has(> .hero--banner) > .section:not(:has(~ .section)) {
+    padding: 2rem 1rem;
   }
 
   .section {

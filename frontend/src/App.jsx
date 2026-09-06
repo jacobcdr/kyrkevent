@@ -262,6 +262,33 @@ function stripHtmlText(html) {
   return div.textContent || div.innerText || "";
 }
 
+function insertPlainClipboardText(event, { singleLine = false } = {}) {
+  if (!event.clipboardData) {
+    return;
+  }
+  event.preventDefault();
+  let text = event.clipboardData.getData("text/plain") ?? "";
+  if (singleLine) {
+    text = text.replace(/[\r\n]+/g, " ");
+  }
+  const inserted = document.execCommand("insertText", false, text);
+  if (inserted) {
+    return;
+  }
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) {
+    return;
+  }
+  const range = selection.getRangeAt(0);
+  range.deleteContents();
+  const node = document.createTextNode(text);
+  range.insertNode(node);
+  range.setStartAfter(node);
+  range.collapse(true);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
 function normalizeProgramHtml(html) {
   const trimmed = String(html || "").trim();
   if (!stripHtmlText(trimmed).trim()) {
@@ -417,6 +444,13 @@ function ProgramFormattedInput({ editorRef, onChange, placeholder }) {
     }
   };
 
+  const handlePaste = (event) => {
+    insertPlainClipboardText(event, { singleLine: true });
+    if (editorRef.current) {
+      onChange(editorRef.current.innerHTML);
+    }
+  };
+
   const handleKeyDown = (event) => {
     if (event.key === "Enter") {
       event.preventDefault();
@@ -452,6 +486,7 @@ function ProgramFormattedInput({ editorRef, onChange, placeholder }) {
         ref={editorRef}
         onInput={handleInput}
         onKeyDown={handleKeyDown}
+        onPaste={handlePaste}
         data-placeholder={placeholder}
         suppressContentEditableWarning
       />
@@ -5048,6 +5083,16 @@ const AdminPage = () => {
       return;
     }
     setAdminFaqText(faqEditorRef.current.innerHTML);
+  };
+
+  const handleHeroPaste = (event) => {
+    insertPlainClipboardText(event);
+    handleHeroInput();
+  };
+
+  const handleFaqPaste = (event) => {
+    insertPlainClipboardText(event);
+    handleFaqInput();
   };
 
   const applyHeroCommand = (command, value) => {
@@ -11571,6 +11616,7 @@ const AdminPage = () => {
                     contentEditable
                     ref={heroEditorRef}
                     onInput={handleHeroInput}
+                    onPaste={handleHeroPaste}
                     suppressContentEditableWarning
                   ></div>
                   <div className="admin-actions">
@@ -11743,6 +11789,7 @@ const AdminPage = () => {
                       contentEditable
                       ref={faqEditorRef}
                       onInput={handleFaqInput}
+                      onPaste={handleFaqPaste}
                       suppressContentEditableWarning
                     ></div>
                   </div>
@@ -13945,6 +13992,29 @@ function App() {
   }, [event, isAdminRoute, isPaymentStatusRoute]);
 
   useEffect(() => {
+    const isPublicEvent =
+      !isAdminRoute &&
+      !isPaymentStatusRoute &&
+      !isLandingRoute &&
+      !isVerifyEmailRoute &&
+      !isResetPasswordRoute &&
+      !isCheckInRoute;
+    if (!isPublicEvent) {
+      document.body.classList.remove("public-event-body");
+      return undefined;
+    }
+    document.body.classList.add("public-event-body");
+    return () => document.body.classList.remove("public-event-body");
+  }, [
+    isAdminRoute,
+    isPaymentStatusRoute,
+    isLandingRoute,
+    isVerifyEmailRoute,
+    isResetPasswordRoute,
+    isCheckInRoute
+  ]);
+
+  useEffect(() => {
     if (isAdminRoute || isPaymentStatusRoute || isLandingRoute) return;
     document.title = event?.name || SITE_TITLE;
   }, [event?.name, isAdminRoute, isPaymentStatusRoute, isLandingRoute]);
@@ -14679,7 +14749,7 @@ function App() {
   }
 
   return (
-    <div className="page" ref={pageRef}>
+    <div className="page public-event-page" ref={pageRef}>
       {hero.imageUrl && !heroImageError ? (
         <div className="hero hero--banner" ref={heroBannerRef}>
           {sectionVisibility.showTranslate && eventSectionsLoaded ? (
