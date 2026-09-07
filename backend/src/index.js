@@ -45,6 +45,7 @@ import {
   normalizeServiceFeeTiers,
   validateServiceFeeTiers
 } from "./serviceFee.js";
+import { loadEventSharePreview } from "./eventSharePreview.js";
 
 const MAX_GALLERY_IMAGES_PER_EVENT = 10;
 const DEFAULT_UPLOAD_DISK_LIMIT_BYTES = 1024 * 1024 * 1024;
@@ -1806,6 +1807,43 @@ const checkEventCapacity = async (eventId, additionalSeats = 1) => {
   }
   return { ok: true, max, current };
 };
+
+function getRequestOrigin(req) {
+  const proto = String(req.get("x-forwarded-proto") || req.protocol || "https")
+    .split(",")[0]
+    .trim();
+  const host = String(req.get("x-forwarded-host") || req.get("host") || "")
+    .split(",")[0]
+    .trim();
+  return host ? `${proto}://${host}` : "";
+}
+
+app.get("/events/:slug/share-preview", async (req, res) => {
+  const slug = String(req.params.slug || "").trim();
+  if (!slug) {
+    res.status(400).json({ ok: false, error: "Missing slug" });
+    return;
+  }
+  try {
+    const siteUrl = String(primaryFrontendUrl || "https://www.kyrkevent.se").replace(/\/+$/, "");
+    const assetBaseUrl =
+      String(process.env.PUBLIC_ASSET_BASE_URL || process.env.BACKEND_PUBLIC_URL || "").replace(/\/+$/, "") ||
+      getRequestOrigin(req);
+    const preview = await loadEventSharePreview(pool, slug, {
+      siteUrl,
+      assetBaseUrl,
+      pathSuffix: String(req.query.lang || "") === "en" ? "/en" : ""
+    });
+    if (!preview) {
+      res.status(404).json({ ok: false, error: "Event not found" });
+      return;
+    }
+    res.set("Cache-Control", "public, max-age=120");
+    res.json(preview);
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Failed to load share preview" });
+  }
+});
 
 app.get("/events/:slug", async (req, res) => {
   const { slug } = req.params;

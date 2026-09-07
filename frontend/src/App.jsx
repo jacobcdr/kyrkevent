@@ -17,6 +17,7 @@ import { EventGallery } from "./EventGallery";
 import { EventAnalytics, EventOverviewStats } from "./EventAnalytics";
 import { EventActivityLog } from "./EventActivityLog";
 import { getOrCreateVisitorId } from "./visitorId";
+import { applyShareMetaToDocument } from "./shareMeta.js";
 import {
   buildServiceFeeTierLines,
   calcServiceFeeAmount,
@@ -14016,8 +14017,35 @@ function App() {
 
   useEffect(() => {
     if (isAdminRoute || isPaymentStatusRoute || isLandingRoute) return;
-    document.title = event?.name || SITE_TITLE;
-  }, [event?.name, isAdminRoute, isPaymentStatusRoute, isLandingRoute]);
+    const title = event?.name || SITE_TITLE;
+    document.title = title;
+    if (!event) return;
+    const imagePath = hero.imageUrl ? resolveAssetUrl(hero.imageUrl) : `${window.location.origin}/kyrkevent2.png`;
+    const image = /^https?:\/\//i.test(imagePath)
+      ? imagePath
+      : `${window.location.origin}${imagePath.startsWith("/") ? "" : "/"}${imagePath}`;
+    const descriptionParts = [
+      stripHtmlText(hero.bodyHtml) || hero.title || `Anmälan till ${event.name}`,
+      [heroEventDateLabel, heroPlaceLabel].filter(Boolean).join(" • ")
+    ].filter(Boolean);
+    applyShareMetaToDocument({
+      title,
+      description: descriptionParts.join(" — ").slice(0, 200),
+      image,
+      imageAlt: title,
+      url: `${window.location.origin}${window.location.pathname}`
+    });
+  }, [
+    event,
+    hero.bodyHtml,
+    hero.imageUrl,
+    hero.title,
+    heroEventDateLabel,
+    heroPlaceLabel,
+    isAdminRoute,
+    isPaymentStatusRoute,
+    isLandingRoute
+  ]);
 
   useEffect(() => {
     if (!event || isAdminRoute || isPaymentStatusRoute || isVerifyEmailRoute || isResetPasswordRoute) {
