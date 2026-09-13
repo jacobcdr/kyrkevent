@@ -1180,6 +1180,14 @@ const normalizeCustomFieldType = (value) => {
   return "text";
 };
 
+const isCustomFieldVisibleOnForm = (field) => {
+  if (!field) return false;
+  if (field.field_type === "checkbox") {
+    return field.is_visible !== false;
+  }
+  return true;
+};
+
 const formatProfileAddress = (profile) => {
   if (!profile) return "";
   const parts = [profile.address, profile.postal_code, profile.city]
@@ -2063,7 +2071,7 @@ app.get("/custom-fields", async (req, res) => {
     }
     const result = await pool.query(
       `
-        SELECT id, label, field_type, is_required
+        SELECT id, label, field_type, is_required, is_visible
         FROM event_custom_fields
         WHERE event_id = $1
         ORDER BY position ASC, id ASC
@@ -2165,7 +2173,7 @@ const loadCustomFieldsForEvent = async (eventId) => {
   }
   const result = await pool.query(
     `
-      SELECT id, label, field_type, is_required
+      SELECT id, label, field_type, is_required, is_visible
       FROM event_custom_fields
       WHERE event_id = $1
       ORDER BY position ASC, id ASC
@@ -2191,6 +2199,9 @@ const sanitizeCustomFields = (customFields, allowedFields) => {
         return null;
       }
       if (allowed.field_type === "checkbox") {
+        if (!isCustomFieldVisibleOnForm(allowed)) {
+          return { id, value: false };
+        }
         return { id, value: Boolean(entry?.value) };
       }
       return { id, value: String(entry?.value ?? "").trim() };
@@ -2203,6 +2214,7 @@ const validateCustomFields = (customFields, allowedFields) => {
   for (const field of allowedFields) {
     if (!field.is_required) continue;
     if (field.field_type === "paragraph" || field.field_type === "linebreak") continue;
+    if (!isCustomFieldVisibleOnForm(field)) continue;
     const value = values.get(String(field.id));
     if (field.field_type === "checkbox") {
       if (value !== true) {
@@ -7247,7 +7259,7 @@ app.get("/admin/custom-fields", requireAdmin, async (req, res) => {
     }
     const result = await pool.query(
       `
-        SELECT id, label, field_type, is_required
+        SELECT id, label, field_type, is_required, is_visible
         FROM event_custom_fields
         WHERE event_id = $1
         ORDER BY position ASC, id ASC
@@ -7285,7 +7297,7 @@ app.post("/admin/custom-fields", requireAdmin, async (req, res) => {
         )
         INSERT INTO event_custom_fields (event_id, label, field_type, is_required, position)
         SELECT $1, $2, $3, $4, pos FROM next_pos
-        RETURNING id, label, field_type, is_required
+        RETURNING id, label, field_type, is_required, is_visible
       `,
       [
         parsedEventId,
@@ -7395,6 +7407,46 @@ app.patch("/admin/form-fields/order", requireAdmin, async (req, res) => {
     res.json({ ok: true, formFieldOrder: normalizedOrder });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to update form field order" });
+  }
+});
+
+app.patch("/admin/custom-fields/:id", requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  const { visible } = req.body || {};
+  const eventId = await ensureEventOwnership(req.body?.eventId ?? req.query.eventId, req.userId, res);
+  if (!eventId) {
+    return;
+  }
+  const fieldId = Number(id);
+  if (!Number.isFinite(fieldId)) {
+    res.status(400).json({ ok: false, error: "Invalid field" });
+    return;
+  }
+  try {
+    const existing = await pool.query(
+      "SELECT id, label, field_type, is_required, is_visible FROM event_custom_fields WHERE id = $1 AND event_id = $2",
+      [fieldId, eventId]
+    );
+    if (existing.rowCount === 0) {
+      res.status(404).json({ ok: false, error: "Field not found" });
+      return;
+    }
+    if (existing.rows[0].field_type !== "checkbox") {
+      res.status(400).json({ ok: false, error: "Visibility can only be changed for checkbox fields" });
+      return;
+    }
+    const result = await pool.query(
+      `
+        UPDATE event_custom_fields
+        SET is_visible = $3
+        WHERE id = $1 AND event_id = $2
+        RETURNING id, label, field_type, is_required, is_visible
+      `,
+      [fieldId, eventId, visible === true]
+    );
+    res.json({ ok: true, field: result.rows[0] });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Failed to update field" });
   }
 });
 
@@ -10238,9 +10290,14 @@ const ensureBookingsTable = async () => {
       label TEXT NOT NULL,
       field_type TEXT NOT NULL,
       is_required BOOLEAN NOT NULL DEFAULT FALSE,
+      is_visible BOOLEAN NOT NULL DEFAULT TRUE,
       position INTEGER NOT NULL DEFAULT 0,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
+  `);
+  await pool.query(`
+    ALTER TABLE event_custom_fields
+      ADD COLUMN IF NOT EXISTS is_visible BOOLEAN NOT NULL DEFAULT TRUE
   `);
 
   await pool.query(`

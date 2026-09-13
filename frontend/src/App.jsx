@@ -5571,6 +5571,51 @@ const AdminPage = () => {
     };
     removeField().catch(() => setError("Kunde inte ta bort fältet."));
   };
+
+  const handleCustomFieldVisibilityChange = (field, visible) => {
+    if (!token || !selectedEventId) {
+      setError("Välj ett event först.");
+      return;
+    }
+    if (field?.field_type !== "checkbox") {
+      return;
+    }
+    const previous = customFieldsAdmin;
+    setCustomFieldsAdmin((prev) =>
+      prev.map((item) =>
+        String(item.id) === String(field.id) ? { ...item, is_visible: visible } : item
+      )
+    );
+    const persist = async () => {
+      const response = await fetch(`${API_BASE}/admin/custom-fields/${field.id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          eventId: Number(selectedEventId),
+          visible
+        })
+      });
+      if (!response.ok) {
+        throw new Error("Custom field visibility failed");
+      }
+      const data = await response.json().catch(() => ({}));
+      if (data.field) {
+        setCustomFieldsAdmin((prev) =>
+          prev.map((item) =>
+            String(item.id) === String(data.field.id) ? data.field : item
+          )
+        );
+      }
+    };
+    persist().catch(() => {
+      setCustomFieldsAdmin(previous);
+      setError("Kunde inte spara visning för fältet.");
+    });
+  };
+
   const handleSpeakerChange = (event) => {
     const { name, value, files } = event.target;
     if (name === "image") {
@@ -12840,6 +12885,7 @@ const AdminPage = () => {
                 <h2>Formulärfält</h2>
                 <p className="muted" style={{ marginTop: 0 }}>
                   Här kan du slå på/av standardfält (namn, e-post m.m.) och hantera egna fält.
+                  För checkbox kan du välja att visa eller dölja fältet utan att ta bort det.
                 </p>
                 <form className="admin-form" onSubmit={handleCustomFieldSubmit}>
                   <label className="field">
@@ -12960,6 +13006,15 @@ const AdminPage = () => {
                                     }
                                   />
                                 )
+                              ) : field?.field_type === "checkbox" ? (
+                                <input
+                                  type="checkbox"
+                                  checked={field.is_visible !== false}
+                                  onChange={(e) =>
+                                    handleCustomFieldVisibilityChange(field, e.target.checked)
+                                  }
+                                  aria-label={`Visa ${field?.label || "checkbox"} på formuläret`}
+                                />
                               ) : (
                                 "–"
                               )}
@@ -14559,6 +14614,7 @@ function App() {
     }
     for (const field of customFields) {
       if (!field.is_required) continue;
+      if (field.field_type === "checkbox" && field.is_visible === false) continue;
       const value = customFieldValues[field.id];
       if (field.field_type === "checkbox") {
         if (!value) {
@@ -14597,7 +14653,10 @@ function App() {
         }))
         .filter((entry) => {
           const field = customFields.find((f) => String(f.id) === String(entry.id));
-          return field?.field_type !== "paragraph" && field?.field_type !== "linebreak";
+          if (!field) return false;
+          if (field.field_type === "paragraph" || field.field_type === "linebreak") return false;
+          if (field.field_type === "checkbox" && field.is_visible === false) return false;
+          return true;
         })
     };
     setBookingCart((prev) => [...prev, payload]);
@@ -15167,6 +15226,7 @@ function App() {
                   );
                 }
                 if (field.field_type === "checkbox") {
+                  if (field.is_visible === false) return null;
                   return (
                     <label className="field checkbox-field" key={field.id}>
                       <span className="field-label">{field.label}</span>
