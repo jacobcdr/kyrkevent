@@ -1388,6 +1388,16 @@ body.public-event-body {
   box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.04);
 }
 
+.pricing-card.is-sold-out,
+.pricing-card.is-sold-out:hover {
+  cursor: not-allowed;
+  opacity: 0.62;
+  border-color: var(--border);
+  box-shadow: none;
+  transform: none;
+  background: #f8fafc;
+}
+
 .pricing-name {
   font-weight: 700;
   color: var(--text);
@@ -1404,6 +1414,20 @@ body.public-event-body {
   margin-top: 0.35rem;
   font-size: 0.95rem;
   color: var(--muted);
+}
+
+.pricing-availability {
+  margin-top: 0.5rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.pricing-availability.is-sold-out {
+  color: var(--danger-text);
+}
+
+.pricing-availability.is-few-left {
+  color: #b45309;
 }
 
 .place-card {
@@ -1820,6 +1844,10 @@ body.public-event-body {
 .field-label {
   font-weight: 600;
   font-size: 0.95rem;
+}
+
+.field > .muted {
+  font-size: 0.85rem;
 }
 
 .field-with-action {
@@ -2990,6 +3018,10 @@ body.public-event-body {
   padding: 1.5rem;
 }
 
+.admin-tabbed-frame__body > div > h2:first-child {
+  margin-top: 0;
+}
+
 .admin-main-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -3030,6 +3062,12 @@ body.public-event-body {
   border-bottom-color: var(--card);
   color: #0c4a6e;
   box-shadow: 0 -1px 0 var(--card);
+}
+
+.admin-main-tabs--frontpage .admin-main-tab {
+  min-width: auto;
+  padding: 0.55rem 0.85rem;
+  font-size: 0.9rem;
 }
 
 .admin-panel {
@@ -4148,6 +4186,40 @@ select.goog-te-combo {
   padding: 0.8rem 0.9rem;
   border-bottom: 1px solid var(--border);
   font-size: 0.95rem;
+}
+
+.ticket-status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 0.28rem 0.7rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.ticket-status-badge.is-active {
+  background: #dcfce7;
+  color: #166534;
+  border: 1px solid #86efac;
+}
+
+.ticket-status-badge.is-inactive {
+  background: #f1f5f9;
+  color: #64748b;
+  border: 1px solid #cbd5e1;
+}
+
+.price-row-inactive td {
+  color: var(--muted);
+}
+
+.admin-table-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
 }
 
 .sort-button {

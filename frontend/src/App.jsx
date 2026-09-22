@@ -412,6 +412,18 @@ function mergeSectionOrder(order, defaults) {
   return result;
 }
 
+const FRONTPAGE_EDITOR_TABS = [
+  { id: "order", label: "Sektionsordning" },
+  { id: "text", label: "Text" },
+  { id: "formButton", label: "Knapp till anmälan" },
+  { id: "program", label: "Program" },
+  { id: "faq", label: "FAQ" },
+  { id: "speakers", label: "Talare" },
+  { id: "partners", label: "Partner" },
+  { id: "gallery", label: "Galleri" },
+  { id: "place", label: "Plats" }
+];
+
 function ProgramFormattedInput({ editorRef, onChange, placeholder }) {
   const applyCommand = (command) => {
     const el = editorRef.current;
@@ -2400,7 +2412,13 @@ const AdminPage = () => {
   const partnerImageInputRef = useRef(null);
   const galleryImageInputRef = useRef(null);
   const [pricesAdmin, setPricesAdmin] = useState([]);
-  const [priceForm, setPriceForm] = useState({ name: "", amount: "", description: "" });
+  const [priceForm, setPriceForm] = useState({
+    name: "",
+    amount: "",
+    description: "",
+    maxQuantity: "",
+    isActive: true
+  });
   const [priceEditingId, setPriceEditingId] = useState(null);
   const [discounts, setDiscounts] = useState([]);
   const [discountForm, setDiscountForm] = useState({
@@ -2446,6 +2464,7 @@ const AdminPage = () => {
   const [serviceFeeTierSaving, setServiceFeeTierSaving] = useState(false);
   const [serviceFeeTierMessage, setServiceFeeTierMessage] = useState("");
   const [eventSettingsTab, setEventSettingsTab] = useState("general");
+  const [frontpageTab, setFrontpageTab] = useState("order");
   const [adminMenuOpen, setAdminMenuOpen] = useState(false);
   const adminMenuTimerRef = useRef(null);
   const adminUsername = useMemo(() => {
@@ -2573,6 +2592,7 @@ const AdminPage = () => {
   }, [selectedEventId, selectedEvent?.vat_rate_percent]);
   useEffect(() => {
     setEventSettingsTab("general");
+    setFrontpageTab("order");
   }, [selectedEventId]);
   useEffect(() => {
     if (!token || !selectedEventId || adminSection !== "settings") {
@@ -2631,22 +2651,22 @@ const AdminPage = () => {
     setMaxParticipantsInput(value);
   }, [selectedEventId, selectedEvent?.max_participants]);
   useEffect(() => {
-    // Synka bara texteditorn när man går in på framsida-vyn,
+    // Synka bara texteditorn när man går in på Text-fliken,
     // inte vid varje tecken, annars hoppar markören.
-    if (adminSection === "frontpage" && heroEditorRef.current) {
+    if (adminSection === "frontpage" && frontpageTab === "text" && heroEditorRef.current) {
       heroEditorRef.current.innerHTML = heroForm.bodyHtml || "";
     }
-  }, [adminSection]);
+  }, [adminSection, frontpageTab]);
   useEffect(() => {
-    // Synka FAQ-editorn när man går in på framsida-vyn eller byter event.
+    // Synka FAQ-editorn när man går in på FAQ-fliken eller byter event.
     // Uppdatera inte löpande vid varje tangenttryckning för att undvika att markören hoppar.
-    if (adminSection === "frontpage" && faqEditorRef.current) {
+    if (adminSection === "frontpage" && frontpageTab === "faq" && faqEditorRef.current) {
       faqEditorRef.current.innerHTML = adminFaqText || "";
     }
-  }, [adminSection, selectedEventId]);
+  }, [adminSection, frontpageTab, selectedEventId]);
   useEffect(() => {
     const el = programTimeEditorRef.current;
-    if (adminSection !== "frontpage" || !el) {
+    if (adminSection !== "frontpage" || frontpageTab !== "program" || !el) {
       return;
     }
     const nextHtml = programForm.time || "";
@@ -2656,17 +2676,17 @@ const AdminPage = () => {
     if (document.activeElement !== el && el.innerHTML !== nextHtml) {
       el.innerHTML = nextHtml;
     }
-  }, [adminSection, selectedEventId, editingId, programForm.time]);
+  }, [adminSection, frontpageTab, selectedEventId, editingId, programForm.time]);
   useEffect(() => {
     const el = programDescriptionEditorRef.current;
-    if (adminSection !== "frontpage" || !el) {
+    if (adminSection !== "frontpage" || frontpageTab !== "program" || !el) {
       return;
     }
     const nextHtml = programForm.description || "";
     if (document.activeElement !== el && el.innerHTML !== nextHtml) {
       el.innerHTML = nextHtml;
     }
-  }, [adminSection, selectedEventId, editingId, programForm.description]);
+  }, [adminSection, frontpageTab, selectedEventId, editingId, programForm.description]);
   useEffect(() => () => {
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
   }, []);
@@ -4656,14 +4676,16 @@ const AdminPage = () => {
           eventId: Number(selectedEventId),
           name: priceForm.name.trim(),
           amount: priceForm.amount,
-          description: priceForm.description.trim()
+          description: priceForm.description.trim(),
+          maxQuantity: priceForm.maxQuantity.trim(),
+          isActive: priceForm.isActive !== false
         })
       });
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
         throw new Error(errData.error || "Kunde inte spara priset.");
       }
-      setPriceForm({ name: "", amount: "", description: "" });
+      setPriceForm({ name: "", amount: "", description: "", maxQuantity: "", isActive: true });
       setPriceEditingId(null);
       await loadAdminPrices(token, selectedEventId);
       localStorage.setItem(buildStorageKey("pricesUpdatedAt", selectedEventId), String(Date.now()));
@@ -4828,14 +4850,58 @@ const AdminPage = () => {
     setPriceForm({
       name: price.name || "",
       amount: String(price.amount ?? ""),
-      description: price.description || ""
+      description: price.description || "",
+      maxQuantity: price.max_quantity != null ? String(price.max_quantity) : "",
+      isActive: price.is_active !== false
     });
     setPriceEditingId(price.id);
   };
 
   const handlePriceCancel = () => {
-    setPriceForm({ name: "", amount: "", description: "" });
+    setPriceForm({ name: "", amount: "", description: "", maxQuantity: "", isActive: true });
     setPriceEditingId(null);
+  };
+
+  const handlePriceToggleActive = (price) => {
+    if (!token) {
+      setError("Logga in för att uppdatera priser.");
+      return;
+    }
+    if (!selectedEventId) {
+      setError("Välj ett event först.");
+      return;
+    }
+    setPriceSectionError("");
+    setError("");
+    const togglePrice = async () => {
+      const response = await fetch(`${API_BASE}/admin/prices/${price.id}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          eventId: Number(selectedEventId),
+          name: price.name,
+          amount: price.amount,
+          description: price.description || "",
+          maxQuantity: price.max_quantity == null ? "" : String(price.max_quantity),
+          isActive: price.is_active === false
+        })
+      });
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || "Kunde inte uppdatera biljetten.");
+      }
+      if (priceEditingId === price.id) {
+        setPriceForm((prev) => ({ ...prev, isActive: price.is_active === false }));
+      }
+      await loadAdminPrices(token, selectedEventId);
+      localStorage.setItem(buildStorageKey("pricesUpdatedAt", selectedEventId), String(Date.now()));
+    };
+    togglePrice().catch((err) =>
+      setPriceSectionError(err?.message || "Kunde inte uppdatera biljettens status.")
+    );
   };
 
   const handlePriceDelete = (price) => {
@@ -9052,7 +9118,7 @@ const AdminPage = () => {
                 ).toLocaleString("sv-SE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{" "}
                 kr inkl. {payoutSummary.payoutFeeVatRatePercent ?? 25} % moms
               </strong>
-              ). Delutbetalningar är avgiftsfria.
+              ).
             </p>
             <div className="table-wrap" style={{ marginBottom: "1.5rem" }}>
               <table className="table">
@@ -9927,7 +9993,7 @@ const AdminPage = () => {
             <ul>
               <li>
                 <strong>Biljett- och prisnivåer</strong> – lägg till olika biljetter (t.ex. vuxen, ungdom, tidig-bokning) med pris och
-                antal platser.
+                valfritt maxantal. En biljett kan inaktiveras utan att tas bort. När 5 eller färre finns kvar visas ”Fåtal biljetter kvar”, och vid 0 visas ”Slutsålt”.
               </li>
               <li>
                 <strong>Biljettpriser</strong> – med Bas (ingår vid registrering) kan du lägga till betalda biljetter direkt. Vid onlinebetalning tas en serviceavgift ut av deltagaren (se avsnitt 7).
@@ -11387,8 +11453,26 @@ const AdminPage = () => {
           ) : null}
 
           {token && selectedEventId && adminSection === "frontpage" ? (
-            <>
-              <div className="section">
+            <div className="section admin-tabbed-frame">
+              <div className="admin-tabbed-frame__bar">
+                <nav className="admin-main-tabs admin-main-tabs--frontpage" role="tablist" aria-label="Framsidans sektioner">
+                  {FRONTPAGE_EDITOR_TABS.map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      role="tab"
+                      className={`admin-main-tab ${frontpageTab === tab.id ? "is-active" : ""}`}
+                      aria-selected={frontpageTab === tab.id}
+                      onClick={() => setFrontpageTab(tab.id)}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </nav>
+              </div>
+              <div className="admin-tabbed-frame__body">
+              {frontpageTab === "order" ? (
+              <div>
                 <h2>Sektionsordning på framsidan</h2>
                 <p className="muted">Ordningen nedan styr i vilken ordning sektionerna visas på den publika sidan. Använd pilarna för att flytta.</p>
                 <ul className="section-order-list">
@@ -11419,7 +11503,9 @@ const AdminPage = () => {
                   ))}
                 </ul>
               </div>
-              <div className="section">
+              ) : null}
+              {frontpageTab === "formButton" ? (
+              <div>
                 <div className="section-header">
                   <div style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
                     <h2>Knapp till anmälan</h2>
@@ -11446,10 +11532,12 @@ const AdminPage = () => {
                 </div>
                 <p className="muted">
                   Visar en knapp på framsidan som tar besökaren direkt till anmälningsformuläret
-                  ("Anmäl dig här"). Flytta den i sektionsordningen ovan för att ändra var den hamnar.
+                  ("Anmäl dig här"). Ändra var den hamnar på den publika sidan under fliken Sektionsordning.
                 </p>
               </div>
-              <div className="section">
+              ) : null}
+              {frontpageTab === "program" ? (
+              <div>
                 <div
                   className="section-header"
                   style={{
@@ -11586,8 +11674,10 @@ const AdminPage = () => {
                   <p className="muted">Inga programpunkter ännu.</p>
                 )}
               </div>
+              ) : null}
 
-              <div className="section">
+              {frontpageTab === "text" ? (
+              <div>
                 <div className="section-header">
                   <h2>Text</h2>
                   <label className="field checkbox-field section-toggle">
@@ -11671,8 +11761,10 @@ const AdminPage = () => {
                   </div>
                 </form>
               </div>
+              ) : null}
 
-              <div className="section">
+              {frontpageTab === "place" ? (
+              <div>
                 <div className="section-header">
                   <h2>Plats</h2>
                   <label className="field checkbox-field section-toggle">
@@ -11749,8 +11841,10 @@ const AdminPage = () => {
                 </form>
                 {place.address ? <p className="muted">Nuvarande adress: {place.address}</p> : null}
               </div>
+              ) : null}
 
-              <div className="section">
+              {frontpageTab === "faq" ? (
+              <div>
                 <div className="section-header">
                   <div style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
                     <h2>FAQ</h2>
@@ -11852,8 +11946,10 @@ const AdminPage = () => {
                   </div>
                 </div>
               </div>
+              ) : null}
 
-              <div className="section">
+              {frontpageTab === "speakers" ? (
+              <div>
                 <div
                   className="section-header"
                   style={{
@@ -12040,8 +12136,10 @@ const AdminPage = () => {
                   <p className="muted">Inga talare ännu.</p>
                 )}
               </div>
+              ) : null}
 
-              <div className="section">
+              {frontpageTab === "partners" ? (
+              <div>
                 <div
                   className="section-header"
                   style={{
@@ -12198,8 +12296,10 @@ const AdminPage = () => {
                   <p className="muted">Inga partners ännu.</p>
                 )}
               </div>
+              ) : null}
 
-              <div className="section">
+              {frontpageTab === "gallery" ? (
+              <div>
                 <div
                   className="section-header"
                   style={{
@@ -12354,7 +12454,9 @@ const AdminPage = () => {
                   <p className="muted">Inga bilder i galleriet ännu.</p>
                 )}
               </div>
-            </>
+              ) : null}
+              </div>
+            </div>
           ) : null}
 
           {token && selectedEventId && adminSection === "settings" ? (
@@ -13105,6 +13207,19 @@ const AdminPage = () => {
                     );
                   })()}
                   <label className="field">
+                    <span className="field-label">Antal biljetter</span>
+                    <input
+                      name="maxQuantity"
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={priceForm.maxQuantity || ""}
+                      onChange={handlePriceChange}
+                      placeholder="Lämna tomt för obegränsat"
+                    />
+                    <span className="muted">Valfritt. Gäller bara den här biljetten, inte hela eventet.</span>
+                  </label>
+                  <label className="field">
                     <span className="field-label">Beskrivning</span>
                     <textarea
                       name="description"
@@ -13112,6 +13227,17 @@ const AdminPage = () => {
                       value={priceForm.description}
                       onChange={handlePriceChange}
                     ></textarea>
+                  </label>
+                  <label className="field checkbox-field section-toggle">
+                    <span className="field-label">Aktiv</span>
+                    <input
+                      name="isActive"
+                      type="checkbox"
+                      checked={priceForm.isActive !== false}
+                      onChange={(event) =>
+                        setPriceForm((prev) => ({ ...prev, isActive: event.target.checked }))
+                      }
+                    />
                   </label>
                   <div className="admin-actions">
                     <button
@@ -13134,31 +13260,63 @@ const AdminPage = () => {
                         <tr>
                           <th>Namn</th>
                           <th>Pris</th>
+                          <th>Antal</th>
+                          <th>Status</th>
                           <th>Beskrivning</th>
                           <th></th>
                         </tr>
                       </thead>
                       <tbody>
                         {pricesAdmin.map((price) => (
-                          <tr key={price.id}>
+                          <tr
+                            key={price.id}
+                            className={price.is_active === false ? "price-row-inactive" : undefined}
+                          >
                             <td>{price.name}</td>
                             <td>{price.amount}</td>
+                            <td>
+                              {price.max_quantity == null
+                                ? "Obegränsat"
+                                : `${price.max_quantity}${
+                                    typeof price.sold_count === "number"
+                                      ? ` (${price.sold_count} sålda)`
+                                      : ""
+                                  }`}
+                            </td>
+                            <td>
+                              <span
+                                className={`ticket-status-badge ${
+                                  price.is_active === false ? "is-inactive" : "is-active"
+                                }`}
+                              >
+                                {price.is_active === false ? "Inaktiv" : "Aktiv"}
+                              </span>
+                            </td>
                             <td>{price.description || "-"}</td>
                             <td>
-                              <button
-                                type="button"
-                                className="icon-button edit"
-                                onClick={() => handlePriceEdit(price)}
-                              >
-                                Redigera
-                              </button>
-                              <button
-                                type="button"
-                                className="icon-button danger"
-                                onClick={() => handlePriceDelete(price)}
-                              >
-                                Ta bort
-                              </button>
+                              <div className="admin-table-actions">
+                                <button
+                                  type="button"
+                                  className="icon-button edit"
+                                  onClick={() => handlePriceToggleActive(price)}
+                                >
+                                  {price.is_active === false ? "Aktivera" : "Inaktivera"}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="icon-button edit"
+                                  onClick={() => handlePriceEdit(price)}
+                                >
+                                  Redigera
+                                </button>
+                                <button
+                                  type="button"
+                                  className="icon-button danger"
+                                  onClick={() => handlePriceDelete(price)}
+                                >
+                                  Ta bort
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         ))}
@@ -14632,6 +14790,18 @@ function App() {
       setPaymentError("Välj ett biljettalternativ.");
       return;
     }
+    if (selectedPrice && selectedPrice.remaining != null) {
+      const alreadyInCart = bookingCart.filter((item) => item.priceName === selectedPrice.name).length;
+      const remainingAfterCart = Math.max(0, selectedPrice.remaining - alreadyInCart);
+      if (remainingAfterCart <= 0) {
+        setPaymentError(
+          selectedPrice.remaining <= 0
+            ? `Biljetten "${selectedPrice.name}" är slutsåld.`
+            : `Det finns bara ${selectedPrice.remaining} biljetter kvar av "${selectedPrice.name}".`
+        );
+        return;
+      }
+    }
     setPaymentError("");
     const fullName = [form.firstName.trim(), form.lastName.trim()].filter(Boolean).join(" ");
     const payload = {
@@ -14644,6 +14814,7 @@ function App() {
       phone: form.phone.trim(),
       organization: form.organization.trim(),
       terms: true,
+      priceId: selectedPrice ? selectedPrice.id : "",
       priceName: selectedPrice ? selectedPrice.name : "Anmälan",
       priceAmount: selectedPrice ? selectedPrice.amount : 0,
       customFields: customFields
@@ -14727,6 +14898,24 @@ function App() {
   const handleCheckout = async () => {
     if (bookingCart.length === 0) return;
     if (paymentLoading) return;
+    const requestedByName = {};
+    for (const item of bookingCart) {
+      const name = String(item.priceName || "").trim();
+      if (!name) continue;
+      requestedByName[name] = (requestedByName[name] || 0) + 1;
+    }
+    for (const [ticketName, requested] of Object.entries(requestedByName)) {
+      const price = prices.find((entry) => entry.name === ticketName);
+      if (!price || price.remaining == null) continue;
+      if (requested > price.remaining) {
+        setPaymentError(
+          price.remaining === 0
+            ? `Biljetten "${ticketName}" är slutsåld.`
+            : `Det finns bara ${price.remaining} biljetter kvar av "${ticketName}".`
+        );
+        return;
+      }
+    }
     setPaymentError("");
     setPaymentLoading(true);
     try {
@@ -15297,22 +15486,39 @@ function App() {
               <h3>Priser</h3>
               <p className="pricing-hint">Välj ett biljettalternativ nedan innan du går vidare.</p>
               <div className="pricing-grid">
-                {prices.map((price) => (
+                {prices.map((price) => {
+                  const inCart = bookingCart.filter((item) => item.priceName === price.name).length;
+                  const remaining =
+                    price.remaining == null ? null : Math.max(0, price.remaining - inCart);
+                  const soldOut = remaining === 0;
+                  const fewLeft = remaining != null && remaining > 0 && remaining <= 5;
+                  return (
                   <button
                     key={price.id}
                     type="button"
                     className={`pricing-card ${
                       String(form.priceId) === String(price.id) ? "is-selected" : ""
-                    }`}
-                    onClick={() => setForm((prev) => ({ ...prev, priceId: String(price.id) }))}
+                    }${soldOut ? " is-sold-out" : ""}`}
+                    disabled={soldOut}
+                    aria-disabled={soldOut}
+                    onClick={() => {
+                      if (soldOut) return;
+                      setForm((prev) => ({ ...prev, priceId: String(price.id) }));
+                    }}
                   >
                     <div className="pricing-name">{price.name}</div>
                     <div className="pricing-price">{price.amount}</div>
                     {price.description ? (
                       <div className="pricing-desc">{price.description}</div>
                     ) : null}
+                    {soldOut ? (
+                      <div className="pricing-availability is-sold-out">Slutsålt</div>
+                    ) : fewLeft ? (
+                      <div className="pricing-availability is-few-left">Fåtal biljetter kvar</div>
+                    ) : null}
                   </button>
-                ))}
+                  );
+                })}
               </div>
             </div>
           ) : null}

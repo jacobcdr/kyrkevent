@@ -1815,6 +1815,172 @@ const checkEventCapacity = async (eventId, additionalSeats = 1) => {
   return { ok: true, max, current };
 };
 
+const parseMaxQuantity = (value) => {
+  if (value === undefined || value === null || value === "") {
+    return { ok: true, value: null };
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return { ok: false, error: "Ogiltigt antal biljetter." };
+  }
+  const qty = Math.floor(parsed);
+  if (qty <= 0) {
+    return { ok: true, value: null };
+  }
+  return { ok: true, value: qty };
+};
+
+const loadPricesWithAvailability = async (eventId) => {
+  const [pricesResult, soldResult] = await Promise.all([
+    pool.query(
+      "SELECT id, name, amount, description, position, max_quantity, is_active FROM prices WHERE event_id = $1 ORDER BY position ASC, id ASC",
+      [eventId]
+    ),
+    pool.query(
+      `
+        SELECT ticket, COUNT(*)::int AS count
+        FROM bookings
+        WHERE event_id = $1
+          AND (payment_status = 'manual' OR payment_status = 'paid')
+          AND voided_at IS NULL
+        GROUP BY ticket
+      `,
+      [eventId]
+    )
+  ]);
+  const soldByTicket = new Map(soldResult.rows.map((row) => [row.ticket, row.count]));
+  return pricesResult.rows.map((price) => {
+    const maxQuantity =
+      price.max_quantity == null || Number(price.max_quantity) <= 0
+        ? null
+        : Number(price.max_quantity);
+    const soldCount = soldByTicket.get(price.name) || 0;
+    return {
+      id: price.id,
+      name: price.name,
+      amount: price.amount,
+      description: price.description,
+      position: price.position,
+      max_quantity: maxQuantity,
+      sold_count: soldCount,
+      remaining: maxQuantity == null ? null : Math.max(0, maxQuantity - soldCount),
+      is_active: price.is_active !== false
+    };
+  });
+};
+
+const parseIsActive = (value) => {
+  if (value === false || value === "false" || value === 0 || value === "0") {
+    return false;
+  }
+  return true;
+};
+
+const applyCatalogTicket = async (payload) => {
+  const prices = await loadPricesWithAvailability(payload.eventId);
+  if (prices.length === 0) {
+    return {
+      ok: true,
+      payload: {
+        ...payload,
+        priceName: payload.priceName || "Anmälan",
+        priceAmount: 0,
+        priceId: ""
+      }
+    };
+  }
+  const active = prices.filter((price) => price.is_active);
+  const requestedId = payload.priceId != null ? String(payload.priceId).trim() : "";
+  const requestedName = String(payload.priceName || "").trim();
+  let match = null;
+  if (requestedId) {
+    match = active.find((price) => String(price.id) === requestedId) || null;
+  }
+  if (!match && requestedName) {
+    const named = active.filter((price) => price.name === requestedName);
+    match = named.find((price) => price.remaining == null || price.remaining > 0) || named[0] || null;
+  }
+  if (!match) {
+    const inactiveOrSold = prices.find(
+      (price) =>
+        (requestedId && String(price.id) === requestedId) ||
+        (requestedName && price.name === requestedName)
+    );
+    if (inactiveOrSold && inactiveOrSold.is_active === false) {
+      return { ok: false, error: `Biljetten "${inactiveOrSold.name}" är inte tillgänglig.` };
+    }
+    return { ok: false, error: "Välj ett giltigt biljettalternativ." };
+  }
+  return {
+    ok: true,
+    payload: {
+      ...payload,
+      priceId: String(match.id),
+      priceName: match.name,
+      priceAmount: Number(match.amount)
+    }
+  };
+};
+
+const applyCatalogTickets = async (items) => {
+  const resolved = [];
+  for (const item of items || []) {
+    const catalog = await applyCatalogTicket(item);
+    if (!catalog.ok) {
+      return catalog;
+    }
+    resolved.push(catalog.payload);
+  }
+  return { ok: true, items: resolved };
+};
+
+const checkTicketCapacities = async (eventId, requestedItems) => {
+  const requestedByName = {};
+  for (const item of requestedItems || []) {
+    const name = String(item?.priceName || item?.ticket || "").trim();
+    if (!name) continue;
+    requestedByName[name] = (requestedByName[name] || 0) + 1;
+  }
+  if (Object.keys(requestedByName).length === 0) {
+    return { ok: true };
+  }
+  const prices = await loadPricesWithAvailability(eventId);
+  if (prices.length === 0) {
+    return { ok: true };
+  }
+  const byName = new Map();
+  for (const price of prices) {
+    const existing = byName.get(price.name);
+    if (!existing || (price.is_active && !existing.is_active)) {
+      byName.set(price.name, price);
+    }
+  }
+  for (const [ticketName, requested] of Object.entries(requestedByName)) {
+    const price = byName.get(ticketName);
+    if (!price || price.is_active === false) {
+      return {
+        ok: false,
+        ticketName,
+        error: `Biljetten "${ticketName}" är inte tillgänglig.`
+      };
+    }
+    if (price.max_quantity == null) continue;
+    if (requested > price.remaining) {
+      const remaining = price.remaining;
+      return {
+        ok: false,
+        ticketName,
+        remaining,
+        error:
+          remaining === 0
+            ? `Biljetten "${ticketName}" är slutsåld.`
+            : `Det finns bara ${remaining} biljetter kvar av "${ticketName}".`
+      };
+    }
+  }
+  return { ok: true };
+};
+
 app.get("/events/:slug", async (req, res) => {
   const { slug } = req.params;
   if (!slug) {
@@ -1917,11 +2083,8 @@ app.get("/prices", async (req, res) => {
       res.status(400).json({ ok: false, error: "Missing event" });
       return;
     }
-    const result = await pool.query(
-      "SELECT id, name, amount, description, position FROM prices WHERE event_id = $1 ORDER BY position ASC, id ASC",
-      [eventId]
-    );
-    res.json({ ok: true, prices: result.rows });
+    const prices = (await loadPricesWithAvailability(eventId)).filter((price) => price.is_active);
+    res.json({ ok: true, prices });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to load prices" });
   }
@@ -2102,6 +2265,7 @@ const parseBookingPayload = (body) => {
     terms,
     priceName,
     priceAmount,
+    priceId,
     discountCode,
     eventId,
     customFields
@@ -2160,6 +2324,7 @@ const parseBookingPayload = (body) => {
       terms: true,
       priceName: finalPriceName,
       priceAmount: finalPriceAmount,
+      priceId: priceId != null && String(priceId).trim() !== "" ? String(priceId).trim() : "",
       discountCode: discountCode ? String(discountCode).trim().toUpperCase() : "",
       customFields: Array.isArray(customFields) ? customFields : []
     }
@@ -2292,6 +2457,17 @@ app.post("/bookings", bookingLimiter, async (req, res) => {
       });
       return;
     }
+    const catalog = await applyCatalogTicket(parsed.payload);
+    if (!catalog.ok) {
+      res.status(400).json({ ok: false, error: catalog.error });
+      return;
+    }
+    parsed.payload = catalog.payload;
+    const ticketCapacity = await checkTicketCapacities(parsed.payload.eventId, [parsed.payload]);
+    if (!ticketCapacity.ok) {
+      res.status(400).json({ ok: false, error: ticketCapacity.error });
+      return;
+    }
     const sectionsResult = await pool.query(
       `
         SELECT show_name, show_email, show_phone, show_organization
@@ -2399,6 +2575,17 @@ app.post("/payments/start", paymentLimiter, async (req, res) => {
       maxParticipants: capacity.max,
       currentParticipants: capacity.current
     });
+    return;
+  }
+  const catalog = await applyCatalogTicket(parsed.payload);
+  if (!catalog.ok) {
+    res.status(400).json({ ok: false, error: catalog.error });
+    return;
+  }
+  parsed.payload = catalog.payload;
+  const ticketCapacity = await checkTicketCapacities(parsed.payload.eventId, [parsed.payload]);
+  if (!ticketCapacity.ok) {
+    res.status(400).json({ ok: false, error: ticketCapacity.error });
     return;
   }
 
@@ -2787,6 +2974,18 @@ app.post("/payments/start-cart", paymentLimiter, async (req, res) => {
       maxParticipants: capacity.max,
       currentParticipants: capacity.current
     });
+    return;
+  }
+  const catalogItems = await applyCatalogTickets(parsedItems);
+  if (!catalogItems.ok) {
+    res.status(400).json({ ok: false, error: catalogItems.error });
+    return;
+  }
+  parsedItems.length = 0;
+  parsedItems.push(...catalogItems.items);
+  const ticketCapacity = await checkTicketCapacities(eventId, parsedItems);
+  if (!ticketCapacity.ok) {
+    res.status(400).json({ ok: false, error: ticketCapacity.error });
     return;
   }
   const pricesCountResult = await pool.query(
@@ -7826,11 +8025,8 @@ app.get("/admin/prices", requireAdmin, async (req, res) => {
     if (!eventId) {
       return;
     }
-    const result = await pool.query(
-      "SELECT id, name, amount, description, position FROM prices WHERE event_id = $1 ORDER BY position ASC, id ASC",
-      [eventId]
-    );
-    res.json({ ok: true, prices: result.rows });
+    const prices = await loadPricesWithAvailability(eventId);
+    res.json({ ok: true, prices });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to load prices" });
   }
@@ -7853,7 +8049,7 @@ const requireSubscriptionForPrices = async (req, res) => {
 };
 
 app.post("/admin/prices", requireAdmin, async (req, res) => {
-  const { name, amount, description, eventId } = req.body || {};
+  const { name, amount, description, maxQuantity, isActive, eventId } = req.body || {};
   const parsedEventId = await ensureEventOwnership(eventId, req.userId, res);
   if (!parsedEventId) {
     return;
@@ -7870,20 +8066,28 @@ app.post("/admin/prices", requireAdmin, async (req, res) => {
     res.status(400).json({ ok: false, error: "Invalid amount" });
     return;
   }
+  const parsedMaxQuantity = parseMaxQuantity(maxQuantity);
+  if (!parsedMaxQuantity.ok) {
+    res.status(400).json({ ok: false, error: parsedMaxQuantity.error });
+    return;
+  }
+  const parsedIsActive = parseIsActive(isActive);
   try {
     const result = await pool.query(
       `
         WITH next_pos AS (
-          SELECT COALESCE(MAX(position), 0) + 1 AS pos FROM prices WHERE event_id = $4
+          SELECT COALESCE(MAX(position), 0) + 1 AS pos FROM prices WHERE event_id = $6
         )
-        INSERT INTO prices (event_id, name, amount, description, position)
-        SELECT $4, $1, $2, $3, pos FROM next_pos
-        RETURNING id, name, amount, description, position
+        INSERT INTO prices (event_id, name, amount, description, position, max_quantity, is_active)
+        SELECT $6, $1, $2, $3, pos, $4, $5 FROM next_pos
+        RETURNING id, name, amount, description, position, max_quantity, is_active
       `,
       [
         String(name).trim(),
         Math.round(parsedAmount),
         String(description || "").trim(),
+        parsedMaxQuantity.value,
+        parsedIsActive,
         parsedEventId
       ]
     );
@@ -7895,7 +8099,7 @@ app.post("/admin/prices", requireAdmin, async (req, res) => {
 
 app.put("/admin/prices/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { name, amount, description, eventId } = req.body || {};
+  const { name, amount, description, maxQuantity, isActive, eventId } = req.body || {};
   const parsedEventId = await ensureEventOwnership(eventId, req.userId, res);
   if (!parsedEventId) {
     return;
@@ -7912,13 +8116,21 @@ app.put("/admin/prices/:id", requireAdmin, async (req, res) => {
     res.status(400).json({ ok: false, error: "Invalid amount" });
     return;
   }
+  const parsedMaxQuantity = parseMaxQuantity(maxQuantity);
+  if (!parsedMaxQuantity.ok) {
+    res.status(400).json({ ok: false, error: parsedMaxQuantity.error });
+    return;
+  }
+  const parsedIsActive = parseIsActive(isActive);
   try {
     const result = await pool.query(
-      "UPDATE prices SET name = $1, amount = $2, description = $3 WHERE id = $4 AND event_id = $5 RETURNING id, name, amount, description, position",
+      "UPDATE prices SET name = $1, amount = $2, description = $3, max_quantity = $4, is_active = $5 WHERE id = $6 AND event_id = $7 RETURNING id, name, amount, description, position, max_quantity, is_active",
       [
         String(name).trim(),
         Math.round(parsedAmount),
         String(description || "").trim(),
+        parsedMaxQuantity.value,
+        parsedIsActive,
         id,
         parsedEventId
       ]
@@ -10553,13 +10765,17 @@ const ensureBookingsTable = async () => {
       name TEXT NOT NULL,
       amount INTEGER NOT NULL,
       description TEXT NOT NULL DEFAULT '',
-      position INTEGER NOT NULL
+      position INTEGER NOT NULL,
+      max_quantity INTEGER,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE
     )
   `);
   await pool.query(`
     ALTER TABLE prices
       ADD COLUMN IF NOT EXISTS event_id INTEGER,
-      ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT ''
+      ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS max_quantity INTEGER,
+      ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE
   `);
   const priceCount = await pool.query(
     "SELECT COUNT(*)::int AS count FROM prices WHERE event_id = $1",
