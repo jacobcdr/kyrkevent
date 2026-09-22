@@ -100,6 +100,45 @@ function readImageFileDimensions(file) {
   });
 }
 
+const HERO_VIDEO_MAX_BYTES = 40 * 1024 * 1024;
+
+function parseHeroBackgroundKind(value) {
+  return String(value || "").toLowerCase() === "video" ? "video" : "image";
+}
+
+function resolveHeroBackground({ imageUrl, videoUrl, backgroundKind } = {}) {
+  const kind = parseHeroBackgroundKind(backgroundKind);
+  const video = String(videoUrl || "").trim();
+  const image = String(imageUrl || "").trim();
+  if (kind === "video" && video) return { type: "video", url: video };
+  if (image) return { type: "image", url: image };
+  if (video) return { type: "video", url: video };
+  return { type: null, url: "" };
+}
+
+function readVideoFileDimensions(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const video = document.createElement("video");
+    video.preload = "metadata";
+    video.onloadedmetadata = () => {
+      const width = video.videoWidth;
+      const height = video.videoHeight;
+      URL.revokeObjectURL(url);
+      if (!width || !height) {
+        reject(new Error("Kunde inte läsa videons mått."));
+        return;
+      }
+      resolve({ width, height });
+    };
+    video.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Kunde inte läsa videon."));
+    };
+    video.src = url;
+  });
+}
+
 function formatStorageBytes(bytes) {
   if (!Number.isFinite(bytes) || bytes < 0) return "—";
   if (bytes < 1024) return `${bytes} B`;
@@ -188,6 +227,101 @@ function compareAdminEventLinks(a, b, key, dir) {
   }
   const cmp = String(va).localeCompare(String(vb), "sv", { sensitivity: "base" });
   return asc ? cmp : -cmp;
+}
+
+const FAQ_COLLAPSE_LINES = 20;
+
+function FaqCollapsible({ html, enabled }) {
+  const content = String(html || "").trim();
+  const wrapRef = useRef(null);
+  const contentRef = useRef(null);
+  const [expanded, setExpanded] = useState(false);
+  const [hasOverflow, setHasOverflow] = useState(false);
+
+  const toggleExpanded = () => {
+    if (expanded) {
+      const section = wrapRef.current?.closest(".section") || wrapRef.current;
+      setExpanded(false);
+      requestAnimationFrame(() => {
+        section?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      return;
+    }
+    setExpanded(true);
+  };
+
+  useLayoutEffect(() => {
+    setExpanded(false);
+  }, [content]);
+
+  useLayoutEffect(() => {
+    const el = contentRef.current;
+    if (!el || !content || !enabled) {
+      setHasOverflow(false);
+      return undefined;
+    }
+    const measure = () => {
+      if (expanded) return;
+      const style = getComputedStyle(el);
+      let lineHeight = parseFloat(style.lineHeight);
+      if (Number.isNaN(lineHeight)) {
+        lineHeight = parseFloat(style.fontSize) * 1.6;
+      }
+      setHasOverflow(el.scrollHeight > lineHeight * FAQ_COLLAPSE_LINES + 2);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    window.addEventListener("resize", measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [content, enabled, expanded]);
+
+  if (!content) return null;
+
+  if (!enabled) {
+    return <div className="hero-body faq-body" dangerouslySetInnerHTML={{ __html: content }} />;
+  }
+
+  const showClamp = hasOverflow && !expanded;
+
+  return (
+    <div
+      ref={wrapRef}
+      className={`faq-collapse-wrap${showClamp ? " is-clamped" : ""}${expanded ? " is-expanded" : ""}`}
+    >
+      <div
+        ref={contentRef}
+        className={`hero-body faq-body faq-collapse-body${showClamp ? " is-clamped" : ""}`}
+        dangerouslySetInnerHTML={{ __html: content }}
+      />
+      {hasOverflow ? (
+        <div className="faq-collapse-footer">
+          {showClamp ? <div className="faq-collapse-fade" aria-hidden="true" /> : null}
+          <button
+            type="button"
+            className="faq-collapse-toggle"
+            onClick={toggleExpanded}
+            aria-expanded={expanded}
+          >
+            <span>{expanded ? "Visa mindre" : "Visa mer"}</span>
+            <svg
+              className={`faq-collapse-chevron${expanded ? " is-up" : ""}`}
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.25"
+              aria-hidden="true"
+            >
+              <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function SpeakerBio({ bio }) {
@@ -412,17 +546,211 @@ function mergeSectionOrder(order, defaults) {
   return result;
 }
 
+const parseFormButtonWidth = (value) => {
+  const normalized = String(value || "wide").toLowerCase();
+  return normalized === "medium" || normalized === "small" ? normalized : "wide";
+};
+
+function PlaceCard({ address, description }) {
+  const mapContainerRef = useRef(null);
+  const mapRef = useRef(null);
+  const markerRef = useRef(null);
+  const [mapCoords, setMapCoords] = useState(null);
+  const [mapError, setMapError] = useState("");
+  const trimmedAddress = String(address || "").trim();
+  const trimmedDescription = String(description || "").trim();
+
+  useEffect(() => {
+    if (!trimmedAddress) {
+      setMapCoords(null);
+      setMapError("");
+      return undefined;
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(trimmedAddress)}`,
+        {
+          signal: controller.signal,
+          headers: { Accept: "application/json", "User-Agent": "EventoBokning/1.0 (https://kyrkevent.se)" }
+        }
+      )
+        .then((response) => {
+          if (!response.ok) throw new Error("Geocode failed");
+          return response.json();
+        })
+        .then((data) => {
+          const result = data[0];
+          if (!result) throw new Error("No results");
+          setMapCoords({ lat: Number(result.lat), lon: Number(result.lon) });
+          setMapError("");
+        })
+        .catch((error) => {
+          if (error.name === "AbortError") return;
+          setMapCoords(null);
+          setMapError("Kartan kunde inte laddas.");
+        });
+    }, 400);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [trimmedAddress]);
+
+  useEffect(() => {
+    if (!mapCoords || !mapContainerRef.current) {
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+        markerRef.current = null;
+      }
+      return undefined;
+    }
+
+    if (!mapRef.current) {
+      mapRef.current = L.map(mapContainerRef.current, {
+        zoomControl: false,
+        attributionControl: false,
+        dragging: false,
+        scrollWheelZoom: false,
+        doubleClickZoom: false,
+        boxZoom: false,
+        keyboard: false,
+        tap: false,
+        touchZoom: false
+      });
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19
+      }).addTo(mapRef.current);
+      markerRef.current = L.circleMarker([mapCoords.lat, mapCoords.lon], {
+        radius: 10,
+        color: "#111827",
+        weight: 2,
+        fillColor: "#c95a1a",
+        fillOpacity: 1
+      }).addTo(mapRef.current);
+    }
+
+    mapRef.current.setView([mapCoords.lat, mapCoords.lon], 15);
+    if (markerRef.current) {
+      markerRef.current.setLatLng([mapCoords.lat, mapCoords.lon]);
+    }
+    requestAnimationFrame(() => {
+      mapRef.current?.invalidateSize();
+    });
+    return undefined;
+  }, [mapCoords]);
+
+  useEffect(() => {
+    return () => {
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+        markerRef.current = null;
+      }
+    };
+  }, []);
+
+  return (
+    <div className="place-card">
+      {trimmedAddress && mapCoords ? (
+        <div className="place-map" role="img" aria-label={`Karta: ${trimmedAddress}`}>
+          <div className="place-map-inner" ref={mapContainerRef}></div>
+        </div>
+      ) : (
+        <div className="place-map placeholder" aria-hidden="true"></div>
+      )}
+      <div className="place-address">
+        {trimmedAddress ? <span>{trimmedAddress}</span> : <span className="muted">Adress kommer snart.</span>}
+        {mapError ? <span className="muted"> {mapError}</span> : null}
+      </div>
+      {trimmedDescription ? <div className="place-desc">{trimmedDescription}</div> : null}
+    </div>
+  );
+}
+
+function HeroBannerMiniPreview({
+  imageUrl,
+  videoUrl,
+  mediaType,
+  eventName,
+  ctaLabel,
+  dateLabel,
+  placeLabel,
+  showEventName,
+  showCtaButton,
+  showDatePlace,
+  theme
+}) {
+  const title = String(eventName || "").trim() || "Event";
+  const buttonText = String(ctaLabel || "").trim() || "Anmäl dig här";
+  const meta = [dateLabel, placeLabel].filter(Boolean).join(" • ");
+  const compactTitle = title.length > 28;
+  const isVideo = mediaType === "video" && videoUrl;
+
+  return (
+    <div className="hero-admin-preview" style={theme || undefined}>
+      <p className="hero-admin-preview__label">Förhandsvisning</p>
+      <div className="hero-admin-preview__banner">
+        <div className="hero-admin-preview__bg" aria-hidden="true">
+          {isVideo ? (
+            <video
+              className="hero-admin-preview__image"
+              src={videoUrl}
+              autoPlay
+              muted
+              loop
+              playsInline
+              preload="metadata"
+            />
+          ) : (
+            <img className="hero-admin-preview__image" src={imageUrl} alt="" />
+          )}
+          <div className="hero-admin-preview__shade" />
+        </div>
+        <div className="hero-admin-preview__content">
+          <div className="hero-admin-preview__stack">
+            {showEventName ? (
+              <div
+                className={`hero-admin-preview__title${compactTitle ? " is-compact" : ""}`}
+              >
+                {title}
+              </div>
+            ) : null}
+            {showCtaButton ? <span className="hero-admin-preview__cta">{buttonText}</span> : null}
+            {showDatePlace && meta ? <p className="hero-admin-preview__meta">{meta}</p> : null}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const FRONTPAGE_EDITOR_TABS = [
   { id: "order", label: "Sektionsordning" },
-  { id: "text", label: "Text" },
-  { id: "formButton", label: "Knapp till anmälan" },
+  { id: "text", label: "Eventbeskrivning" },
+  { id: "formButton", label: "Call to action" },
   { id: "program", label: "Program" },
   { id: "faq", label: "FAQ" },
-  { id: "speakers", label: "Talare" },
+  { id: "speakers", label: "Personer" },
   { id: "partners", label: "Partner" },
   { id: "gallery", label: "Galleri" },
   { id: "place", label: "Plats" }
 ];
+
+function SectionVisibilityToggle({ name, checked, onChange }) {
+  return (
+    <div className="section-visibility-control">
+      <label className="field checkbox-field section-toggle">
+        <span className="field-label">Aktivera</span>
+        <input name={name} type="checkbox" checked={checked} onChange={onChange} />
+      </label>
+      <span className={`section-visibility-status ${checked ? "is-active" : "is-inactive"}`}>
+        {checked ? "Sektionen visas" : "Sektionen visas inte"}
+      </span>
+    </div>
+  );
+}
 
 function ProgramFormattedInput({ editorRef, onChange, placeholder }) {
   const applyCommand = (command) => {
@@ -2379,9 +2707,7 @@ const AdminPage = () => {
   const [editingId, setEditingId] = useState(null);
   const [draggingId, setDraggingId] = useState(null);
   const [place, setPlace] = useState({ address: "", description: "" });
-  const [mapCoords, setMapCoords] = useState(null);
   const [heroImageError, setHeroImageError] = useState(false);
-  const [mapError, setMapError] = useState("");
   const [placeForm, setPlaceForm] = useState({ address: "", description: "" });
   const [placeInputDirty, setPlaceInputDirty] = useState(false);
   const [placeAddressSuggestions, setPlaceAddressSuggestions] = useState([]);
@@ -2399,6 +2725,9 @@ const AdminPage = () => {
   const [partnerEditingId, setPartnerEditingId] = useState(null);
   const [heroForm, setHeroForm] = useState({ title: "", bodyHtml: "" });
   const [heroImageUrl, setHeroImageUrl] = useState("");
+  const [heroVideoUrl, setHeroVideoUrl] = useState("");
+  const [heroBackgroundKind, setHeroBackgroundKind] = useState("image");
+  const [heroMediaUploading, setHeroMediaUploading] = useState(false);
   const [heroOverlay, setHeroOverlay] = useState({
     showEventName: true,
     showCtaButton: true,
@@ -2511,8 +2840,10 @@ const AdminPage = () => {
     social: ""
   });
   const [adminFaqText, setAdminFaqText] = useState("");
+  const [adminFaqCollapse, setAdminFaqCollapse] = useState(false);
   const [adminSpeakersLayout, setAdminSpeakersLayout] = useState("grid");
   const [adminGalleryMode, setAdminGalleryMode] = useState("grid");
+  const [adminFormButtonWidth, setAdminFormButtonWidth] = useState("wide");
   const [adminTranslateDefaultLanguage, setAdminTranslateDefaultLanguage] = useState("sv");
   const [adminSocial, setAdminSocial] = useState({
     instagramUrl: "",
@@ -2532,9 +2863,6 @@ const AdminPage = () => {
   const [themeSaving, setThemeSaving] = useState(false);
   const [registrationDeadlineInput, setRegistrationDeadlineInput] = useState("");
   const [registrationDeadlineSaving, setRegistrationDeadlineSaving] = useState(false);
-  const [maxParticipantsInput, setMaxParticipantsInput] = useState("");
-  const [participantCount, setParticipantCount] = useState(null);
-  const [participantCountLoading, setParticipantCountLoading] = useState(false);
   const [eventConfirmationNoteInput, setEventConfirmationNoteInput] = useState("");
   const [eventDeleteConfirm, setEventDeleteConfirm] = useState(null);
   const [eventDeleteLoading, setEventDeleteLoading] = useState(false);
@@ -2594,62 +2922,6 @@ const AdminPage = () => {
     setEventSettingsTab("general");
     setFrontpageTab("order");
   }, [selectedEventId]);
-  useEffect(() => {
-    if (!token || !selectedEventId || adminSection !== "settings") {
-      setParticipantCount(null);
-      return;
-    }
-    let cancelled = false;
-    const loadCount = async () => {
-      setParticipantCountLoading(true);
-      try {
-        const response = await fetch(`${API_BASE}/admin/events/${selectedEventId}/participant-count`, {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok || !data.ok) {
-          throw new Error(data.error || "Kunde inte hämta antal anmälda.");
-        }
-        if (!cancelled) {
-          setParticipantCount(typeof data.count === "number" ? data.count : null);
-        }
-      } catch {
-        if (!cancelled) {
-          setParticipantCount(null);
-        }
-      } finally {
-        if (!cancelled) {
-          setParticipantCountLoading(false);
-        }
-      }
-    };
-    loadCount();
-    return () => {
-      cancelled = true;
-    };
-  }, [token, selectedEventId, adminSection]);
-  useEffect(() => {
-    if (!selectedEvent) {
-      setMaxParticipantsInput("");
-      return;
-    }
-    const value =
-      selectedEvent.max_participants != null && selectedEvent.max_participants !== ""
-        ? String(selectedEvent.max_participants)
-        : "";
-    setMaxParticipantsInput(value);
-  }, [selectedEventId, selectedEvent?.max_participants]);
-  useEffect(() => {
-    if (!selectedEvent) {
-      setMaxParticipantsInput("");
-      return;
-    }
-    const value =
-      selectedEvent.max_participants != null && selectedEvent.max_participants !== ""
-        ? String(selectedEvent.max_participants)
-        : "";
-    setMaxParticipantsInput(value);
-  }, [selectedEventId, selectedEvent?.max_participants]);
   useEffect(() => {
     // Synka bara texteditorn när man går in på Text-fliken,
     // inte vid varje tecken, annars hoppar markören.
@@ -3046,6 +3318,8 @@ const AdminPage = () => {
       bodyHtml: data.bodyHtml || ""
     });
     setHeroImageUrl(data.imageUrl || "");
+    setHeroVideoUrl(data.videoUrl || "");
+    setHeroBackgroundKind(parseHeroBackgroundKind(data.backgroundKind));
     setHeroOverlay({
       showEventName: data.showEventName !== false,
       showCtaButton: data.showCtaButton !== false,
@@ -3188,9 +3462,11 @@ const AdminPage = () => {
       caption: data.sections?.socialCaption ?? ""
     });
     setAdminFaqText(data.sections?.faqText || "");
+    setAdminFaqCollapse(data.sections?.faqCollapse === true);
     setAdminSpeakersLayout(data.sections?.speakersLayout === "list" ? "list" : "grid");
     const mode = data.sections?.galleryMode;
     setAdminGalleryMode(mode === "slideshow" || mode === "marquee" ? mode : "grid");
+    setAdminFormButtonWidth(parseFormButtonWidth(data.sections?.formButtonWidth));
     setAdminTranslateDefaultLanguage(normalizeTranslateDefaultLanguage(data.sections?.translateDefaultLanguage));
     setAdminFormFieldOrder(Array.isArray(data.sections?.formFieldOrder) ? data.sections.formFieldOrder : []);
   };
@@ -5237,6 +5513,7 @@ const AdminPage = () => {
       const formData = new FormData();
       formData.append("eventId", selectedEventId);
       formData.append("image", file);
+      setHeroMediaUploading(true);
       const response = await fetch(`${API_BASE}/admin/hero/image`, {
         method: "PUT",
         headers: {
@@ -5261,10 +5538,105 @@ const AdminPage = () => {
       await loadHero(selectedEventId);
       localStorage.setItem(buildStorageKey("heroUpdatedAt", selectedEventId), String(Date.now()));
     };
-    uploadImage().catch(() => {
-      showToast("Kunde inte ladda upp bilden.");
+    uploadImage()
+      .catch(() => {
+        showToast("Kunde inte ladda upp bilden.");
+        resetInput();
+      })
+      .finally(() => setHeroMediaUploading(false));
+  };
+
+  const handleHeroVideoChange = (event) => {
+    const file = event.target.files?.[0] || null;
+    const resetInput = () => {
+      if (event.target) {
+        event.target.value = "";
+      }
+    };
+    if (!file || !token || !selectedEventId) {
+      return;
+    }
+    if (file.size > HERO_VIDEO_MAX_BYTES) {
+      showToast("Videon är för stor (max 40 MB).");
       resetInput();
-    });
+      return;
+    }
+    setError("");
+    const uploadVideo = async () => {
+      let dimensions;
+      try {
+        dimensions = await readVideoFileDimensions(file);
+      } catch {
+        showToast("Kunde inte läsa videon. Använd MP4 eller WebM.");
+        resetInput();
+        return;
+      }
+      const dimensionError = getHeroImageDimensionError(dimensions);
+      if (dimensionError) {
+        showToast(dimensionError);
+        resetInput();
+        return;
+      }
+      const formData = new FormData();
+      formData.append("eventId", selectedEventId);
+      formData.append("video", file);
+      setHeroMediaUploading(true);
+      const response = await fetch(`${API_BASE}/admin/hero/video`, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${token}`
+        },
+        body: formData
+      });
+      if (!response.ok) {
+        let errMsg = "Kunde inte ladda upp videon.";
+        try {
+          const data = await response.json();
+          if (data?.error) {
+            errMsg = data.error;
+          }
+        } catch {
+          // ignore JSON parse errors
+        }
+        showToast(errMsg);
+        resetInput();
+        return;
+      }
+      await loadHero(selectedEventId);
+      localStorage.setItem(buildStorageKey("heroUpdatedAt", selectedEventId), String(Date.now()));
+    };
+    uploadVideo()
+      .catch(() => {
+        showToast("Kunde inte ladda upp videon.");
+        resetInput();
+      })
+      .finally(() => setHeroMediaUploading(false));
+  };
+
+  const handleHeroBackgroundKindChange = (nextKind) => {
+    const kind = parseHeroBackgroundKind(nextKind);
+    setHeroBackgroundKind(kind);
+    if (!token || !selectedEventId) {
+      return;
+    }
+    const saveKind = async () => {
+      const response = await fetch(`${API_BASE}/admin/hero/background-kind`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          eventId: selectedEventId,
+          backgroundKind: kind
+        })
+      });
+      if (!response.ok) {
+        throw new Error("Hero background kind save failed");
+      }
+      localStorage.setItem(buildStorageKey("heroUpdatedAt", selectedEventId), String(Date.now()));
+    };
+    saveKind().catch(() => showToast("Kunde inte spara valet av bakgrund."));
   };
 
   const handleHeroOverlayChange = (event) => {
@@ -5302,18 +5674,22 @@ const AdminPage = () => {
       return;
     }
     setError("");
-    const removeImage = async () => {
-      const response = await fetch(`${API_BASE}/admin/hero/image?eventId=${selectedEventId}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` }
-      });
+    const isVideo = heroBackgroundKind === "video";
+    const removeMedia = async () => {
+      const response = await fetch(
+        `${API_BASE}/admin/hero/${isVideo ? "video" : "image"}?eventId=${selectedEventId}`,
+        {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` }
+        }
+      );
       if (!response.ok) {
-        throw new Error("Hero image delete failed");
+        throw new Error("Hero media delete failed");
       }
       await loadHero(selectedEventId);
       localStorage.setItem(buildStorageKey("heroUpdatedAt", selectedEventId), String(Date.now()));
     };
-    removeImage().catch(() => setError("Kunde inte ta bort bilden."));
+    removeMedia().catch(() => setError(isVideo ? "Kunde inte ta bort videon." : "Kunde inte ta bort bilden."));
   };
 
   const buildSectionsPayload = (overrides = {}) => ({
@@ -5329,8 +5705,10 @@ const AdminPage = () => {
     sectionLabelFormButton: adminSectionLabels.formButton,
     sectionLabelSocial: adminSectionLabels.social,
     faqText: adminFaqText,
+    faqCollapse: adminFaqCollapse,
     speakersLayout: adminSpeakersLayout,
     galleryMode: adminGalleryMode,
+    formButtonWidth: adminFormButtonWidth,
     translateDefaultLanguage: adminTranslateDefaultLanguage,
     socialInstagramUrl: adminSocial.instagramUrl,
     socialFacebookUrl: adminSocial.facebookUrl,
@@ -5398,6 +5776,24 @@ const AdminPage = () => {
     );
   };
 
+  const handleFaqCollapseChange = (event) => {
+    const next = event.target.checked;
+    setAdminFaqCollapse(next);
+    putSectionsPayload(
+      buildSectionsPayload({ faqCollapse: next }),
+      "Kunde inte spara FAQ-inställningen."
+    );
+  };
+
+  const handleFormButtonWidthChange = (width) => {
+    const next = parseFormButtonWidth(width);
+    setAdminFormButtonWidth(next);
+    putSectionsPayload(
+      buildSectionsPayload({ formButtonWidth: next }),
+      "Kunde inte spara knappbredd."
+    );
+  };
+
   const saveAdminSectionLabels = () => {
     putSectionsPayload(buildSectionsPayload(), "Kunde inte spara rubrikerna.");
   };
@@ -5448,12 +5844,12 @@ const AdminPage = () => {
   };
 
   const sectionOrderLabels = {
-    text: "Text",
-    formButton: "Knapp till anmälan",
+    text: "Eventbeskrivning",
+    formButton: "Call to action",
     program: "Program",
     faq: "FAQ",
     form: "Anmäl dig här",
-    speakers: "Talare",
+    speakers: "Personer",
     partners: "Partner",
     gallery: "Galleri",
     social: "Sociala medier",
@@ -8487,14 +8883,14 @@ const AdminPage = () => {
                         </span>
                       </div>
                       <div className="admin-system-stat-card">
-                        <span className="admin-system-stat-label">Talare + partner + hero</span>
+                        <span className="admin-system-stat-label">Personer + partner + hero</span>
                         <strong>
                           {(systemStatus.images?.speakers ?? 0) +
                             (systemStatus.images?.partners ?? 0) +
                             (systemStatus.images?.hero ?? 0)}
                         </strong>
                         <span className="muted">
-                          {systemStatus.images?.speakers ?? 0} talare · {systemStatus.images?.partners ?? 0}{" "}
+                          {systemStatus.images?.speakers ?? 0} personer · {systemStatus.images?.partners ?? 0}{" "}
                           partner · {systemStatus.images?.hero ?? 0} eventbilder
                         </span>
                       </div>
@@ -11478,7 +11874,6 @@ const AdminPage = () => {
                 <ul className="section-order-list">
                   {adminSectionOrder.map((key, index) => (
                     <li key={key} className="section-order-item">
-                      <span className="section-order-label">{sectionOrderLabels[key] ?? key}</span>
                       <span className="section-order-arrows">
                         <button
                           type="button"
@@ -11499,6 +11894,7 @@ const AdminPage = () => {
                           ↓
                         </button>
                       </span>
+                      <span className="section-order-label">{sectionOrderLabels[key] ?? key}</span>
                     </li>
                   ))}
                 </ul>
@@ -11507,32 +11903,62 @@ const AdminPage = () => {
               {frontpageTab === "formButton" ? (
               <div>
                 <div className="section-header">
-                  <div style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
-                    <h2>Knapp till anmälan</h2>
-                    <label className="field" style={{ marginBottom: 0, maxWidth: "260px" }}>
-                      <input
-                        type="text"
-                        value={adminSectionLabels.formButton}
-                        onChange={(e) => handleSectionLabelChange("formButton", e.target.value)}
-                        onBlur={saveAdminSectionLabels}
-                        placeholder="Knapptext, t.ex. Anmäl dig"
-                        aria-label="Text på knappen till anmälan"
-                      />
-                    </label>
+                  <h2>Call to action</h2>
+                  <SectionVisibilityToggle
+                    name="showFormButton"
+                    checked={adminSectionVisibility.showFormButton}
+                    onChange={handleSectionVisibilityChange}
+                  />
+                </div>
+                <label className="field">
+                  <span className="field-label">Knapptext</span>
+                  <input
+                    type="text"
+                    value={adminSectionLabels.formButton}
+                    onChange={(e) => handleSectionLabelChange("formButton", e.target.value)}
+                    onBlur={saveAdminSectionLabels}
+                    placeholder="Anmäl dig här"
+                    aria-label="Text på knappen till anmälan"
+                  />
+                </label>
+                <fieldset className="gallery-mode-picker">
+                  <legend className="field-label">Knappbredd</legend>
+                  <div className="gallery-mode-options">
+                    {[
+                      { id: "wide", label: "Bred" },
+                      { id: "medium", label: "Mellan" },
+                      { id: "small", label: "Small" }
+                    ].map((option) => (
+                      <label key={option.id} className="gallery-mode-option">
+                        <input
+                          type="radio"
+                          name="formButtonWidth"
+                          value={option.id}
+                          checked={adminFormButtonWidth === option.id}
+                          onChange={() => handleFormButtonWidthChange(option.id)}
+                        />
+                        <span>{option.label}</span>
+                      </label>
+                    ))}
                   </div>
-                  <label className="field checkbox-field section-toggle">
-                    <span className="field-label">Visa</span>
-                    <input
-                      name="showFormButton"
-                      type="checkbox"
-                      checked={adminSectionVisibility.showFormButton}
-                      onChange={handleSectionVisibilityChange}
-                    />
-                  </label>
+                </fieldset>
+                <div
+                  className="cta-admin-preview"
+                  style={THEMES[pendingTheme] || THEMES[selectedEvent?.theme] || THEMES.default}
+                >
+                  <p className="cta-admin-preview__label">Förhandsvisning</p>
+                  <div className={`section-form-button section-form-button--${adminFormButtonWidth}`}>
+                    <button
+                      type="button"
+                      className={`button${adminFormButtonWidth === "wide" ? " full-width" : ""}`}
+                    >
+                      {adminSectionLabels.formButton.trim() || "Anmäl dig här"}
+                    </button>
+                  </div>
                 </div>
                 <p className="muted">
-                  Visar en knapp på framsidan som tar besökaren direkt till anmälningsformuläret
-                  ("Anmäl dig här"). Ändra var den hamnar på den publika sidan under fliken Sektionsordning.
+                  Visar en knapp på framsidan som tar besökaren direkt till anmälningsformuläret.
+                  Ändra var den hamnar på den publika sidan under fliken Sektionsordning.
                 </p>
               </div>
               ) : null}
@@ -11561,15 +11987,11 @@ const AdminPage = () => {
                       />
                     </label>
                   </div>
-                  <label className="field checkbox-field section-toggle">
-                    <span className="field-label">Visa</span>
-                    <input
-                      name="showProgram"
-                      type="checkbox"
-                      checked={adminSectionVisibility.showProgram}
-                      onChange={handleSectionVisibilityChange}
-                    />
-                  </label>
+                  <SectionVisibilityToggle
+                    name="showProgram"
+                    checked={adminSectionVisibility.showProgram}
+                    onChange={handleSectionVisibilityChange}
+                  />
                 </div>
                 <form className="admin-form" onSubmit={handleProgramSubmit}>
                   <div className="field">
@@ -11679,16 +12101,12 @@ const AdminPage = () => {
               {frontpageTab === "text" ? (
               <div>
                 <div className="section-header">
-                  <h2>Text</h2>
-                  <label className="field checkbox-field section-toggle">
-                    <span className="field-label">Visa</span>
-                    <input
-                      name="showText"
-                      type="checkbox"
-                      checked={adminSectionVisibility.showText}
-                      onChange={handleSectionVisibilityChange}
-                    />
-                  </label>
+                  <h2>Eventbeskrivning</h2>
+                  <SectionVisibilityToggle
+                    name="showText"
+                    checked={adminSectionVisibility.showText}
+                    onChange={handleSectionVisibilityChange}
+                  />
                 </div>
                 <form className="admin-form" onSubmit={handleHeroSubmit}>
                   <label className="field">
@@ -11767,15 +12185,11 @@ const AdminPage = () => {
               <div>
                 <div className="section-header">
                   <h2>Plats</h2>
-                  <label className="field checkbox-field section-toggle">
-                    <span className="field-label">Visa</span>
-                    <input
-                      name="showPlace"
-                      type="checkbox"
-                      checked={adminSectionVisibility.showPlace}
-                      onChange={handleSectionVisibilityChange}
-                    />
-                  </label>
+                  <SectionVisibilityToggle
+                    name="showPlace"
+                    checked={adminSectionVisibility.showPlace}
+                    onChange={handleSectionVisibilityChange}
+                  />
                 </div>
                 <form className="admin-form" onSubmit={handlePlaceSubmit}>
                   <label className="field">
@@ -11839,7 +12253,16 @@ const AdminPage = () => {
                     </button>
                   </div>
                 </form>
-                {place.address ? <p className="muted">Nuvarande adress: {place.address}</p> : null}
+                <div
+                  className="place-admin-preview"
+                  style={THEMES[pendingTheme] || THEMES[selectedEvent?.theme] || THEMES.default}
+                >
+                  <p className="place-admin-preview__label">Förhandsvisning</p>
+                  <div className="place-admin-preview__section">
+                    <h2>Plats</h2>
+                    <PlaceCard address={placeForm.address} description={placeForm.description} />
+                  </div>
+                </div>
               </div>
               ) : null}
 
@@ -11859,21 +12282,28 @@ const AdminPage = () => {
                       />
                     </label>
                   </div>
-                  <label className="field checkbox-field section-toggle">
-                    <span className="field-label">Visa</span>
-                    <input
-                      name="showFaq"
-                      type="checkbox"
-                      checked={adminSectionVisibility.showFaq}
-                      onChange={handleSectionVisibilityChange}
-                    />
-                  </label>
+                  <SectionVisibilityToggle
+                    name="showFaq"
+                    checked={adminSectionVisibility.showFaq}
+                    onChange={handleSectionVisibilityChange}
+                  />
                 </div>
                 <div className="admin-form">
                   <div className="field">
                     <span className="field-label">
                       Detta är ett textfält som du kan använda för extra information, välj att visa eller inte visa det.
                     </span>
+                    <label className="field checkbox-field">
+                      <span className="field-label">Använd expandering</span>
+                      <input
+                        type="checkbox"
+                        checked={adminFaqCollapse}
+                        onChange={handleFaqCollapseChange}
+                      />
+                    </label>
+                    <p className="muted" style={{ marginTop: 0 }}>
+                      Om texten är längre än 20 rader visas bara början på eventsidan, med en pil för att visa mer.
+                    </p>
                     <div className="editor-toolbar">
                       <button type="button" className="icon-button" onClick={() => applyFaqCommand("bold")}>
                         Fet
@@ -11961,7 +12391,7 @@ const AdminPage = () => {
                   }}
                 >
                   <div style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
-                    <h2>Talare</h2>
+                    <h2>Personer</h2>
                     <label className="field" style={{ marginBottom: 0, maxWidth: "260px" }}>
                       <input
                         type="text"
@@ -11969,19 +12399,15 @@ const AdminPage = () => {
                         onChange={(e) => handleSectionLabelChange("speakers", e.target.value)}
                         onBlur={saveAdminSectionLabels}
                         placeholder="Byt ut rubriknamn"
-                        aria-label="Byt ut rubriknamn för Talare"
+                        aria-label="Byt ut rubriknamn för Personer"
                       />
                     </label>
                   </div>
-                  <label className="field checkbox-field section-toggle">
-                    <span className="field-label">Visa</span>
-                    <input
-                      name="showSpeakers"
-                      type="checkbox"
-                      checked={adminSectionVisibility.showSpeakers}
-                      onChange={handleSectionVisibilityChange}
-                    />
-                  </label>
+                  <SectionVisibilityToggle
+                    name="showSpeakers"
+                    checked={adminSectionVisibility.showSpeakers}
+                    onChange={handleSectionVisibilityChange}
+                  />
                 </div>
                 <div className="field">
                   <span className="field-label">Layout på webbsidan</span>
@@ -12133,7 +12559,7 @@ const AdminPage = () => {
                     </div>
                   </>
                 ) : (
-                  <p className="muted">Inga talare ännu.</p>
+                  <p className="muted">Inga personer ännu.</p>
                 )}
               </div>
               ) : null}
@@ -12163,15 +12589,11 @@ const AdminPage = () => {
                       />
                     </label>
                   </div>
-                  <label className="field checkbox-field section-toggle">
-                    <span className="field-label">Visa</span>
-                    <input
-                      name="showPartners"
-                      type="checkbox"
-                      checked={adminSectionVisibility.showPartners}
-                      onChange={handleSectionVisibilityChange}
-                    />
-                  </label>
+                  <SectionVisibilityToggle
+                    name="showPartners"
+                    checked={adminSectionVisibility.showPartners}
+                    onChange={handleSectionVisibilityChange}
+                  />
                 </div>
                 <form className="admin-form" onSubmit={handlePartnerSubmit}>
                   <label className="field">
@@ -12323,15 +12745,11 @@ const AdminPage = () => {
                       />
                     </label>
                   </div>
-                  <label className="field checkbox-field section-toggle">
-                    <span className="field-label">Visa</span>
-                    <input
-                      name="showGallery"
-                      type="checkbox"
-                      checked={adminSectionVisibility.showGallery}
-                      onChange={handleSectionVisibilityChange}
-                    />
-                  </label>
+                  <SectionVisibilityToggle
+                    name="showGallery"
+                    checked={adminSectionVisibility.showGallery}
+                    onChange={handleSectionVisibilityChange}
+                  />
                 </div>
                 <p className="muted" style={{ marginTop: 0 }}>
                   Ladda upp bilder och välj hur galleriet visas på eventsidan — stilla rutnät, bildspel eller flytande karusell.
@@ -12579,39 +12997,6 @@ const AdminPage = () => {
                         style={{ maxWidth: "12rem" }}
                       />
                     </label>
-                    <div className="field-row" style={{ marginTop: "1rem" }}>
-                      <label className="field">
-                        <span className="field-label">Max antal deltagare/biljetter</span>
-                        <input
-                          type="number"
-                          min="0"
-                          step="1"
-                          value={maxParticipantsInput}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            if (val === "") {
-                              setMaxParticipantsInput("");
-                              return;
-                            }
-                            const num = Number(val);
-                            if (Number.isNaN(num) || num < 0) return;
-                            setMaxParticipantsInput(String(Math.floor(num)));
-                          }}
-                          placeholder="Obegränsat"
-                          style={{ maxWidth: "10rem" }}
-                        />
-                      </label>
-                      <div className="field" style={{ marginTop: "1.85rem" }}>
-                        <span className="field-label">Anmälda</span>
-                        <p className="muted" style={{ marginTop: "0.25rem" }}>
-                          {participantCountLoading
-                            ? "Laddar..."
-                            : participantCount != null && participantCount > 0
-                              ? `${participantCount} deltagare`
-                              : "Inga anmälningar ännu."}
-                        </p>
-                      </div>
-                    </div>
                     {!maxDeadline && (
                       <p className="field-hint" style={{ marginTop: "0.35rem", color: "var(--muted)" }}>
                         Ange eventdatum (under Event) först om du vill sätta senaste anmälningsdag.
@@ -12642,8 +13027,7 @@ const AdminPage = () => {
                               },
                               body: JSON.stringify({
                                 theme: selectedEvent?.theme || "default",
-                                registrationDeadline: registrationDeadlineInput.trim() || "",
-                                maxParticipants: maxParticipantsInput.trim() || ""
+                                registrationDeadline: registrationDeadlineInput.trim() || ""
                               })
                             }
                           );
@@ -12784,69 +13168,112 @@ const AdminPage = () => {
               </div>
               <div className="section">
                 <h2>Eventbild</h2>
-                <div className="field">
-                  <span className="field-label">Ladda upp bild</span>
-                  <div className="field-hint hero-image-upload-hint">
-                    <p>
-                      <strong>Rekommenderat:</strong> liggande bild i ungefär <strong>2:1-format</strong>, t.ex.{" "}
-                      <strong>1200×600 px</strong> eller <strong>1600×800 px</strong>. Hela loggans bredd ska synas –
-                      viktig text läggs ovanpå bilden automatiskt på eventsidan.
-                    </p>
-                    <p>
-                      <strong>Tillåtet:</strong> liggande och kvadratiska bilder där höjden är minst 35 % av bredden
-                      (t.ex. 1200×600, 1600×800 eller 1000×1000).
-                    </p>
-                    <p>
-                      <strong>Blockeras vid uppladdning:</strong> stående bilder (höjd större än bredd) och för låga
-                      liggande bilder (t.ex. 1200×400) – då blir eventnamn, knapp och datum ihoptryckta på mobil.
-                    </p>
-                    <p>
-                      <strong>Undvik också:</strong>
-                    </p>
-                    <ul>
-                      <li>
-                        Bilder där loggan tar upp mycket höjd med stora tomma ytor ovanför/under.
-                      </li>
-                      <li>
-                        Mycket text, knappar eller datum <strong>inbakade i själva bilden</strong> – det dubbleras med
-                        texten som sidan lägger ovanpå.
-                      </li>
-                    </ul>
+                <fieldset className="gallery-mode-picker">
+                  <legend className="field-label">Bakgrund</legend>
+                  <div className="gallery-mode-options">
+                    {[
+                      { id: "image", label: "Bild" },
+                      { id: "video", label: "Video" }
+                    ].map((option) => (
+                      <label key={option.id} className="gallery-mode-option">
+                        <input
+                          type="radio"
+                          name="heroBackgroundKind"
+                          value={option.id}
+                          checked={heroBackgroundKind === option.id}
+                          onChange={() => handleHeroBackgroundKindChange(option.id)}
+                        />
+                        <span>{option.label}</span>
+                      </label>
+                    ))}
                   </div>
-                  <label className="file-upload">
-                    <input
-                      className="file-upload-input"
-                      name="heroImage"
-                      type="file"
-                      accept="image/*"
-                      aria-label="Välj eventbild"
-                      onChange={handleHeroImageChange}
-                    />
-                    <span className="file-upload-face" aria-hidden="true">
-                      <svg className="file-upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                        <path d="M12 16V4m0 0 8 8m-8-8-8 8" strokeLinecap="round" strokeLinejoin="round" />
-                        <path d="M4 20h16" strokeLinecap="round" />
-                      </svg>
-                      Välj bild
-                    </span>
-                  </label>
-                </div>
-                {heroImageUrl ? (
-                  <>
-                    <img
-                      className="hero-preview"
-                      src={resolveAssetUrl(heroImageUrl)}
-                      alt="Eventbild"
-                    />
-                    <div className="admin-actions">
-                      <button className="button button-outline" type="button" onClick={handleHeroImageRemove}>
-                        Ta bort bild
-                      </button>
+                </fieldset>
+                <div className="field">
+                  <span className="field-label">
+                    {heroBackgroundKind === "video" ? "Ladda upp video" : "Ladda upp bild"}
+                  </span>
+                  {heroBackgroundKind === "video" ? (
+                    <div className="field-hint hero-image-upload-hint">
+                      <p>
+                        <strong>Rekommenderat:</strong> kort, tyst, liggande video i ungefär <strong>2:1-format</strong>{" "}
+                        (MP4 eller WebM), max <strong>40 MB</strong>. Videon spelas automatiskt i loop bakom texten.
+                      </p>
+                      <p>
+                        Samma proportioner som eventbilden: inte stående, och höjden minst 35 % av bredden.
+                      </p>
+                      <p>
+                        Undvik text, knappar eller datum inbakade i videon – det dubbleras med texten som sidan lägger ovanpå.
+                      </p>
                     </div>
-                  </>
-                ) : (
-                  <p className="muted">Ingen bild uppladdad.</p>
-                )}
+                  ) : (
+                    <div className="field-hint hero-image-upload-hint">
+                      <p>
+                        <strong>Rekommenderat:</strong> liggande bild i ungefär <strong>2:1-format</strong>, t.ex.{" "}
+                        <strong>1200×600 px</strong> eller <strong>1600×800 px</strong>. Hela loggans bredd ska synas –
+                        viktig text läggs ovanpå bilden automatiskt på eventsidan.
+                      </p>
+                      <p>
+                        <strong>Tillåtet:</strong> liggande och kvadratiska bilder där höjden är minst 35 % av bredden
+                        (t.ex. 1200×600, 1600×800 eller 1000×1000).
+                      </p>
+                      <p>
+                        <strong>Blockeras vid uppladdning:</strong> stående bilder (höjd större än bredd) och för låga
+                        liggande bilder (t.ex. 1200×400) – då blir eventnamn, knapp och datum ihoptryckta på mobil.
+                      </p>
+                      <p>
+                        <strong>Undvik också:</strong>
+                      </p>
+                      <ul>
+                        <li>
+                          Bilder där loggan tar upp mycket höjd med stora tomma ytor ovanför/under.
+                        </li>
+                        <li>
+                          Mycket text, knappar eller datum <strong>inbakade i själva bilden</strong> – det dubbleras med
+                          texten som sidan lägger ovanpå.
+                        </li>
+                      </ul>
+                    </div>
+                  )}
+                  {heroBackgroundKind === "video" ? (
+                    <label className="file-upload">
+                      <input
+                        className="file-upload-input"
+                        name="heroVideo"
+                        type="file"
+                        accept="video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov"
+                        aria-label="Välj eventvideo"
+                        disabled={heroMediaUploading}
+                        onChange={handleHeroVideoChange}
+                      />
+                      <span className="file-upload-face" aria-hidden="true">
+                        <svg className="file-upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                          <path d="M12 16V4m0 0 8 8m-8-8-8 8" strokeLinecap="round" strokeLinejoin="round" />
+                          <path d="M4 20h16" strokeLinecap="round" />
+                        </svg>
+                        {heroMediaUploading ? "Laddar upp…" : "Välj video"}
+                      </span>
+                    </label>
+                  ) : (
+                    <label className="file-upload">
+                      <input
+                        className="file-upload-input"
+                        name="heroImage"
+                        type="file"
+                        accept="image/*"
+                        aria-label="Välj eventbild"
+                        disabled={heroMediaUploading}
+                        onChange={handleHeroImageChange}
+                      />
+                      <span className="file-upload-face" aria-hidden="true">
+                        <svg className="file-upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                          <path d="M12 16V4m0 0 8 8m-8-8-8 8" strokeLinecap="round" strokeLinejoin="round" />
+                          <path d="M4 20h16" strokeLinecap="round" />
+                        </svg>
+                        {heroMediaUploading ? "Laddar upp…" : "Välj bild"}
+                      </span>
+                    </label>
+                  )}
+                </div>
                 <div className="field-row hero-overlay-toggles">
                   <label className="field checkbox-field">
                     <span className="field-label">Visa eventnamn</span>
@@ -12877,8 +13304,50 @@ const AdminPage = () => {
                   </label>
                 </div>
                 <p className="muted hero-overlay-toggles-hint">
-                  Styr vad som läggs ovanpå eventbilden på eventsidan. Alla tre är aktiverade som standard.
+                  Styr vad som läggs ovanpå eventbilden eller videon på eventsidan. Alla tre är aktiverade som standard.
                 </p>
+                {(() => {
+                  const preview =
+                    heroBackgroundKind === "video"
+                      ? heroVideoUrl
+                        ? { type: "video", url: heroVideoUrl }
+                        : { type: null, url: "" }
+                      : heroImageUrl
+                        ? { type: "image", url: heroImageUrl }
+                        : { type: null, url: "" };
+                  if (!preview.url) {
+                    return (
+                      <p className="muted">
+                        {heroBackgroundKind === "video" ? "Ingen video uppladdad." : "Ingen bild uppladdad."}
+                      </p>
+                    );
+                  }
+                  return (
+                    <>
+                      <HeroBannerMiniPreview
+                        imageUrl={resolveAssetUrl(heroImageUrl)}
+                        videoUrl={resolveAssetUrl(heroVideoUrl)}
+                        mediaType={preview.type}
+                        eventName={selectedEvent?.name}
+                        ctaLabel={adminSectionLabels.formButton}
+                        dateLabel={formatEventDateHeroRange(
+                          selectedEvent?.event_start_date,
+                          selectedEvent?.event_end_date
+                        )}
+                        placeLabel={String(place.address || "").trim()}
+                        showEventName={heroOverlay.showEventName}
+                        showCtaButton={heroOverlay.showCtaButton}
+                        showDatePlace={heroOverlay.showDatePlace}
+                        theme={THEMES[pendingTheme] || THEMES[selectedEvent?.theme] || THEMES.default}
+                      />
+                      <div className="admin-actions">
+                        <button className="button button-outline" type="button" onClick={handleHeroImageRemove}>
+                          {preview.type === "video" ? "Ta bort video" : "Ta bort bild"}
+                        </button>
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
               <div className="section">
                 <h2>Språk</h2>
@@ -13461,15 +13930,11 @@ const AdminPage = () => {
                       />
                     </label>
                   </div>
-                  <label className="field checkbox-field section-toggle">
-                    <span className="field-label">Visa</span>
-                    <input
-                      name="showSocial"
-                      type="checkbox"
-                      checked={adminSectionVisibility.showSocial}
-                      onChange={handleSectionVisibilityChange}
-                    />
-                  </label>
+                  <SectionVisibilityToggle
+                    name="showSocial"
+                    checked={adminSectionVisibility.showSocial}
+                    onChange={handleSectionVisibilityChange}
+                  />
                 </div>
                 <p className="muted" style={{ marginTop: 0 }}>
                   Klistra in länkar till era profiler. Aktivera de plattformar ni vill visa och välj
@@ -13910,11 +14375,14 @@ function App() {
   const [partners, setPartners] = useState([]);
   const [galleryImages, setGalleryImages] = useState([]);
   const [galleryMode, setGalleryMode] = useState("grid");
+  const [formButtonWidth, setFormButtonWidth] = useState("wide");
   const [prices, setPrices] = useState([]);
   const [hero, setHero] = useState({
     title: "",
     bodyHtml: "",
     imageUrl: "",
+    videoUrl: "",
+    backgroundKind: "image",
     showEventName: true,
     showCtaButton: true,
     showDatePlace: true
@@ -13965,11 +14433,7 @@ function App() {
   });
   const [speakersLayout, setSpeakersLayout] = useState("grid");
   const [faqText, setFaqText] = useState("");
-  const [mapCoords, setMapCoords] = useState(null);
-  const [mapError, setMapError] = useState("");
-  const mapContainerRef = useRef(null);
-  const mapRef = useRef(null);
-  const markerRef = useRef(null);
+  const [faqCollapse, setFaqCollapse] = useState(false);
   const pageRef = useRef(null);
   const heroBannerRef = useRef(null);
   const heroBannerContentRef = useRef(null);
@@ -13986,6 +14450,7 @@ function App() {
   );
   const heroPlaceLabel = place.address?.trim() || "";
   const heroTitleText = event?.name || hero.title || "Event";
+  const heroBackground = resolveHeroBackground(hero);
 
   useEffect(() => {
     fetchServiceFeeTiers(API_BASE)
@@ -13995,7 +14460,7 @@ function App() {
 
   // Hero-banner: parallax på loggan så den scrollar långsammare än texten.
   useEffect(() => {
-    if (!hero.imageUrl) return undefined;
+    if (!heroBackground.url) return undefined;
 
     const prefersReduced =
       typeof window !== "undefined" &&
@@ -14037,11 +14502,11 @@ function App() {
         heroBgParallaxRef.current.style.transform = "";
       }
     };
-  }, [hero.imageUrl]);
+  }, [heroBackground.url]);
 
   useLayoutEffect(() => {
     const titleEl = heroBannerTitleRef.current;
-    if (!titleEl || !hero.imageUrl || hero.showEventName === false) {
+    if (!titleEl || !heroBackground.url || hero.showEventName === false) {
       return undefined;
     }
 
@@ -14064,12 +14529,12 @@ function App() {
       resizeObserver?.disconnect();
       titleEl.classList.remove("hero-banner-title--compact", "hero-banner-title--compact-extra");
     };
-  }, [hero.imageUrl, hero.showEventName, heroTitleText]);
+  }, [heroBackground.url, hero.showEventName, heroTitleText]);
 
   useLayoutEffect(() => {
     const contentEl = heroBannerContentRef.current;
     const hintEl = heroScrollHintRef.current;
-    if (!contentEl || !hintEl || !hero.imageUrl || !heroScrollHintVisible) {
+    if (!contentEl || !hintEl || !heroBackground.url || !heroScrollHintVisible) {
       return undefined;
     }
 
@@ -14098,7 +14563,7 @@ function App() {
       resizeObserver?.disconnect();
     };
   }, [
-    hero.imageUrl,
+    heroBackground.url,
     heroScrollHintVisible,
     hero.showEventName,
     hero.showCtaButton,
@@ -14110,7 +14575,7 @@ function App() {
   ]);
 
   useEffect(() => {
-    if (!hero.imageUrl) return undefined;
+    if (!heroBackground.url) return undefined;
     setHeroScrollHintVisible(true);
     const onScroll = () => {
       if (window.scrollY > 48) {
@@ -14119,7 +14584,7 @@ function App() {
     };
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
-  }, [hero.imageUrl]);
+  }, [heroBackground.url]);
 
   // Scroll-reveal: sektioner tonas in och glider uppåt när de rullas in i vyn.
   // Styrs via inline-styles (inte className) så att React inte skriver över
@@ -14448,6 +14913,8 @@ function App() {
       title: data.title || "",
       bodyHtml: data.bodyHtml || "",
       imageUrl: data.imageUrl || "",
+      videoUrl: data.videoUrl || "",
+      backgroundKind: parseHeroBackgroundKind(data.backgroundKind),
       showEventName: data.showEventName !== false,
       showCtaButton: data.showCtaButton !== false,
       showDatePlace: data.showDatePlace !== false
@@ -14507,8 +14974,10 @@ function App() {
     });
     const mode = data.sections?.galleryMode;
     setGalleryMode(mode === "slideshow" || mode === "marquee" ? mode : "grid");
+    setFormButtonWidth(parseFormButtonWidth(data.sections?.formButtonWidth));
     setSpeakersLayout(data.sections?.speakersLayout === "list" ? "list" : "grid");
     setFaqText(data.sections?.faqText || "");
+    setFaqCollapse(data.sections?.faqCollapse === true);
     setFormFieldOrder(Array.isArray(data.sections?.formFieldOrder) ? data.sections.formFieldOrder : []);
   };
 
@@ -14559,46 +15028,6 @@ function App() {
   };
 
   useEffect(() => {
-    if (!mapCoords || !mapContainerRef.current || isAdminRoute) {
-      return;
-    }
-
-    if (!mapRef.current) {
-      mapRef.current = L.map(mapContainerRef.current, {
-        zoomControl: false,
-        attributionControl: false,
-        dragging: false,
-        scrollWheelZoom: false,
-        doubleClickZoom: false,
-        boxZoom: false,
-        keyboard: false,
-        tap: false,
-        touchZoom: false
-      });
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        maxZoom: 19
-      }).addTo(mapRef.current);
-      markerRef.current = L.circleMarker([mapCoords.lat, mapCoords.lon], {
-        radius: 10,
-        color: "#111827",
-        weight: 2,
-        fillColor: "#c95a1a",
-        fillOpacity: 1
-      }).addTo(mapRef.current);
-    }
-
-    mapRef.current.setView([mapCoords.lat, mapCoords.lon], 15);
-    if (markerRef.current) {
-      markerRef.current.setLatLng([mapCoords.lat, mapCoords.lon]);
-    }
-    requestAnimationFrame(() => {
-      if (mapRef.current) {
-        mapRef.current.invalidateSize();
-      }
-    });
-  }, [mapCoords, isAdminRoute]);
-
-  useEffect(() => {
     if (isAdminRoute || !event?.id) {
       setEventSectionsLoaded(false);
       return undefined;
@@ -14638,6 +15067,8 @@ function App() {
         title: "",
         bodyHtml: "",
         imageUrl: "",
+        videoUrl: "",
+        backgroundKind: "image",
         showEventName: true,
         showCtaButton: true,
         showDatePlace: true
@@ -14651,39 +15082,7 @@ function App() {
 
   useEffect(() => {
     setHeroImageError(false);
-  }, [hero.imageUrl]);
-
-  useEffect(() => {
-    if (!place.address || isAdminRoute) {
-      setMapCoords(null);
-      setMapError("");
-      return;
-    }
-    const controller = new AbortController();
-    const loadCoords = async () => {
-      const response = await fetch(
-        `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(
-          place.address
-        )}`,
-        { signal: controller.signal }
-      );
-      if (!response.ok) {
-        throw new Error("Geocode failed");
-      }
-      const data = await response.json();
-      const result = data[0];
-      if (!result) {
-        throw new Error("No results");
-      }
-      setMapCoords({ lat: Number(result.lat), lon: Number(result.lon) });
-      setMapError("");
-    };
-    loadCoords().catch(() => {
-      setMapCoords(null);
-      setMapError("Kartan kunde inte laddas.");
-    });
-    return () => controller.abort();
-  }, [place, isAdminRoute]);
+  }, [heroBackground.url]);
 
   useEffect(() => {
     if (isAdminRoute || !event?.id) {
@@ -14713,6 +15112,8 @@ function App() {
         title: "",
         bodyHtml: "",
         imageUrl: "",
+        videoUrl: "",
+        backgroundKind: "image",
         showEventName: true,
         showCtaButton: true,
         showDatePlace: true
@@ -14998,7 +15399,7 @@ function App() {
 
   return (
     <div className="page public-event-page" ref={pageRef}>
-      {hero.imageUrl && !heroImageError ? (
+      {heroBackground.url && !heroImageError ? (
         <div className="hero hero--banner" ref={heroBannerRef}>
           {sectionVisibility.showTranslate && eventSectionsLoaded ? (
             <div className="translate-row translate-row--overlay notranslate">
@@ -15007,12 +15408,25 @@ function App() {
           ) : null}
           <div className="hero-banner-bg" aria-hidden="true">
             <div className="hero-banner-bg-parallax" ref={heroBgParallaxRef}>
-              <img
-                className="hero-image"
-                src={resolveAssetUrl(hero.imageUrl)}
-                alt=""
-                onError={() => setHeroImageError(true)}
-              />
+              {heroBackground.type === "video" ? (
+                <video
+                  className="hero-image"
+                  src={resolveAssetUrl(heroBackground.url)}
+                  autoPlay
+                  muted
+                  loop
+                  playsInline
+                  preload="metadata"
+                  onError={() => setHeroImageError(true)}
+                />
+              ) : (
+                <img
+                  className="hero-image"
+                  src={resolveAssetUrl(heroBackground.url)}
+                  alt=""
+                  onError={() => setHeroImageError(true)}
+                />
+              )}
               <div className="hero-banner-shade" aria-hidden="true" />
             </div>
           </div>
@@ -15116,10 +15530,7 @@ function App() {
             <div className="section" key="faq">
               <h2>{sectionLabels.faq.trim() || "FAQ"}</h2>
               {faqText && faqText.trim() ? (
-                <div
-                  className="hero-body faq-body"
-                  dangerouslySetInnerHTML={{ __html: faqText }}
-                />
+                <FaqCollapsible html={faqText} enabled={faqCollapse} />
               ) : (
                 <p className="muted">FAQ uppdateras snart.</p>
               )}
@@ -15129,7 +15540,7 @@ function App() {
         if (key === "speakers" && sectionVisibility.showSpeakers) {
           return (
             <div className="section" key="speakers">
-              <h2>{sectionLabels.speakers.trim() || "Talare"}</h2>
+              <h2>{sectionLabels.speakers.trim() || "Personer"}</h2>
               {speakers.length > 0 ? (
                 <div className={`speakers${speakersLayout === "list" ? " speakers--list" : ""}`}>
                   {speakers.map((speaker) => (
@@ -15147,7 +15558,7 @@ function App() {
                   ))}
                 </div>
               ) : (
-                <p className="muted">Talare uppdateras snart.</p>
+                <p className="muted">Personer uppdateras snart.</p>
               )}
             </div>
           );
@@ -15225,33 +15636,16 @@ function App() {
           return (
             <div className="section" key="place">
               <h2>Plats</h2>
-              <div className="place-card">
-                {place.address && mapCoords ? (
-                  <div className="place-map" role="img" aria-label={`Karta: ${place.address}`}>
-                    <div className="place-map-inner" ref={mapContainerRef}></div>
-                  </div>
-                ) : (
-                  <div className="place-map placeholder" aria-hidden="true"></div>
-                )}
-                <div className="place-address">
-                  {place.address ? (
-                    <span>{place.address}</span>
-                  ) : (
-                    <span className="muted">Adress kommer snart.</span>
-                  )}
-                  {mapError ? <span className="muted"> {mapError}</span> : null}
-                </div>
-                {place.description ? <div className="place-desc">{place.description}</div> : null}
-              </div>
+              <PlaceCard address={place.address} description={place.description} />
             </div>
           );
         }
         if (key === "formButton" && sectionVisibility.showFormButton) {
           return (
-            <div className="section section-form-button" key="formButton">
+            <div className={`section section-form-button section-form-button--${formButtonWidth}`} key="formButton">
               <button
                 type="button"
-                className="button full-width"
+                className={`button${formButtonWidth === "wide" ? " full-width" : ""}`}
                 onClick={scrollToRegistrationForm}
               >
                 {sectionLabels.formButton.trim() || "Anmäl dig här"}

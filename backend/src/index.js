@@ -299,7 +299,7 @@ const imageFileFilter = (_req, file, cb) => {
 };
 
 const handleMulterUpload =
-  (middleware) =>
+  (middleware, sizeErrorMessage = "Bilden är för stor.") =>
   (req, res, next) => {
     middleware(req, res, (err) => {
       if (!err) {
@@ -308,7 +308,7 @@ const handleMulterUpload =
       }
       const message =
         err.code === "LIMIT_FILE_SIZE"
-          ? "Bilden är för stor."
+          ? sizeErrorMessage
           : err.message || "Uppladdningen misslyckades.";
       res.status(400).json({ ok: false, error: message });
     });
@@ -359,6 +359,41 @@ const galleryUpload = multer({
   storage: galleryStorage,
   limits: { fileSize: 8 * 1024 * 1024 },
   fileFilter: imageFileFilter
+});
+
+const ALLOWED_VIDEO_EXTENSIONS = new Set([".mp4", ".webm", ".mov"]);
+const HERO_VIDEO_MAX_BYTES = 40 * 1024 * 1024;
+
+const parseHeroBackgroundKind = (value) =>
+  String(value || "").toLowerCase() === "video" ? "video" : "image";
+
+const videoFileFilter = (_req, file, cb) => {
+  const mime = String(file.mimetype || "").toLowerCase();
+  const ext = path.extname(file.originalname || "").toLowerCase();
+  if (mime.startsWith("video/") && (!ext || ALLOWED_VIDEO_EXTENSIONS.has(ext))) {
+    cb(null, true);
+    return;
+  }
+  if (ALLOWED_VIDEO_EXTENSIONS.has(ext)) {
+    cb(null, true);
+    return;
+  }
+  cb(new Error("Bara MP4, WebM eller MOV kan användas som eventvideo."));
+};
+
+const heroVideoStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname || "").toLowerCase();
+    const safeExt = ALLOWED_VIDEO_EXTENSIONS.has(ext) ? ext : ".mp4";
+    cb(null, `hero-video-${Date.now()}-${Math.round(Math.random() * 1e9)}${safeExt}`);
+  }
+});
+
+const heroVideoUpload = multer({
+  storage: heroVideoStorage,
+  limits: { fileSize: HERO_VIDEO_MAX_BYTES },
+  fileFilter: videoFileFilter
 });
 
 const PROFILE_ID_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -976,11 +1011,13 @@ const defaultSectionVisibility = {
   showFaq: false,
   sectionLabelFaq: "",
   faqText: "",
+  faqCollapse: false,
   showGallery: false,
   sectionLabelGallery: "",
   galleryMode: "grid",
   showFormButton: false,
   sectionLabelFormButton: "",
+  formButtonWidth: "wide",
   showSocial: false,
   sectionLabelSocial: "",
   socialInstagramUrl: "",
@@ -1000,6 +1037,7 @@ const VALID_SPEAKERS_LAYOUTS = new Set(["grid", "list"]);
 const VALID_GALLERY_MODES = new Set(["grid", "slideshow", "marquee"]);
 const VALID_SOCIAL_ICON_STYLES = new Set(["color", "mono", "grayscale"]);
 const VALID_SOCIAL_ICON_SHAPES = new Set(["circle", "rounded", "square", "plain"]);
+const VALID_FORM_BUTTON_WIDTHS = new Set(["wide", "medium", "small"]);
 
 function parseSocialIconStyle(value) {
   const normalized = String(value || "color").toLowerCase();
@@ -1034,17 +1072,23 @@ function parseGalleryMode(value) {
   return VALID_GALLERY_MODES.has(normalized) ? normalized : "grid";
 }
 
+function parseFormButtonWidth(value) {
+  const normalized = String(value || "wide").toLowerCase();
+  return VALID_FORM_BUTTON_WIDTHS.has(normalized) ? normalized : "wide";
+}
+
 const EVENT_SECTIONS_SELECT = `
   show_program, show_place, show_text, show_speakers, show_partners,
   show_name, show_email, show_phone, show_city, show_organization, show_translate, show_discount_code,
   show_faq, show_gallery, section_order, form_field_order,
   section_label_program, section_label_speakers, section_label_partners, section_label_faq, section_label_gallery,
   faq_text, speakers_layout, translate_default_language, gallery_mode,
-  show_form_button, section_label_form_button,
+  show_form_button, section_label_form_button, form_button_width,
   show_social, section_label_social,
   social_instagram_url, social_facebook_url, social_linkedin_url,
   social_show_instagram, social_show_facebook, social_show_linkedin,
-  social_icon_style, social_icon_shape, social_caption
+  social_icon_style, social_icon_shape, social_caption,
+  faq_collapse
 `;
 
 function formatSectionsResponse(row, customIds = []) {
@@ -1071,11 +1115,13 @@ function formatSectionsResponse(row, customIds = []) {
     sectionLabelFaq: row.section_label_faq ?? "",
     sectionLabelGallery: row.section_label_gallery ?? "",
     faqText: row.faq_text ?? "",
+    faqCollapse: row.faq_collapse === true,
     speakersLayout: parseSpeakersLayout(row.speakers_layout),
     translateDefaultLanguage: parseTranslateDefaultLanguage(row.translate_default_language),
     galleryMode: parseGalleryMode(row.gallery_mode),
     showFormButton: row.show_form_button === true,
     sectionLabelFormButton: row.section_label_form_button ?? "",
+    formButtonWidth: parseFormButtonWidth(row.form_button_width),
     showSocial: row.show_social === true,
     sectionLabelSocial: row.section_label_social ?? "",
     socialInstagramUrl: row.social_instagram_url ?? "",
@@ -1795,26 +1841,6 @@ const getParticipantCountForEvent = async (eventId) => {
   return result.rows[0]?.count ?? 0;
 };
 
-const checkEventCapacity = async (eventId, additionalSeats = 1) => {
-  const resolvedEventId = normalizeEventId(eventId);
-  if (!resolvedEventId) {
-    return { ok: false, max: null, current: null };
-  }
-  const eventRow = await pool.query(
-    "SELECT max_participants FROM events WHERE id = $1",
-    [resolvedEventId]
-  );
-  const max = eventRow.rows[0]?.max_participants;
-  if (max == null || max <= 0) {
-    return { ok: true, max: null, current: null };
-  }
-  const current = await getParticipantCountForEvent(resolvedEventId);
-  if (current + additionalSeats > max) {
-    return { ok: false, max, current };
-  }
-  return { ok: true, max, current };
-};
-
 const parseMaxQuantity = (value) => {
   if (value === undefined || value === null || value === "") {
     return { ok: true, value: null };
@@ -2173,15 +2199,17 @@ app.get("/hero", async (req, res) => {
       return;
     }
     const result = await pool.query(
-      "SELECT title, body_html, image_url, show_event_name, show_cta_button, show_date_place FROM hero_section WHERE event_id = $1",
+      "SELECT title, body_html, image_url, video_url, background_kind, show_event_name, show_cta_button, show_date_place FROM hero_section WHERE event_id = $1",
       [eventId]
     );
-    const row = result.rows[0] || { title: "", body_html: "", image_url: "" };
+    const row = result.rows[0] || { title: "", body_html: "", image_url: "", video_url: "", background_kind: "image" };
     res.json({
       ok: true,
       title: row.title,
       bodyHtml: row.body_html,
       imageUrl: row.image_url || "",
+      videoUrl: row.video_url || "",
+      backgroundKind: parseHeroBackgroundKind(row.background_kind),
       showEventName: row.show_event_name !== false,
       showCtaButton: row.show_cta_button !== false,
       showDatePlace: row.show_date_place !== false
@@ -2447,16 +2475,6 @@ app.post("/bookings", bookingLimiter, async (req, res) => {
       res.status(400).json({ ok: false, error: "Det går inte att registrera anmälningar efter eventdatum eller efter senaste anmälningsdag." });
       return;
     }
-    const capacity = await checkEventCapacity(parsed.payload.eventId, 1);
-    if (!capacity.ok) {
-      res.status(400).json({
-        ok: false,
-        error: "Detta event är tyvärr fullt. Det går inte att göra fler anmälningar.",
-        maxParticipants: capacity.max,
-        currentParticipants: capacity.current
-      });
-      return;
-    }
     const catalog = await applyCatalogTicket(parsed.payload);
     if (!catalog.ok) {
       res.status(400).json({ ok: false, error: catalog.error });
@@ -2567,16 +2585,6 @@ app.post("/payments/start", paymentLimiter, async (req, res) => {
     return;
   }
 
-  const capacity = await checkEventCapacity(parsed.payload.eventId, 1);
-  if (!capacity.ok) {
-    res.status(400).json({
-      ok: false,
-      error: "Detta event är tyvärr fullt. Det går inte att göra fler anmälningar.",
-      maxParticipants: capacity.max,
-      currentParticipants: capacity.current
-    });
-    return;
-  }
   const catalog = await applyCatalogTicket(parsed.payload);
   if (!catalog.ok) {
     res.status(400).json({ ok: false, error: catalog.error });
@@ -2964,16 +2972,6 @@ app.post("/payments/start-cart", paymentLimiter, async (req, res) => {
   const eventRow = eventDateResult.rows[0];
   if (isRegistrationClosed(eventRow)) {
     res.status(400).json({ ok: false, error: "Det går inte att registrera anmälningar efter eventdatum eller efter senaste anmälningsdag." });
-    return;
-  }
-  const capacity = await checkEventCapacity(eventId, parsedItems.length);
-  if (!capacity.ok) {
-    res.status(400).json({
-      ok: false,
-      error: "Detta event är tyvärr fullt. Det går inte att göra fler anmälningar.",
-      maxParticipants: capacity.max,
-      currentParticipants: capacity.current
-    });
     return;
   }
   const catalogItems = await applyCatalogTickets(parsedItems);
@@ -7302,6 +7300,7 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
     galleryMode,
     showFormButton,
     sectionLabelFormButton,
+    formButtonWidth,
     showSocial,
     sectionLabelSocial,
     socialInstagramUrl,
@@ -7312,7 +7311,8 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
     socialShowLinkedin,
     socialIconStyle,
     socialIconShape,
-    socialCaption
+    socialCaption,
+    faqCollapse
   } = req.body || {};
   const parsedEventId = await ensureEventOwnership(eventId, req.userId, res);
   if (!parsedEventId) {
@@ -7337,6 +7337,7 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
   const speakersLayoutNormalized = parseSpeakersLayout(speakersLayout);
   const translateDefaultLanguageNormalized = parseTranslateDefaultLanguage(translateDefaultLanguage);
   const galleryModeNormalized = parseGalleryMode(galleryMode);
+  const formButtonWidthNormalized = parseFormButtonWidth(formButtonWidth);
   const labelSocial = typeof sectionLabelSocial === "string" ? sectionLabelSocial.trim() : "";
   const socialInstagramUrlNormalized = normalizeSocialUrl(socialInstagramUrl);
   const socialFacebookUrlNormalized = normalizeSocialUrl(socialFacebookUrl);
@@ -7352,12 +7353,13 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
           (event_id, show_program, show_place, show_text, show_speakers, show_partners,
            show_name, show_email, show_phone, show_city, show_organization, show_translate, show_discount_code, show_faq, show_gallery,
            section_order, form_field_order, section_label_program, section_label_speakers, section_label_partners, section_label_faq, section_label_gallery, faq_text, speakers_layout, translate_default_language, gallery_mode,
-           show_form_button, section_label_form_button,
+           show_form_button, section_label_form_button, form_button_width,
            show_social, section_label_social, social_instagram_url, social_facebook_url, social_linkedin_url,
-           social_show_instagram, social_show_facebook, social_show_linkedin, social_icon_style, social_icon_shape, social_caption)
+           social_show_instagram, social_show_facebook, social_show_linkedin, social_icon_style, social_icon_shape, social_caption,
+           faq_collapse)
         VALUES
           ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28,
-           $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39)
+           $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41)
         ON CONFLICT (event_id) DO UPDATE SET
           show_program = EXCLUDED.show_program,
           show_place = EXCLUDED.show_place,
@@ -7386,6 +7388,7 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
           gallery_mode = EXCLUDED.gallery_mode,
           show_form_button = EXCLUDED.show_form_button,
           section_label_form_button = EXCLUDED.section_label_form_button,
+          form_button_width = EXCLUDED.form_button_width,
           show_social = EXCLUDED.show_social,
           section_label_social = EXCLUDED.section_label_social,
           social_instagram_url = EXCLUDED.social_instagram_url,
@@ -7396,7 +7399,8 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
           social_show_linkedin = EXCLUDED.social_show_linkedin,
           social_icon_style = EXCLUDED.social_icon_style,
           social_icon_shape = EXCLUDED.social_icon_shape,
-          social_caption = EXCLUDED.social_caption
+          social_caption = EXCLUDED.social_caption,
+          faq_collapse = EXCLUDED.faq_collapse
         RETURNING ${EVENT_SECTIONS_SELECT}
       `,
       [
@@ -7428,6 +7432,7 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
         galleryModeNormalized,
         showFormButton === true,
         labelFormButton,
+        formButtonWidthNormalized,
         showSocial === true,
         labelSocial,
         socialInstagramUrlNormalized,
@@ -7438,7 +7443,8 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
         socialShowLinkedin !== false,
         socialIconStyleNormalized,
         socialIconShapeNormalized,
-        socialCaptionNormalized
+        socialCaptionNormalized,
+        faqCollapse === true
       ]
     );
     res.json({
@@ -7836,7 +7842,6 @@ app.put("/admin/events/:id", requireAdmin, async (req, res) => {
     startDate,
     endDate,
     registrationDeadline,
-    maxParticipants,
     confirmationNote,
     vatRatePercent: vatRatePercentBody
   } = req.body || {};
@@ -7879,19 +7884,6 @@ app.put("/admin/events/:id", requireAdmin, async (req, res) => {
       return;
     }
   }
-  let maxParticipantsValue = null;
-  if (maxParticipants !== undefined) {
-    if (maxParticipants === "" || maxParticipants === null) {
-      maxParticipantsValue = null;
-    } else {
-      const parsedMax = Number(maxParticipants);
-      if (!Number.isFinite(parsedMax) || parsedMax < 0) {
-        res.status(400).json({ ok: false, error: "Ogiltigt maxantal deltagare." });
-        return;
-      }
-      maxParticipantsValue = Math.floor(parsedMax);
-    }
-  }
   const confirmationNoteValue =
     confirmationNote === undefined ? null : String(confirmationNote || "").trim();
   let vatRatePercentValue = null;
@@ -7913,29 +7905,6 @@ app.put("/admin/events/:id", requireAdmin, async (req, res) => {
           SET theme = COALESCE($1, theme),
               event_start_date = $2,
               event_end_date = $3,
-              max_participants = COALESCE($4, max_participants),
-              confirmation_note = COALESCE($5, confirmation_note),
-              vat_rate_percent = COALESCE($6, vat_rate_percent)
-          WHERE id = $7
-          RETURNING id, slug, name, theme, event_start_date, event_end_date, registration_deadline, max_participants, confirmation_note, vat_rate_percent, created_at
-        `,
-        [
-          normalizedTheme,
-          eventStartDate,
-          eventEndDate,
-          maxParticipantsValue,
-          confirmationNoteValue,
-          vatRatePercentValue,
-          eventId
-        ]
-      );
-    } else if (registrationDeadline !== undefined || maxParticipants !== undefined || vatRatePercentValue != null) {
-      result = await pool.query(
-        `
-          UPDATE events
-          SET theme = COALESCE($1, theme),
-              registration_deadline = COALESCE($2, registration_deadline),
-              max_participants = COALESCE($3, max_participants),
               confirmation_note = COALESCE($4, confirmation_note),
               vat_rate_percent = COALESCE($5, vat_rate_percent)
           WHERE id = $6
@@ -7943,8 +7912,27 @@ app.put("/admin/events/:id", requireAdmin, async (req, res) => {
         `,
         [
           normalizedTheme,
+          eventStartDate,
+          eventEndDate,
+          confirmationNoteValue,
+          vatRatePercentValue,
+          eventId
+        ]
+      );
+    } else if (registrationDeadline !== undefined) {
+      result = await pool.query(
+        `
+          UPDATE events
+          SET theme = COALESCE($1, theme),
+              registration_deadline = $2,
+              confirmation_note = COALESCE($3, confirmation_note),
+              vat_rate_percent = COALESCE($4, vat_rate_percent)
+          WHERE id = $5
+          RETURNING id, slug, name, theme, event_start_date, event_end_date, registration_deadline, max_participants, confirmation_note, vat_rate_percent, created_at
+        `,
+        [
+          normalizedTheme,
           deadlineValue,
-          maxParticipantsValue,
           confirmationNoteValue,
           vatRatePercentValue,
           eventId
@@ -8439,17 +8427,25 @@ app.put(
     const previousImage = existing.rows[0]?.image_url || "";
     const result = await pool.query(
       `
-        INSERT INTO hero_section (id, event_id, title, body_html, image_url)
-        VALUES ($1, $1, '', '', $2)
-        ON CONFLICT (id) DO UPDATE SET image_url = EXCLUDED.image_url
-        RETURNING image_url
+        INSERT INTO hero_section (id, event_id, title, body_html, image_url, background_kind)
+        VALUES ($1, $1, '', '', $2, 'image')
+        ON CONFLICT (id) DO UPDATE SET
+          image_url = EXCLUDED.image_url,
+          background_kind = 'image'
+        RETURNING image_url, video_url, background_kind
       `,
       [parsedEventId, imageUrl]
     );
     if (previousImage && previousImage !== imageUrl) {
       unlinkUploadFile(previousImage);
     }
-    res.json({ ok: true, imageUrl: result.rows[0]?.image_url || imageUrl });
+    const row = result.rows[0] || {};
+    res.json({
+      ok: true,
+      imageUrl: row.image_url || imageUrl,
+      videoUrl: row.video_url || "",
+      backgroundKind: parseHeroBackgroundKind(row.background_kind)
+    });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to update hero image" });
   }
@@ -8462,14 +8458,16 @@ app.delete("/admin/hero/image", requireAdmin, async (req, res) => {
   }
   try {
     const existing = await pool.query(
-      "SELECT image_url FROM hero_section WHERE event_id = $1",
+      "SELECT image_url, video_url FROM hero_section WHERE event_id = $1",
       [eventId]
     );
     const previousImage = existing.rows[0]?.image_url || "";
+    const videoUrl = existing.rows[0]?.video_url || "";
     await pool.query(
       `
         UPDATE hero_section
-        SET image_url = ''
+        SET image_url = '',
+            background_kind = CASE WHEN COALESCE(video_url, '') <> '' THEN 'video' ELSE 'image' END
         WHERE event_id = $1
       `,
       [eventId]
@@ -8477,9 +8475,128 @@ app.delete("/admin/hero/image", requireAdmin, async (req, res) => {
     if (previousImage) {
       unlinkUploadFile(previousImage);
     }
-    res.json({ ok: true });
+    res.json({
+      ok: true,
+      imageUrl: "",
+      videoUrl,
+      backgroundKind: videoUrl ? "video" : "image"
+    });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to remove hero image" });
+  }
+});
+
+app.put("/admin/hero/background-kind", requireAdmin, async (req, res) => {
+  const { eventId, backgroundKind } = req.body || {};
+  const parsedEventId = await ensureEventOwnership(eventId, req.userId, res);
+  if (!parsedEventId) {
+    return;
+  }
+  const kind = parseHeroBackgroundKind(backgroundKind);
+  try {
+    const result = await pool.query(
+      `
+        INSERT INTO hero_section (id, event_id, title, body_html, image_url, background_kind)
+        VALUES ($1, $1, '', '', '', $2)
+        ON CONFLICT (id) DO UPDATE SET background_kind = EXCLUDED.background_kind
+        RETURNING image_url, video_url, background_kind
+      `,
+      [parsedEventId, kind]
+    );
+    const row = result.rows[0] || {};
+    res.json({
+      ok: true,
+      imageUrl: row.image_url || "",
+      videoUrl: row.video_url || "",
+      backgroundKind: parseHeroBackgroundKind(row.background_kind)
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Failed to update hero background" });
+  }
+});
+
+app.put(
+  "/admin/hero/video",
+  requireAdmin,
+  handleMulterUpload(heroVideoUpload.single("video"), "Videon är för stor (max 40 MB)."),
+  async (req, res) => {
+    const { eventId } = req.body || {};
+    const parsedEventId = await ensureEventOwnership(eventId, req.userId, res);
+    if (!parsedEventId) {
+      if (req.file?.path) fs.unlink(req.file.path, () => {});
+      return;
+    }
+    if (!req.file) {
+      res.status(400).json({ ok: false, error: "Välj en videofil." });
+      return;
+    }
+    try {
+      const videoUrl = `/uploads/${req.file.filename}`;
+      const existing = await pool.query(
+        "SELECT video_url FROM hero_section WHERE event_id = $1",
+        [parsedEventId]
+      );
+      const previousVideo = existing.rows[0]?.video_url || "";
+      const result = await pool.query(
+        `
+          INSERT INTO hero_section (id, event_id, title, body_html, image_url, video_url, background_kind)
+          VALUES ($1, $1, '', '', '', $2, 'video')
+          ON CONFLICT (id) DO UPDATE SET
+            video_url = EXCLUDED.video_url,
+            background_kind = 'video'
+          RETURNING image_url, video_url, background_kind
+        `,
+        [parsedEventId, videoUrl]
+      );
+      if (previousVideo && previousVideo !== videoUrl) {
+        unlinkUploadFile(previousVideo);
+      }
+      const row = result.rows[0] || {};
+      res.json({
+        ok: true,
+        imageUrl: row.image_url || "",
+        videoUrl: row.video_url || videoUrl,
+        backgroundKind: parseHeroBackgroundKind(row.background_kind)
+      });
+    } catch (error) {
+      if (req.file?.path) fs.unlink(req.file.path, () => {});
+      res.status(500).json({ ok: false, error: "Failed to update hero video" });
+    }
+  }
+);
+
+app.delete("/admin/hero/video", requireAdmin, async (req, res) => {
+  const eventId = await ensureEventOwnership(req.query.eventId, req.userId, res);
+  if (!eventId) {
+    return;
+  }
+  try {
+    const existing = await pool.query(
+      "SELECT image_url, video_url FROM hero_section WHERE event_id = $1",
+      [eventId]
+    );
+    const previousVideo = existing.rows[0]?.video_url || "";
+    const imageUrl = existing.rows[0]?.image_url || "";
+    await pool.query(
+      `
+        UPDATE hero_section
+        SET video_url = '',
+            background_kind = CASE WHEN COALESCE(image_url, '') <> '' THEN 'image' ELSE 'video' END
+        WHERE event_id = $1
+      `,
+      [eventId]
+    );
+    if (previousVideo) {
+      unlinkUploadFile(previousVideo);
+    }
+    res.json({
+      ok: true,
+      imageUrl,
+      videoUrl: "",
+      backgroundKind: imageUrl ? "image" : "image"
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Failed to remove hero video" });
   }
 });
 
@@ -10437,6 +10554,7 @@ const ensureBookingsTable = async () => {
       gallery_mode TEXT NOT NULL DEFAULT 'grid',
       show_form_button BOOLEAN NOT NULL DEFAULT FALSE,
       section_label_form_button TEXT DEFAULT '',
+      form_button_width TEXT NOT NULL DEFAULT 'wide',
       show_social BOOLEAN NOT NULL DEFAULT FALSE,
       section_label_social TEXT DEFAULT '',
       social_instagram_url TEXT DEFAULT '',
@@ -10447,7 +10565,8 @@ const ensureBookingsTable = async () => {
       social_show_linkedin BOOLEAN NOT NULL DEFAULT TRUE,
       social_icon_style TEXT NOT NULL DEFAULT 'color',
       social_icon_shape TEXT NOT NULL DEFAULT 'rounded',
-      social_caption TEXT DEFAULT ''
+      social_caption TEXT DEFAULT '',
+      faq_collapse BOOLEAN NOT NULL DEFAULT FALSE
     )
   `);
   await pool.query(`
@@ -10474,6 +10593,8 @@ const ensureBookingsTable = async () => {
       ADD COLUMN IF NOT EXISTS gallery_mode TEXT NOT NULL DEFAULT 'grid',
       ADD COLUMN IF NOT EXISTS show_form_button BOOLEAN NOT NULL DEFAULT FALSE,
       ADD COLUMN IF NOT EXISTS section_label_form_button TEXT DEFAULT '',
+      ADD COLUMN IF NOT EXISTS form_button_width TEXT NOT NULL DEFAULT 'wide',
+      ADD COLUMN IF NOT EXISTS faq_collapse BOOLEAN NOT NULL DEFAULT FALSE,
       ADD COLUMN IF NOT EXISTS show_social BOOLEAN NOT NULL DEFAULT FALSE,
       ADD COLUMN IF NOT EXISTS section_label_social TEXT DEFAULT '',
       ADD COLUMN IF NOT EXISTS social_instagram_url TEXT DEFAULT '',
@@ -10807,6 +10928,8 @@ const ensureBookingsTable = async () => {
     ALTER TABLE hero_section
       ADD COLUMN IF NOT EXISTS event_id INTEGER,
       ADD COLUMN IF NOT EXISTS image_url TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS video_url TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS background_kind TEXT NOT NULL DEFAULT 'image',
       ADD COLUMN IF NOT EXISTS show_event_name BOOLEAN NOT NULL DEFAULT true,
       ADD COLUMN IF NOT EXISTS show_cta_button BOOLEAN NOT NULL DEFAULT true,
       ADD COLUMN IF NOT EXISTS show_date_place BOOLEAN NOT NULL DEFAULT true
