@@ -3046,6 +3046,13 @@ fieldset.field {
   text-underline-offset: 3px;
 }
 
+.admin-device-code-input {
+  letter-spacing: 0.28em;
+  font-size: 1.35rem;
+  font-weight: 700;
+  text-align: center;
+}
+
 .admin-nav-logout {
   color: #9b3b0f;
 }

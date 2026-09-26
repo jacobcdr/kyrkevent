@@ -3753,6 +3753,125 @@ app.get("/payments/verify", async (req, res) => {
   }
 });
 
+const PASSWORD_STRENGTH_ERROR =
+  "Lösenordet måste vara minst 8 tecken och innehålla minst en siffra samt både stora och små bokstäver.";
+
+const getPasswordStrengthError = (password) => {
+  const value = String(password || "");
+  if (
+    value.length < 8 ||
+    !/\d/.test(value) ||
+    !/\p{Ll}/u.test(value) ||
+    !/\p{Lu}/u.test(value)
+  ) {
+    return PASSWORD_STRENGTH_ERROR;
+  }
+  return "";
+};
+
+const DEVICE_TOKEN_TTL_DAYS = 90;
+const LOGIN_CODE_TTL_MS = 10 * 60 * 1000;
+const LOGIN_CODE_MAX_ATTEMPTS = 5;
+
+const hashOpaqueToken = (value) =>
+  crypto.createHash("sha256").update(String(value || "")).digest("hex");
+
+const normalizeDeviceToken = (value) => {
+  const token = String(value || "").trim().toLowerCase();
+  return /^[a-f0-9]{64}$/.test(token) ? token : "";
+};
+
+const maskEmailAddress = (email) => {
+  const raw = String(email || "").trim();
+  const at = raw.indexOf("@");
+  if (at < 1) return "";
+  return `${raw.slice(0, 1)}***@${raw.slice(at + 1)}`;
+};
+
+const issueAdminJwt = (user) =>
+  jwt.sign({ role: "admin", userId: user.id, username: user.username }, JWT_SECRET, {
+    expiresIn: "1h"
+  });
+
+const loadProfileEmail = async (userId) => {
+  const result = await pool.query(
+    "SELECT email FROM admin_user_profiles WHERE user_id = $1",
+    [userId]
+  );
+  return String(result.rows[0]?.email || "").trim();
+};
+
+const rememberTrustedDevice = async (userId, deviceToken, userAgent) => {
+  const expiresAt = new Date(Date.now() + DEVICE_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000);
+  await pool.query(
+    `
+      INSERT INTO admin_trusted_devices (user_id, token_hash, user_agent, expires_at)
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (user_id, token_hash) DO UPDATE SET
+        last_used_at = NOW(),
+        expires_at = EXCLUDED.expires_at,
+        user_agent = EXCLUDED.user_agent
+    `,
+    [userId, hashOpaqueToken(deviceToken), String(userAgent || "").slice(0, 240), expiresAt]
+  );
+};
+
+const clearTrustedDevicesForUser = async (userId) => {
+  await pool.query("DELETE FROM admin_trusted_devices WHERE user_id = $1", [userId]);
+  await pool.query("DELETE FROM admin_login_challenges WHERE user_id = $1", [userId]);
+};
+
+const sendDeviceLoginCodeEmail = async (email, username, code) => {
+  const subject = "Inloggningskod – Kyrkevent";
+  const html = `
+    <p>Hej!</p>
+    <p>Någon försöker logga in på kontot <strong>${username}</strong> från en ny enhet.</p>
+    <p>Din kod är:</p>
+    <p style="font-size:28px;letter-spacing:0.18em;font-weight:700;">${code}</p>
+    <p>Koden gäller i 10 minuter. Om det inte var du kan du ignorera mailet.</p>
+  `;
+  await resend.emails.send({
+    from: RESEND_FROM,
+    to: email,
+    subject,
+    html
+  });
+};
+
+const createDeviceLoginChallenge = async (user, deviceToken, userAgent) => {
+  const email = await loadProfileEmail(user.id);
+  if (!email || !resend || !RESEND_FROM) {
+    return { skipped: true };
+  }
+  const code = String(crypto.randomInt(100000, 1000000));
+  const challengeId = crypto.randomBytes(24).toString("hex");
+  await pool.query(
+    "DELETE FROM admin_login_challenges WHERE user_id = $1 OR expires_at <= NOW()",
+    [user.id]
+  );
+  await pool.query(
+    `
+      INSERT INTO admin_login_challenges (id, user_id, code_hash, device_token_hash, user_agent, expires_at)
+      VALUES ($1, $2, $3, $4, $5, $6)
+    `,
+    [
+      challengeId,
+      user.id,
+      hashOpaqueToken(code),
+      hashOpaqueToken(deviceToken),
+      String(userAgent || "").slice(0, 240),
+      new Date(Date.now() + LOGIN_CODE_TTL_MS)
+    ]
+  );
+  try {
+    await sendDeviceLoginCodeEmail(email, user.username, code);
+  } catch (error) {
+    await pool.query("DELETE FROM admin_login_challenges WHERE id = $1", [challengeId]);
+    throw error;
+  }
+  return { skipped: false, challengeId, emailHint: maskEmailAddress(email) };
+};
+
 const requireAdmin = (req, res, next) => {
   if (!JWT_SECRET) {
     res.status(500).json({ ok: false, error: "JWT_SECRET is not set" });
@@ -3799,6 +3918,11 @@ app.post("/admin/users", async (req, res) => {
   const normalizedEmail = String(email ?? "").trim();
   if (!normalizedUsername || !password) {
     res.status(400).json({ ok: false, error: "Missing username or password" });
+    return;
+  }
+  const passwordError = getPasswordStrengthError(password);
+  if (passwordError) {
+    res.status(400).json({ ok: false, error: passwordError });
     return;
   }
 
@@ -4022,10 +4146,9 @@ app.post("/admin/password-reset", async (req, res) => {
     return res.status(400).json({ ok: false, error: "Token och nytt lösenord krävs." });
   }
 
-  if (newPassword.length < 8) {
-    return res
-      .status(400)
-      .json({ ok: false, error: "Lösenordet behöver vara minst 8 tecken långt." });
+  const resetPasswordError = getPasswordStrengthError(newPassword);
+  if (resetPasswordError) {
+    return res.status(400).json({ ok: false, error: resetPasswordError });
   }
 
   try {
@@ -4053,6 +4176,7 @@ app.post("/admin/password-reset", async (req, res) => {
        WHERE id = $2`,
       [passwordHash, userId]
     );
+    await clearTrustedDevicesForUser(userId);
 
     res.json({ ok: true, message: "Lösenordet är uppdaterat. Du kan nu logga in." });
   } catch (error) {
@@ -4087,7 +4211,7 @@ app.post("/admin/login", loginLimiter, async (req, res) => {
     res.status(500).json({ ok: false, error: "JWT_SECRET is not set" });
     return;
   }
-  const { username, password } = req.body || {};
+  const { username, password, deviceToken } = req.body || {};
   const normalizedUsername = normalizeUsername(username);
   if (!normalizedUsername || !password) {
     res.status(400).json({ ok: false, error: "Missing username or password" });
@@ -4115,12 +4239,151 @@ app.post("/admin/login", loginLimiter, async (req, res) => {
       });
       return;
     }
-    const token = jwt.sign({ role: "admin", userId: user.id, username: user.username }, JWT_SECRET, {
-      expiresIn: "2h"
+
+    const normalizedDeviceToken = normalizeDeviceToken(deviceToken);
+    const userAgent = req.get("user-agent") || "";
+    if (normalizedDeviceToken) {
+      const trusted = await pool.query(
+        `
+          SELECT id FROM admin_trusted_devices
+          WHERE user_id = $1 AND token_hash = $2 AND expires_at > NOW()
+        `,
+        [user.id, hashOpaqueToken(normalizedDeviceToken)]
+      );
+      if (trusted.rowCount > 0) {
+        const expiresAt = new Date(Date.now() + DEVICE_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000);
+        await pool.query(
+          `
+            UPDATE admin_trusted_devices
+            SET last_used_at = NOW(), expires_at = $2, user_agent = $3
+            WHERE id = $1
+          `,
+          [trusted.rows[0].id, expiresAt, userAgent.slice(0, 240)]
+        );
+        res.json({ ok: true, token: issueAdminJwt(user) });
+        return;
+      }
+    }
+
+    const tokenToTrust = normalizedDeviceToken || crypto.randomBytes(32).toString("hex");
+    const challenge = await createDeviceLoginChallenge(user, tokenToTrust, userAgent);
+    if (challenge.skipped) {
+      await rememberTrustedDevice(user.id, tokenToTrust, userAgent);
+      res.json({ ok: true, token: issueAdminJwt(user), deviceToken: tokenToTrust });
+      return;
+    }
+    res.json({
+      ok: true,
+      needsDeviceVerification: true,
+      challengeId: challenge.challengeId,
+      emailHint: challenge.emailHint,
+      deviceToken: tokenToTrust
     });
-    res.json({ ok: true, token });
   } catch (error) {
+    console.error("POST /admin/login error:", error);
     res.status(500).json({ ok: false, error: "Login failed" });
+  }
+});
+
+app.post("/admin/login/verify-device", loginLimiter, async (req, res) => {
+  if (!JWT_SECRET) {
+    res.status(500).json({ ok: false, error: "JWT_SECRET is not set" });
+    return;
+  }
+  const challengeId = String(req.body?.challengeId || "").trim();
+  const code = String(req.body?.code || "").replace(/\s+/g, "");
+  const normalizedDeviceToken = normalizeDeviceToken(req.body?.deviceToken);
+  if (!challengeId || !/^\d{6}$/.test(code) || !normalizedDeviceToken) {
+    res.status(400).json({ ok: false, error: "Ange den sexsiffriga koden från e-posten." });
+    return;
+  }
+  try {
+    const result = await pool.query(
+      `
+        SELECT c.id, c.user_id, c.code_hash, c.device_token_hash, c.attempts, u.username
+        FROM admin_login_challenges c
+        JOIN admin_users u ON u.id = c.user_id
+        WHERE c.id = $1 AND c.expires_at > NOW()
+      `,
+      [challengeId]
+    );
+    if (result.rowCount === 0) {
+      res.status(400).json({ ok: false, error: "Koden har gått ut. Logga in igen för en ny kod." });
+      return;
+    }
+    const challenge = result.rows[0];
+    if (challenge.attempts >= LOGIN_CODE_MAX_ATTEMPTS) {
+      await pool.query("DELETE FROM admin_login_challenges WHERE id = $1", [challengeId]);
+      res.status(400).json({ ok: false, error: "För många felaktiga försök. Logga in igen." });
+      return;
+    }
+    if (challenge.device_token_hash !== hashOpaqueToken(normalizedDeviceToken)) {
+      res.status(400).json({ ok: false, error: "Den här enheten matchar inte inloggningen. Börja om." });
+      return;
+    }
+    if (challenge.code_hash !== hashOpaqueToken(code)) {
+      await pool.query(
+        "UPDATE admin_login_challenges SET attempts = attempts + 1 WHERE id = $1",
+        [challengeId]
+      );
+      res.status(401).json({ ok: false, error: "Fel kod. Kontrollera e-posten och försök igen." });
+      return;
+    }
+    await pool.query("DELETE FROM admin_login_challenges WHERE id = $1", [challengeId]);
+    await rememberTrustedDevice(challenge.user_id, normalizedDeviceToken, req.get("user-agent") || "");
+    res.json({
+      ok: true,
+      token: issueAdminJwt({ id: challenge.user_id, username: challenge.username })
+    });
+  } catch (error) {
+    console.error("POST /admin/login/verify-device error:", error);
+    res.status(500).json({ ok: false, error: "Kunde inte verifiera koden." });
+  }
+});
+
+app.post("/admin/login/resend-device-code", loginLimiter, async (req, res) => {
+  const challengeId = String(req.body?.challengeId || "").trim();
+  const normalizedDeviceToken = normalizeDeviceToken(req.body?.deviceToken);
+  if (!challengeId || !normalizedDeviceToken) {
+    res.status(400).json({ ok: false, error: "Logga in igen för en ny kod." });
+    return;
+  }
+  try {
+    const result = await pool.query(
+      `
+        SELECT c.user_id, c.device_token_hash, u.username
+        FROM admin_login_challenges c
+        JOIN admin_users u ON u.id = c.user_id
+        WHERE c.id = $1 AND c.expires_at > NOW()
+      `,
+      [challengeId]
+    );
+    if (result.rowCount === 0) {
+      res.status(400).json({ ok: false, error: "Koden har gått ut. Logga in igen för en ny kod." });
+      return;
+    }
+    const row = result.rows[0];
+    if (row.device_token_hash !== hashOpaqueToken(normalizedDeviceToken)) {
+      res.status(400).json({ ok: false, error: "Den här enheten matchar inte inloggningen. Börja om." });
+      return;
+    }
+    const challenge = await createDeviceLoginChallenge(
+      { id: row.user_id, username: row.username },
+      normalizedDeviceToken,
+      req.get("user-agent") || ""
+    );
+    if (challenge.skipped) {
+      res.status(500).json({ ok: false, error: "Kunde inte skicka en ny kod." });
+      return;
+    }
+    res.json({
+      ok: true,
+      challengeId: challenge.challengeId,
+      emailHint: challenge.emailHint
+    });
+  } catch (error) {
+    console.error("POST /admin/login/resend-device-code error:", error);
+    res.status(500).json({ ok: false, error: "Kunde inte skicka en ny kod." });
   }
 });
 
@@ -4420,6 +4683,11 @@ app.put("/admin/profile/password", requireAdmin, async (req, res) => {
     res.status(400).json({ ok: false, error: "Missing passwords" });
     return;
   }
+  const passwordError = getPasswordStrengthError(newPassword);
+  if (passwordError) {
+    res.status(400).json({ ok: false, error: passwordError });
+    return;
+  }
   try {
     const result = await pool.query(
       "SELECT password_hash FROM admin_users WHERE id = $1",
@@ -4439,6 +4707,7 @@ app.put("/admin/profile/password", requireAdmin, async (req, res) => {
       nextHash,
       req.userId
     ]);
+    await clearTrustedDevicesForUser(req.userId);
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to update password" });
@@ -6047,8 +6316,9 @@ app.patch("/admin/profiles/:profileId/password", requireAdmin, requireSuperAdmin
   if (!newPassword) {
     return res.status(400).json({ ok: false, error: "Nytt lösenord krävs." });
   }
-  if (newPassword.length < 8) {
-    return res.status(400).json({ ok: false, error: "Lösenordet behöver vara minst 8 tecken långt." });
+  const passwordError = getPasswordStrengthError(newPassword);
+  if (passwordError) {
+    return res.status(400).json({ ok: false, error: passwordError });
   }
   try {
     const profileRow = await pool.query(
@@ -6071,6 +6341,7 @@ app.patch("/admin/profiles/:profileId/password", requireAdmin, requireSuperAdmin
        WHERE id = $2`,
       [passwordHash, targetUserId]
     );
+    await clearTrustedDevicesForUser(targetUserId);
     res.json({ ok: true, message: "Lösenordet är uppdaterat." });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Kunde inte uppdatera lösenordet." });
@@ -10409,6 +10680,33 @@ const ensureBookingsTable = async () => {
       ADD COLUMN IF NOT EXISTS verification_token_expires_at TIMESTAMPTZ,
       ADD COLUMN IF NOT EXISTS reset_password_token TEXT,
       ADD COLUMN IF NOT EXISTS reset_password_expires_at TIMESTAMPTZ
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS admin_trusted_devices (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+      token_hash TEXT NOT NULL,
+      user_agent TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_used_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      expires_at TIMESTAMPTZ NOT NULL
+    )
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS admin_trusted_devices_user_token
+      ON admin_trusted_devices (user_id, token_hash)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS admin_login_challenges (
+      id TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+      code_hash TEXT NOT NULL,
+      device_token_hash TEXT NOT NULL,
+      user_agent TEXT NOT NULL DEFAULT '',
+      attempts INTEGER NOT NULL DEFAULT 0,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
   `);
   await pool.query(
     "UPDATE admin_users SET email_verified = TRUE WHERE verification_token IS NULL"

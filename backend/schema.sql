@@ -47,6 +47,30 @@ ALTER TABLE admin_users
   ADD COLUMN IF NOT EXISTS reset_password_token TEXT,
   ADD COLUMN IF NOT EXISTS reset_password_expires_at TIMESTAMPTZ;
 
+CREATE TABLE IF NOT EXISTS admin_trusted_devices (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL,
+  user_agent TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_used_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS admin_trusted_devices_user_token
+  ON admin_trusted_devices (user_id, token_hash);
+
+CREATE TABLE IF NOT EXISTS admin_login_challenges (
+  id TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+  code_hash TEXT NOT NULL,
+  device_token_hash TEXT NOT NULL,
+  user_agent TEXT NOT NULL DEFAULT '',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Befintliga användare (utan verifieringstoken) räknas som verifierade
 UPDATE admin_users SET email_verified = TRUE WHERE verification_token IS NULL;
 

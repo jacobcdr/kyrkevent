@@ -139,6 +139,53 @@ function readVideoFileDimensions(file) {
   });
 }
 
+function getOrCreateAdminDeviceToken() {
+  const key = "adminDeviceToken";
+  try {
+    const existing = String(localStorage.getItem(key) || "").trim().toLowerCase();
+    if (/^[a-f0-9]{64}$/.test(existing)) {
+      return existing;
+    }
+    const bytes = new Uint8Array(32);
+    crypto.getRandomValues(bytes);
+    const token = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    localStorage.setItem(key, token);
+    return token;
+  } catch {
+    return "";
+  }
+}
+
+function persistAdminDeviceToken(token) {
+  const normalized = String(token || "").trim().toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(normalized)) {
+    return;
+  }
+  try {
+    localStorage.setItem("adminDeviceToken", normalized);
+  } catch {
+    // ignore storage errors
+  }
+}
+
+const PASSWORD_STRENGTH_HINT =
+  "Minst 8 tecken, minst en siffra samt både stora och små bokstäver.";
+const PASSWORD_STRENGTH_ERROR =
+  "Lösenordet måste vara minst 8 tecken och innehålla minst en siffra samt både stora och små bokstäver.";
+
+function getPasswordStrengthError(password) {
+  const value = String(password || "");
+  if (
+    value.length < 8 ||
+    !/\d/.test(value) ||
+    !/\p{Ll}/u.test(value) ||
+    !/\p{Lu}/u.test(value)
+  ) {
+    return PASSWORD_STRENGTH_ERROR;
+  }
+  return "";
+}
+
 function formatStorageBytes(bytes) {
   if (!Number.isFinite(bytes) || bytes < 0) return "—";
   if (bytes < 1024) return `${bytes} B`;
@@ -2688,6 +2735,9 @@ const AdminPage = () => {
   const [forgotEmail, setForgotEmail] = useState("");
   const [forgotMessage, setForgotMessage] = useState("");
   const [forgotLoading, setForgotLoading] = useState(false);
+  const [deviceChallenge, setDeviceChallenge] = useState(null);
+  const [deviceCode, setDeviceCode] = useState("");
+  const [deviceCodeLoading, setDeviceCodeLoading] = useState(false);
   const [events, setEvents] = useState([]);
   const [selectedEventId, setSelectedEventId] = useState("");
   const [eventForm, setEventForm] = useState({
@@ -3951,8 +4001,9 @@ const AdminPage = () => {
       setAdminOrgPasswordMessage("Fyll i nytt lösenord och bekräftelse.");
       return;
     }
-    if (newPassword.length < 8) {
-      setAdminOrgPasswordMessage("Lösenordet behöver vara minst 8 tecken.");
+    const passwordError = getPasswordStrengthError(newPassword);
+    if (passwordError) {
+      setAdminOrgPasswordMessage(passwordError);
       return;
     }
     if (newPassword !== confirmPassword) {
@@ -4321,32 +4372,121 @@ const AdminPage = () => {
     };
   }, []);
 
-  const performLogin = async (usernameValue, passwordValue) => {
-    const response = await fetch(`${API_BASE}/admin/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: usernameValue, password: passwordValue })
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(data.error || "Fel användarnamn eller lösenord.");
+  const finishAdminLogin = (data) => {
+    if (data?.deviceToken) {
+      persistAdminDeviceToken(data.deviceToken);
     }
-    if (!data.token) {
+    if (!data?.token) {
       throw new Error("Missing token");
     }
     setToken(data.token);
     localStorage.setItem("adminToken", data.token);
     setUsername("");
     setPassword("");
+    setDeviceChallenge(null);
+    setDeviceCode("");
+    setAuthView("login");
+  };
+
+  const performLogin = async (usernameValue, passwordValue) => {
+    const deviceToken = getOrCreateAdminDeviceToken();
+    const response = await fetch(`${API_BASE}/admin/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: usernameValue,
+        password: passwordValue,
+        deviceToken
+      })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || "Fel användarnamn eller lösenord.");
+    }
+    if (data.needsDeviceVerification) {
+      if (data.deviceToken) {
+        persistAdminDeviceToken(data.deviceToken);
+      }
+      setDeviceChallenge({
+        id: data.challengeId,
+        emailHint: data.emailHint || ""
+      });
+      setDeviceCode("");
+      setAuthView("device-code");
+      return;
+    }
+    finishAdminLogin(data);
   };
 
   const handleLogin = (event) => {
     event.preventDefault();
     setError("");
+    setForgotMessage("");
     setLoading(true);
     performLogin(username.trim(), password)
       .catch((err) => setError(err?.message || "Fel användarnamn eller lösenord."))
       .finally(() => setLoading(false));
+  };
+
+  const handleDeviceCodeSubmit = (event) => {
+    event.preventDefault();
+    if (!deviceChallenge?.id) {
+      setError("Logga in igen för en ny kod.");
+      return;
+    }
+    setError("");
+    setDeviceCodeLoading(true);
+    const verifyCode = async () => {
+      const response = await fetch(`${API_BASE}/admin/login/verify-device`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          challengeId: deviceChallenge.id,
+          code: deviceCode.trim(),
+          deviceToken: getOrCreateAdminDeviceToken()
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || "Fel kod.");
+      }
+      finishAdminLogin(data);
+    };
+    verifyCode()
+      .catch((err) => setError(err?.message || "Fel kod."))
+      .finally(() => setDeviceCodeLoading(false));
+  };
+
+  const handleResendDeviceCode = () => {
+    if (!deviceChallenge?.id) {
+      setError("Logga in igen för en ny kod.");
+      return;
+    }
+    setError("");
+    setDeviceCodeLoading(true);
+    const resendCode = async () => {
+      const response = await fetch(`${API_BASE}/admin/login/resend-device-code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          challengeId: deviceChallenge.id,
+          deviceToken: getOrCreateAdminDeviceToken()
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || "Kunde inte skicka en ny kod.");
+      }
+      setDeviceChallenge({
+        id: data.challengeId,
+        emailHint: data.emailHint || deviceChallenge.emailHint || ""
+      });
+      setDeviceCode("");
+      setForgotMessage("En ny kod är skickad.");
+    };
+    resendCode()
+      .catch((err) => setError(err?.message || "Kunde inte skicka en ny kod."))
+      .finally(() => setDeviceCodeLoading(false));
   };
 
   const handleForgotPasswordRequest = (event) => {
@@ -4410,6 +4550,11 @@ const AdminPage = () => {
     }
     if (userForm.password !== userForm.confirm) {
       setError("Lösenorden matchar inte.");
+      return;
+    }
+    const passwordError = getPasswordStrengthError(userForm.password);
+    if (passwordError) {
+      setError(passwordError);
       return;
     }
     setError("");
@@ -4825,6 +4970,11 @@ const AdminPage = () => {
       setError("Nya lösenorden matchar inte.");
       return;
     }
+    const passwordError = getPasswordStrengthError(passwordForm.newPassword);
+    if (passwordError) {
+      setError(passwordError);
+      return;
+    }
     setError("");
     setPasswordLoading(true);
     const updatePassword = async () => {
@@ -4846,12 +4996,13 @@ const AdminPage = () => {
         return;
       }
       if (!response.ok) {
-        throw new Error("Password update failed");
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || "Kunde inte uppdatera lösenordet.");
       }
       setPasswordForm({ currentPassword: "", newPassword: "", confirmPassword: "" });
     };
     updatePassword()
-      .catch(() => setError("Kunde inte uppdatera lösenordet."))
+      .catch((err) => setError(err?.message || "Kunde inte uppdatera lösenordet."))
       .finally(() => setPasswordLoading(false));
   };
 
@@ -6940,6 +7091,7 @@ const AdminPage = () => {
   if (!token) {
     const showSignup = authView === "signup";
     const showForgot = authView === "forgot";
+    const showDeviceCode = authView === "device-code";
     return (
       <div className="admin-auth">
         <div className="admin-auth-card">
@@ -6947,7 +7099,13 @@ const AdminPage = () => {
             ← Tillbaka till startsidan
           </a>
           <h2>
-            {showSignup ? "Skapa användare" : showForgot ? "Glömt lösenord" : "Logga in"}
+            {showSignup
+              ? "Skapa användare"
+              : showForgot
+                ? "Glömt lösenord"
+                : showDeviceCode
+                  ? "Bekräfta enheten"
+                  : "Logga in"}
           </h2>
           {verificationEmailSent ? (
             <p className="admin-verification-sent">
@@ -6983,8 +7141,10 @@ const AdminPage = () => {
                   type="password"
                   value={userForm.password}
                   onChange={handleUserFormChange}
+                  autoComplete="new-password"
                   required
                 />
+                <span className="field-hint">{PASSWORD_STRENGTH_HINT}</span>
               </label>
               <label className="field">
                 <span className="field-label">Bekräfta lösenord</span>
@@ -6999,6 +7159,41 @@ const AdminPage = () => {
               <div className="admin-actions">
                 <button className="button" type="submit" disabled={userLoading}>
                   Skapa användare
+                </button>
+              </div>
+            </form>
+          ) : showDeviceCode ? (
+            <form className="admin-form" onSubmit={handleDeviceCodeSubmit}>
+              <p className="muted">
+                Den här enheten är ny. Vi har skickat en kod till{" "}
+                <strong>{deviceChallenge?.emailHint || "din e-post"}</strong>.
+              </p>
+              <label className="field">
+                <span className="field-label">Kod från e-post</span>
+                <input
+                  name="deviceCode"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  pattern="[0-9]{6}"
+                  maxLength={6}
+                  className="admin-device-code-input"
+                  value={deviceCode}
+                  onChange={(event) => setDeviceCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                  required
+                />
+              </label>
+              <div className="admin-actions">
+                <button className="button" type="submit" disabled={deviceCodeLoading || deviceCode.length !== 6}>
+                  Fortsätt
+                </button>
+                <button
+                  type="button"
+                  className="button button-outline"
+                  disabled={deviceCodeLoading}
+                  onClick={handleResendDeviceCode}
+                >
+                  Skicka ny kod
                 </button>
               </div>
             </form>
@@ -7057,12 +7252,16 @@ const AdminPage = () => {
           {forgotMessage ? (
             <p className="admin-verification-sent">{forgotMessage}</p>
           ) : null}
-          {showForgot ? (
+          {showForgot || showDeviceCode ? (
             <button
               type="button"
               className="admin-auth-link"
               onClick={() => {
                 setAuthView("login");
+                setDeviceChallenge(null);
+                setDeviceCode("");
+                setForgotMessage("");
+                setError("");
               }}
             >
               Tillbaka till inloggning
@@ -7593,6 +7792,7 @@ const AdminPage = () => {
                                   minLength={8}
                                   required
                                 />
+                                <span className="field-hint">{PASSWORD_STRENGTH_HINT}</span>
                               </label>
                               <label className="field">
                                 <span className="field-label">Bekräfta nytt lösenord</span>
@@ -10298,7 +10498,9 @@ const AdminPage = () => {
                   type="password"
                   value={passwordForm.newPassword}
                   onChange={handlePasswordChange}
+                  autoComplete="new-password"
                 />
+                <span className="field-hint">{PASSWORD_STRENGTH_HINT}</span>
               </label>
               <label className="field">
                 <span className="field-label">Bekräfta nytt lösenord</span>
@@ -14244,8 +14446,9 @@ function ResetPasswordPage() {
       setStatus("form");
       return;
     }
-    if (password.length < 8) {
-      setMessage("Lösenordet behöver vara minst 8 tecken.");
+    const passwordError = getPasswordStrengthError(password);
+    if (passwordError) {
+      setMessage(passwordError);
       setStatus("form");
       return;
     }
@@ -14290,8 +14493,10 @@ function ResetPasswordPage() {
                 type="password"
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
+                autoComplete="new-password"
                 required
               />
+              <span className="field-hint">{PASSWORD_STRENGTH_HINT}</span>
             </label>
             <label className="field">
               <span className="field-label">Bekräfta nytt lösenord</span>
