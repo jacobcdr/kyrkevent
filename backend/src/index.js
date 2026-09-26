@@ -45,6 +45,14 @@ import {
   normalizeServiceFeeTiers,
   validateServiceFeeTiers
 } from "./serviceFee.js";
+import {
+  aggregateServiceFees,
+  buildPayoutClearingSie,
+  buildPayoutSie,
+  encodeSiePc8,
+  SIE_ACCOUNTS,
+  stockholmYmd
+} from "./sieExport.js";
 
 const MAX_GALLERY_IMAGES_PER_EVENT = 10;
 const DEFAULT_UPLOAD_DISK_LIMIT_BYTES = 1024 * 1024 * 1024;
@@ -66,6 +74,11 @@ const BAS_PRICE_PER_EVENT = Math.max(1, Number(process.env.BAS_PRICE_PER_EVENT |
 const PREMIUM_PRICE_DEFAULT = 1995;
 const PREMIUM_PRICE_YEAR = Math.max(1, Number(process.env.PREMIUM_PRICE_YEAR || String(PREMIUM_PRICE_DEFAULT)) || PREMIUM_PRICE_DEFAULT);
 const SERVICE_FEE_VAT_RATE_PERCENT = 25;
+const SIE_BANK_ACCOUNT = String(process.env.SIE_BANK_ACCOUNT || SIE_ACCOUNTS.bank).replace(/\D/g, "") || SIE_ACCOUNTS.bank;
+const SIE_VOUCHER_SERIES = String(process.env.SIE_VOUCHER_SERIES || "A").replace(/[^A-Za-z0-9]/g, "") || "A";
+const SIE_FISCAL_YEAR_START = String(process.env.SIE_FISCAL_YEAR_START || "11-01").match(/^(\d{1,2})-(\d{1,2})$/);
+const SIE_FISCAL_YEAR_START_MONTH = SIE_FISCAL_YEAR_START ? Number(SIE_FISCAL_YEAR_START[1]) : 11;
+const SIE_FISCAL_YEAR_START_DAY = SIE_FISCAL_YEAR_START ? Number(SIE_FISCAL_YEAR_START[2]) : 1;
 const PLATFORM_SETTINGS_SERVICE_FEE_KEY = "service_fee_tiers";
 let cachedServiceFeeTiers = DEFAULT_SERVICE_FEE_TIERS.map((tier) => ({ ...tier }));
 
@@ -7386,6 +7399,100 @@ app.get("/admin/payout-disbursements/:id/receipt.pdf", requireAdmin, async (req,
     doc.end();
   } catch (error) {
     res.status(500).json({ ok: false, error: "Kunde inte skapa delutbetalningskvitto." });
+  }
+});
+
+async function sumServiceFeesForPayoutEvents(eventIds) {
+  const ids = [
+    ...new Set((eventIds || []).map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0))
+  ];
+  if (ids.length === 0) {
+    return aggregateServiceFees([], SERVICE_FEE_VAT_RATE_PERCENT);
+  }
+  const result = await pool.query(
+    `
+      SELECT DISTINCT po.payment_id, po.payload
+      FROM payment_orders po
+      WHERE po.status = 'paid'
+        AND COALESCE(po.booking_id, 0) <> -1
+        AND EXISTS (
+          SELECT 1
+          FROM bookings b
+          WHERE b.event_id = ANY($1::int[])
+            AND b.payment_status IN ('paid', 'refunded')
+            AND (
+              b.id = po.booking_id
+              OR b.id = ANY(COALESCE(po.booking_ids, ARRAY[]::integer[]))
+            )
+        )
+    `,
+    [ids]
+  );
+  const fees = (result.rows || []).map((row) => {
+    const payload = row.payload && typeof row.payload === "object" ? row.payload : {};
+    return Number(payload.serviceFee);
+  });
+  return aggregateServiceFees(fees, SERVICE_FEE_VAT_RATE_PERCENT);
+}
+
+app.get("/admin/payout-requests/:id/fortnox.sie", requireAdmin, requireSuperAdmin, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id) || id < 1) {
+      return res.status(400).json({ ok: false, error: "Ogiltigt id" });
+    }
+    const result = await pool.query(
+      `
+        SELECT pr.id, pr.organization, pr.event_ids, pr.amount, pr.payout_fee, pr.status,
+               p.organization AS profile_organization
+        FROM payout_requests pr
+        LEFT JOIN admin_user_profiles p ON p.user_id = pr.user_id
+        WHERE pr.id = $1 AND pr.status = ANY($2::text[])
+      `,
+      [id, ["pågår", "betald"]]
+    );
+    const row = result.rows[0];
+    if (!row) {
+      return res.status(404).json({ ok: false, error: "Utbetalningen hittades inte." });
+    }
+    const step = String(req.query.step || "1");
+    if (step !== "1" && step !== "2") {
+      return res.status(400).json({ ok: false, error: "Ogiltig SIE-fil." });
+    }
+    const eventIds = Array.isArray(row.event_ids) ? row.event_ids : [];
+    const organizerCents = Math.round((Number(row.amount) || 0) * 100);
+    const payoutFeeCents = Math.round((Number(row.payout_fee) || 0) * 100);
+    const today = stockholmYmd();
+    const orgName = String(row.profile_organization || row.organization || "").trim();
+    const voucherText = orgName ? `Utbet event ${orgName}` : "Utbet event";
+    const header = {
+      companyName: RECEIPT_SELLER,
+      orgNumber: RECEIPT_SELLER_ORG_NUMBER,
+      voucherDate: today.ymd,
+      voucherText,
+      series: SIE_VOUCHER_SERIES,
+      fiscalYearStartMonth: SIE_FISCAL_YEAR_START_MONTH,
+      fiscalYearStartDay: SIE_FISCAL_YEAR_START_DAY,
+      bankAccount: SIE_BANK_ACCOUNT,
+      organizerAmountCents: organizerCents
+    };
+    const sieText =
+      step === "2"
+        ? buildPayoutClearingSie({ ...header, payoutFeeCents })
+        : buildPayoutSie({
+            ...header,
+            payoutFeeCents,
+            ...(await sumServiceFeesForPayoutEvents(eventIds))
+          });
+    const filename = `fortnox-utbetalning-${step}-${id}.se`;
+    res.setHeader("Content-Type", "application/octet-stream");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send(encodeSiePc8(sieText));
+  } catch (error) {
+    console.error("GET payout fortnox.sie error:", error);
+    if (!res.headersSent) {
+      res.status(500).json({ ok: false, error: "Kunde inte skapa SIE-fil." });
+    }
   }
 });
 

@@ -3107,6 +3107,7 @@ const AdminPage = () => {
   const [adminPayoutRequestsLoading, setAdminPayoutRequestsLoading] = useState(false);
   const [adminPayoutRequestsPageSize, setAdminPayoutRequestsPageSize] = useState(10);
   const [adminPayoutRequestsPage, setAdminPayoutRequestsPage] = useState(1);
+  const [adminSieMessage, setAdminSieMessage] = useState("");
   const [adminSubscriptionPayments, setAdminSubscriptionPayments] = useState([]);
   const [adminSubscriptionPaymentsLoading, setAdminSubscriptionPaymentsLoading] = useState(false);
   const [adminSubscriptionPaymentsPageSize, setAdminSubscriptionPaymentsPageSize] = useState(10);
@@ -3694,6 +3695,33 @@ const AdminPage = () => {
     } finally {
       setAdminPartialCandidatesLoading(false);
     }
+  };
+
+  const downloadPayoutSie = async (payoutRequestId, step) => {
+    if (!token || payoutRequestId == null) return;
+    const response = await fetch(
+      `${API_BASE}/admin/payout-requests/${payoutRequestId}/fortnox.sie?step=${step}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (!response.ok) {
+      let message = "Kunde inte skapa SIE-fil.";
+      try {
+        const data = await response.json();
+        if (data?.error) message = data.error;
+      } catch {
+        /* svaret var ingen JSON */
+      }
+      throw new Error(message);
+    }
+    const blob = await response.blob();
+    const blobUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = blobUrl;
+    link.download = `fortnox-utbetalning-${step}-${payoutRequestId}.se`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(blobUrl);
   };
 
   const downloadPayoutReceipt = async (kind, id, filenamePrefix) => {
@@ -8482,6 +8510,10 @@ const AdminPage = () => {
               </form>
             )}
             <h3 className="admin-subsection-title admin-subsection-title-spaced">Förfrågan eventutbetalning</h3>
+            <p className="muted" style={{ marginTop: 0 }}>
+              SIE 1 bokför inbetalningen. Skulden på 2890 är beloppet efter utbetalningsavgift, och avgiften inklusive moms ligger på 3041. SIE 2 kvittar bara det belopp som betalas ut till arrangören.
+            </p>
+            {adminSieMessage ? <p className="admin-error">{adminSieMessage}</p> : null}
             {adminPayoutRequestsLoading ? (
               <p className="muted">Laddar...</p>
             ) : adminPayoutRequests.length > 0 ? (
@@ -8671,35 +8703,93 @@ const AdminPage = () => {
                                   >
                                     Avbryt
                                   </button>
+                                  <button
+                                    type="button"
+                                    className="button button-outline"
+                                    onClick={async () => {
+                                      setAdminSieMessage("");
+                                      try {
+                                        await downloadPayoutSie(r.id, 1);
+                                      } catch (err) {
+                                        setAdminSieMessage(err.message || "Kunde inte ladda ner SIE 1.");
+                                      }
+                                    }}
+                                  >
+                                    SIE 1
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="button button-outline"
+                                    onClick={async () => {
+                                      setAdminSieMessage("");
+                                      try {
+                                        await downloadPayoutSie(r.id, 2);
+                                      } catch (err) {
+                                        setAdminSieMessage(err.message || "Kunde inte ladda ner SIE 2.");
+                                      }
+                                    }}
+                                  >
+                                    SIE 2
+                                  </button>
                                 </div>
                               ) : r.status === "betald" && r.id != null ? (
-                                <button
-                                  type="button"
-                                  className="button button-outline"
-                                  onClick={async () => {
-                                    if (!token) return;
-                                    try {
-                                      const response = await fetch(
-                                        `${API_BASE}/admin/payout-requests/${r.id}/receipt.pdf`,
-                                        { headers: { Authorization: `Bearer ${token}` } }
-                                      );
-                                      if (!response.ok) throw new Error("Kunde inte hämta kvitto");
-                                      const blob = await response.blob();
-                                      const url = window.URL.createObjectURL(blob);
-                                      const link = document.createElement("a");
-                                      link.href = url;
-                                      link.download = `utbetalningskvitto-${r.id}.pdf`;
-                                      document.body.appendChild(link);
-                                      link.click();
-                                      link.remove();
-                                      window.URL.revokeObjectURL(url);
-                                    } catch (err) {
-                                      setPayoutMessage(err.message || "Kunde inte ladda ner kvitto.");
-                                    }
-                                  }}
-                                >
-                                  Kvitto (PDF)
-                                </button>
+                                <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                                  <button
+                                    type="button"
+                                    className="button button-outline"
+                                    onClick={async () => {
+                                      if (!token) return;
+                                      try {
+                                        const response = await fetch(
+                                          `${API_BASE}/admin/payout-requests/${r.id}/receipt.pdf`,
+                                          { headers: { Authorization: `Bearer ${token}` } }
+                                        );
+                                        if (!response.ok) throw new Error("Kunde inte hämta kvitto");
+                                        const blob = await response.blob();
+                                        const url = window.URL.createObjectURL(blob);
+                                        const link = document.createElement("a");
+                                        link.href = url;
+                                        link.download = `utbetalningskvitto-${r.id}.pdf`;
+                                        document.body.appendChild(link);
+                                        link.click();
+                                        link.remove();
+                                        window.URL.revokeObjectURL(url);
+                                      } catch (err) {
+                                        setPayoutMessage(err.message || "Kunde inte ladda ner kvitto.");
+                                      }
+                                    }}
+                                  >
+                                    Kvitto (PDF)
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="button button-outline"
+                                    onClick={async () => {
+                                      setAdminSieMessage("");
+                                      try {
+                                        await downloadPayoutSie(r.id, 1);
+                                      } catch (err) {
+                                        setAdminSieMessage(err.message || "Kunde inte ladda ner SIE 1.");
+                                      }
+                                    }}
+                                  >
+                                    SIE 1
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="button button-outline"
+                                    onClick={async () => {
+                                      setAdminSieMessage("");
+                                      try {
+                                        await downloadPayoutSie(r.id, 2);
+                                      } catch (err) {
+                                        setAdminSieMessage(err.message || "Kunde inte ladda ner SIE 2.");
+                                      }
+                                    }}
+                                  >
+                                    SIE 2
+                                  </button>
+                                </div>
                               ) : (
                                 "–"
                               )}
