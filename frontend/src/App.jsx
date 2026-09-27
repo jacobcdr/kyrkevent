@@ -13459,7 +13459,7 @@ const AdminPage = () => {
                 </button>
               </div>
               <div className="section">
-                <h2>Eventbild</h2>
+                <h2>Bild och video</h2>
                 <fieldset className="gallery-mode-picker">
                   <legend className="field-label">Bakgrund</legend>
                   <div className="gallery-mode-options">
@@ -13486,6 +13486,14 @@ const AdminPage = () => {
                   </span>
                   {heroBackgroundKind === "video" ? (
                     <div className="field-hint hero-image-upload-hint">
+                      <p>
+                        Videon visas på eventsidan. När länken delas används den uppladdade bilden i
+                        förhandsvisningen, till exempel i{" "}
+                        <strong>
+                          Messenger och iMessage. Ladda upp bilden under valet Bild. Utan uppladdad bild används
+                          Kyrkevents logotyp.
+                        </strong>
+                      </p>
                       <p>
                         <strong>Rekommenderat:</strong> kort, tyst, liggande video i ungefär <strong>2:1-format</strong>{" "}
                         (MP4 eller WebM), max <strong>40 MB</strong>. Videon spelas automatiskt i loop bakom texten.
