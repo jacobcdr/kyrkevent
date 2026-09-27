@@ -2041,6 +2041,104 @@ app.get("/events/:slug", async (req, res) => {
   }
 });
 
+const SHARE_PREVIEW_MONTHS = [
+  "januari",
+  "februari",
+  "mars",
+  "april",
+  "maj",
+  "juni",
+  "juli",
+  "augusti",
+  "september",
+  "oktober",
+  "november",
+  "december"
+];
+
+function formatSharePreviewDate(startRaw, endRaw) {
+  const start = toDateOnlyString(startRaw);
+  const end = toDateOnlyString(endRaw);
+  const parse = (iso) => {
+    if (!iso) return null;
+    const [year, month, day] = iso.split("-").map(Number);
+    if (!year || !month || !day) return null;
+    return { year, month, day };
+  };
+  const label = (part) => `${part.day} ${SHARE_PREVIEW_MONTHS[part.month - 1]} ${part.year}`;
+  const startPart = parse(start);
+  const endPart = parse(end);
+  if (startPart && endPart && start !== end) {
+    if (startPart.year === endPart.year && startPart.month === endPart.month) {
+      return `${startPart.day}–${endPart.day} ${SHARE_PREVIEW_MONTHS[startPart.month - 1]} ${startPart.year}`;
+    }
+    if (startPart.year === endPart.year) {
+      return `${startPart.day} ${SHARE_PREVIEW_MONTHS[startPart.month - 1]} – ${endPart.day} ${SHARE_PREVIEW_MONTHS[endPart.month - 1]} ${startPart.year}`;
+    }
+    return `${label(startPart)} – ${label(endPart)}`;
+  }
+  const single = startPart || endPart;
+  return single ? label(single) : "";
+}
+
+function formatSharePreviewDescription(row) {
+  const dateLabel = formatSharePreviewDate(row.event_start_date, row.event_end_date);
+  const place = String(row.address || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean);
+  const placeLabel = place ? place.replace(/\s+/g, " ").slice(0, 160) : "";
+  const parts = [dateLabel, placeLabel].filter(Boolean);
+  return parts.join(" · ") || "Anmäl dig och boka din plats.";
+}
+
+app.get("/events/:slug/preview", async (req, res) => {
+  const slug = String(req.params.slug || "").trim();
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+    res.status(400).json({ ok: false, error: "Invalid slug" });
+    return;
+  }
+  try {
+    const result = await pool.query(
+      `
+        SELECT e.name, e.event_start_date, e.event_end_date,
+               COALESCE(h.image_url, '') AS image_url,
+               COALESCE(p.address, '') AS address
+        FROM events e
+        LEFT JOIN LATERAL (
+          SELECT image_url FROM hero_section WHERE event_id = e.id LIMIT 1
+        ) h ON true
+        LEFT JOIN LATERAL (
+          SELECT address FROM place_settings WHERE event_id = e.id LIMIT 1
+        ) p ON true
+        WHERE e.slug = $1
+      `,
+      [slug]
+    );
+    if (result.rowCount === 0) {
+      res.status(404).json({ ok: false, error: "Event not found" });
+      return;
+    }
+    const row = result.rows[0];
+    const name = String(row.name || "").replace(/\s+/g, " ").trim();
+    if (!name) {
+      res.status(404).json({ ok: false, error: "Event not found" });
+      return;
+    }
+    res.set("Cache-Control", "public, max-age=60");
+    res.json({
+      ok: true,
+      preview: {
+        name: name.slice(0, 150),
+        description: formatSharePreviewDescription(row).slice(0, 200),
+        imageUrl: String(row.image_url || "").trim()
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Failed to load preview" });
+  }
+});
+
 app.post("/events/:slug/view", async (req, res) => {
   const { slug } = req.params;
   const referrerBody = typeof req.body?.referrer === "string" ? req.body.referrer : "";

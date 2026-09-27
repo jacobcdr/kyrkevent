@@ -3,12 +3,38 @@ import react from "@vitejs/plugin-react";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createSharePreviewMiddleware } from "./sharePreview.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const certPath = path.resolve(__dirname, ".cert", "localhost.pfx");
 
+function eventSharePreviewPlugin() {
+  const apiBase = () =>
+    String(process.env.VITE_API_URL || process.env.API_URL || "http://localhost:3001").replace(
+      /\/+$/,
+      ""
+    );
+  return {
+    name: "event-share-preview",
+    configureServer(server) {
+      server.middlewares.use(createSharePreviewMiddleware(apiBase));
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(createSharePreviewMiddleware(apiBase));
+    },
+    closeBundle() {
+      const outDir = path.resolve(__dirname, "dist");
+      if (!fs.existsSync(outDir)) return;
+      const url = String(process.env.VITE_API_URL || "")
+        .trim()
+        .replace(/\/+$/, "");
+      fs.writeFileSync(path.join(outDir, "preview-api-base.txt"), url, "utf8");
+    }
+  };
+}
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), eventSharePreviewPlugin()],
   server: {
     https: {
       pfx: fs.readFileSync(certPath),
