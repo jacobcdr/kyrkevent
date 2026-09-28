@@ -1169,6 +1169,38 @@ const ADMIN_EVENT_LINKS_SORT_OPTIONS = [
   { value: "updatedAt:asc", label: "Senast uppdaterad (äldst först)" }
 ];
 
+const EVENT_LIST_LOOKBACK_DAYS = 21;
+
+function formatLocalDateInput(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function defaultEventListFromDate(now = new Date()) {
+  const date = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  date.setDate(date.getDate() - EVENT_LIST_LOOKBACK_DAYS);
+  return formatLocalDateInput(date);
+}
+
+function eventListFromOneYearAgo(now = new Date()) {
+  const date = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  date.setFullYear(date.getFullYear() - 1);
+  return formatLocalDateInput(date);
+}
+
+function eventMatchesDateFilter(item, filterFrom, filterTo) {
+  const start = String(item?.event_start_date || "").slice(0, 10);
+  const end = String(item?.event_end_date || "").slice(0, 10);
+  const eventStart = start || end;
+  const eventEnd = end || start;
+  if (!eventStart && !eventEnd) return true;
+  if (filterFrom && eventEnd < filterFrom) return false;
+  if (filterTo && eventStart > filterTo) return false;
+  return true;
+}
+
 const BOOKING_COLUMN_OPTIONS = [
   { key: "name", label: "Namn" },
   { key: "email", label: "Email" },
@@ -1179,6 +1211,7 @@ const BOOKING_COLUMN_OPTIONS = [
   { key: "terms", label: "Villkor" },
   { key: "payment_status", label: "Betalning" },
   { key: "pris", label: "Pris" },
+  { key: "discount_code", label: "Rabattkod" },
   { key: "order_number", label: "Ordernummer" },
   { key: "checked_in", label: "Incheckad" },
   { key: "created_at", label: "Skapad" }
@@ -1187,7 +1220,7 @@ const BOOKING_COLUMN_OPTIONS = [
 const DEFAULT_BOOKING_COLUMN_VISIBILITY = Object.fromEntries(
   BOOKING_COLUMN_OPTIONS.map((col) => [
     col.key,
-    ["name", "ticket", "order_number", "checked_in", "created_at"].includes(col.key)
+    ["name", "ticket", "discount_code", "order_number", "checked_in", "created_at"].includes(col.key)
   ])
 );
 
@@ -2751,6 +2784,8 @@ const AdminPage = () => {
   const [eventVatRateInput, setEventVatRateInput] = useState(25);
   const [eventVatRateSaving, setEventVatRateSaving] = useState(false);
   const [eventLoading, setEventLoading] = useState(false);
+  const [eventListFrom, setEventListFrom] = useState(defaultEventListFromDate);
+  const [eventListTo, setEventListTo] = useState("");
   const [bookings, setBookings] = useState([]);
   const [programItems, setProgramItems] = useState([]);
   const [programForm, setProgramForm] = useState({ time: "", description: "" });
@@ -6721,6 +6756,7 @@ const AdminPage = () => {
       booking.organization,
       booking.ticket,
       booking.order_number,
+      booking.discount_code,
       booking.pris,
       booking.payment_status,
       booking.created_at ? new Date(booking.created_at).toLocaleString("sv-SE") : "",
@@ -10941,114 +10977,79 @@ const AdminPage = () => {
                   </div>
                 </div>
                 <h2>Dina event</h2>
-                <form className="admin-form" onSubmit={handleEventSubmit}>
-                  <label className="field">
-                    <span className="field-label">Nytt event (namn)</span>
-                    <input
-                      name="name"
-                      type="text"
-                      value={eventForm.name}
-                      onChange={handleEventChange}
-                      placeholder="Namn på event"
-                      required
-                    />
-                  </label>
-                  <div className="field">
-                    <span className="field-label">Datum</span>
-                    <p className="muted" style={{ marginTop: "0.25rem", marginBottom: "0.5rem" }}>
-                      Ange datum för eventet
-                    </p>
-                    <div className="field-row">
-                      <label className="checkbox-field">
+                <form className="admin-form admin-new-event-form" onSubmit={handleEventSubmit}>
+                  <div className="admin-new-event-row">
+                    <label className="field admin-new-event-name">
+                      <span className="field-label">Nytt event</span>
+                      <input
+                        name="name"
+                        type="text"
+                        value={eventForm.name}
+                        onChange={handleEventChange}
+                        placeholder="Namn på event"
+                        required
+                      />
+                    </label>
+                    <div className="admin-new-event-kind">
+                      <label className="admin-new-event-radio">
                         <input
                           type="radio"
                           name="dateType"
                           checked={eventForm.dateType === "single"}
                           onChange={() => setEventFormDateType("single")}
                         />
-                        <span className="field-label">En dag</span>
+                        <span>En dag</span>
                       </label>
-                      <label className="checkbox-field">
+                      <label className="admin-new-event-radio">
                         <input
                           type="radio"
                           name="dateType"
                           checked={eventForm.dateType === "range"}
                           onChange={() => setEventFormDateType("range")}
                         />
-                        <span className="field-label">Start–slut</span>
+                        <span>Start–slut</span>
                       </label>
                     </div>
                     {eventForm.dateType === "single" ? (
-                      <label className="field" style={{ marginTop: "0.5rem" }}>
-                        <span className="field-label">Datum (YYYY-MM-DD)</span>
+                      <label className="field admin-new-event-date">
+                        <span className="field-label">Datum</span>
                         <input
                           name="singleDate"
                           type="date"
                           value={eventForm.singleDate}
                           onChange={handleEventChange}
-                          required={eventForm.dateType === "single"}
+                          required
                         />
-                        {eventForm.singleDate && (() => {
-                          const m = eventForm.singleDate.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
-                          if (!m) return null;
-                          const [, y, mo, d] = m.map(Number);
-                          const date = new Date(y, mo - 1, d);
-                          if (Number.isNaN(date.getTime())) return null;
-                          return (
-                            <p className="muted" style={{ marginTop: "0.35rem", marginBottom: 0 }}>
-                              Valt datum: {date.toLocaleDateString("sv-SE", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
-                            </p>
-                          );
-                        })()}
                       </label>
                     ) : (
-                      <div className="field-row" style={{ marginTop: "0.5rem" }}>
-                        <label className="field">
-                          <span className="field-label">Startdatum (YYYY-MM-DD)</span>
+                      <>
+                        <label className="field admin-new-event-date">
+                          <span className="field-label">Start</span>
                           <input
                             name="startDate"
                             type="date"
                             value={eventForm.startDate}
                             onChange={handleEventChange}
-                            required={eventForm.dateType === "range"}
+                            required
                           />
-                          {eventForm.startDate && (() => {
-                            const m = eventForm.startDate.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
-                            if (!m) return null;
-                            const [, y, mo, d] = m.map(Number);
-                            const date = new Date(y, mo - 1, d);
-                            if (Number.isNaN(date.getTime())) return null;
-                            return (
-                              <p className="muted" style={{ marginTop: "0.35rem", marginBottom: 0 }}>
-                                Start: {date.toLocaleDateString("sv-SE", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
-                              </p>
-                            );
-                          })()}
                         </label>
-                        <label className="field">
-                          <span className="field-label">Slutdatum (YYYY-MM-DD)</span>
+                        <label className="field admin-new-event-date">
+                          <span className="field-label">Slut</span>
                           <input
                             name="endDate"
                             type="date"
                             value={eventForm.endDate}
                             onChange={handleEventChange}
-                            required={eventForm.dateType === "range"}
+                            required
                           />
-                          {eventForm.endDate && (() => {
-                            const m = eventForm.endDate.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
-                            if (!m) return null;
-                            const [, y, mo, d] = m.map(Number);
-                            const date = new Date(y, mo - 1, d);
-                            if (Number.isNaN(date.getTime())) return null;
-                            return (
-                              <p className="muted" style={{ marginTop: "0.35rem", marginBottom: 0 }}>
-                                Slut: {date.toLocaleDateString("sv-SE", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
-                              </p>
-                            );
-                          })()}
                         </label>
-                      </div>
+                      </>
                     )}
+                    <div className="admin-actions">
+                      <button className="button" type="submit" disabled={eventLoading}>
+                        Skapa event
+                      </button>
+                    </div>
                   </div>
                   {profileShowsVatRate ? (
                     <EventVatRateField
@@ -11057,15 +11058,61 @@ const AdminPage = () => {
                       onOpenHelp={() => setVatRateHelpOpen(true)}
                     />
                   ) : null}
-                  <div className="admin-actions">
-                    <button className="button" type="submit" disabled={eventLoading}>
-                      Skapa event
-                    </button>
-                  </div>
                 </form>
                 {events.length > 0 ? (
+                  <>
+                  <div className="admin-event-list-filter">
+                    <div className="field-row">
+                      <label className="field">
+                        <span className="field-label">Visa från</span>
+                        <input
+                          type="date"
+                          value={eventListFrom}
+                          onChange={(event) => setEventListFrom(event.target.value)}
+                        />
+                      </label>
+                      <label className="field">
+                        <span className="field-label">Visa till</span>
+                        <input
+                          type="date"
+                          value={eventListTo}
+                          onChange={(event) => setEventListTo(event.target.value)}
+                        />
+                      </label>
+                      <div className="admin-actions">
+                        <button
+                          className="button button-outline"
+                          type="button"
+                          onClick={() => {
+                            setEventListFrom(eventListFromOneYearAgo());
+                            setEventListTo("");
+                          }}
+                        >
+                          Ett år tillbaka
+                        </button>
+                        <button
+                          className="button button-outline"
+                          type="button"
+                          onClick={() => {
+                            setEventListFrom(defaultEventListFromDate());
+                            setEventListTo("");
+                          }}
+                        >
+                          Rensa filter
+                        </button>
+                      </div>
+                    </div>
+                    <p className="muted">
+                      {!eventListTo && eventListFrom === defaultEventListFromDate()
+                        ? "Visar event från tre veckor tillbaka och alla kommande."
+                        : !eventListTo && eventListFrom === eventListFromOneYearAgo()
+                          ? "Visar event från ett år tillbaka och alla kommande."
+                          : "Visar event i det valda intervallet."}
+                    </p>
+                  </div>
+                  {events.some((item) => eventMatchesDateFilter(item, eventListFrom, eventListTo)) ? (
                   <div className="partner-grid admin-event-grid">
-                    {events.map((item) => {
+                    {events.filter((item) => eventMatchesDateFilter(item, eventListFrom, eventListTo)).map((item) => {
                       const isActive = String(selectedEventId) === String(item.id);
                       const formatEventDateShort = (dateStr) => {
                         if (!dateStr) return null;
@@ -11115,6 +11162,10 @@ const AdminPage = () => {
                       );
                     })}
                   </div>
+                  ) : (
+                    <p className="muted">Inga event i det valda intervallet.</p>
+                  )}
+                  </>
                 ) : (
                   <p className="muted">Inga event skapade ännu.</p>
                 )}
@@ -11172,7 +11223,7 @@ const AdminPage = () => {
                     type="search"
                     value={bookingsSearchQuery}
                     onChange={(event) => setBookingsSearchQuery(event.target.value)}
-                    placeholder="Namn, e-post, organisation, biljett, ordernr…"
+                    placeholder="Namn, e-post, organisation, biljett, ordernr, rabattkod…"
                     aria-label="Sök i bokningslistan"
                   />
                 </label>
@@ -11331,6 +11382,20 @@ const AdminPage = () => {
                           </button>
                         </th>
                       ) : null}
+                      {bookingColumnVisibility.discount_code ? (
+                        <th>
+                          <button
+                            type="button"
+                            className={`sort-button ${sort.key === "discount_code" ? "is-active" : ""}`}
+                            onClick={() => handleSort("discount_code")}
+                          >
+                            Rabattkod
+                            {sort.key === "discount_code" ? (
+                              <span className="sort-arrow">{sort.dir === "asc" ? "▲" : "▼"}</span>
+                            ) : null}
+                          </button>
+                        </th>
+                      ) : null}
                       {bookingColumnVisibility.order_number ? (
                         <th>Ordernummer</th>
                       ) : null}
@@ -11415,6 +11480,9 @@ const AdminPage = () => {
                                 </div>
                               ) : null}
                             </td>
+                          ) : null}
+                          {bookingColumnVisibility.discount_code ? (
+                            <td>{booking.discount_code || "–"}</td>
                           ) : null}
                           {bookingColumnVisibility.order_number ? (
                             <td>{booking.order_number || "–"}</td>

@@ -299,7 +299,8 @@ ALTER TABLE bookings
   ADD COLUMN IF NOT EXISTS order_number TEXT,
   ADD COLUMN IF NOT EXISTS checked_in_at TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS voided_at TIMESTAMPTZ,
-  ADD COLUMN IF NOT EXISTS voided_by_user_id INTEGER;
+  ADD COLUMN IF NOT EXISTS voided_by_user_id INTEGER,
+  ADD COLUMN IF NOT EXISTS discount_code TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS program_items (
   id SERIAL PRIMARY KEY,
@@ -349,6 +350,23 @@ CREATE TABLE IF NOT EXISTS payment_orders (
 );
 
 ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS booking_ids INTEGER[];
+
+UPDATE bookings b
+SET discount_code = UPPER(TRIM(po.payload->>'discountCode'))
+FROM payment_orders po
+WHERE po.booking_id = b.id
+  AND COALESCE(b.discount_code, '') = ''
+  AND COALESCE(TRIM(po.payload->>'discountCode'), '') <> '';
+
+UPDATE bookings b
+SET discount_code = UPPER(TRIM(item.elem->>'discountCode'))
+FROM payment_orders po
+JOIN LATERAL unnest(po.booking_ids) WITH ORDINALITY AS matched(booking_id, ord) ON true
+JOIN LATERAL jsonb_array_elements(COALESCE(po.payload->'items', '[]'::jsonb)) WITH ORDINALITY AS item(elem, ord)
+  ON item.ord = matched.ord
+WHERE b.id = matched.booking_id
+  AND COALESCE(b.discount_code, '') = ''
+  AND COALESCE(TRIM(item.elem->>'discountCode'), '') <> '';
 
 CREATE TABLE IF NOT EXISTS speakers (
   id SERIAL PRIMARY KEY,

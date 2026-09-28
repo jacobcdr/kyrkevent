@@ -2544,6 +2544,8 @@ const validateBaseFields = (payload, sections) => {
   return { ok: true };
 };
 
+const normalizeStoredDiscountCode = (code) => String(code || "").trim().toUpperCase();
+
 const getDiscountForCode = async (code, eventId) => {
   if (!code) {
     return { ok: true, discount: null };
@@ -2889,7 +2891,7 @@ app.post("/payments/start", paymentLimiter, async (req, res) => {
     // ingen serviceavgift och ingen Mollie-betalning.
     if (isFullDiscount && chargeAmount === 0) {
       const insertResult = await pool.query(
-        "INSERT INTO bookings (event_id, name, last_name, email, city, phone, organization, ticket, other_info, terms, payment_status, pris, custom_fields) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id, event_id, name, email, city, phone, organization, ticket, pris, created_at",
+        "INSERT INTO bookings (event_id, name, last_name, email, city, phone, organization, ticket, other_info, terms, payment_status, pris, custom_fields, discount_code) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id, event_id, name, email, city, phone, organization, ticket, pris, created_at",
         [
           parsed.payload.eventId,
           parsed.payload.name,
@@ -2903,7 +2905,8 @@ app.post("/payments/start", paymentLimiter, async (req, res) => {
           parsed.payload.terms,
           "paid",
           String(discountedAmount),
-          JSON.stringify(sanitizedFields)
+          JSON.stringify(sanitizedFields),
+          normalizeStoredDiscountCode(discount?.code || parsed.payload.discountCode)
         ]
       );
       const booking = insertResult.rows[0];
@@ -3287,7 +3290,7 @@ app.post("/payments/start-cart", paymentLimiter, async (req, res) => {
 
       for (const item of processedItems) {
         const insertResult = await pool.query(
-          "INSERT INTO bookings (event_id, name, last_name, email, city, phone, organization, ticket, other_info, terms, payment_status, pris, custom_fields) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id, name, email, ticket, pris, created_at",
+          "INSERT INTO bookings (event_id, name, last_name, email, city, phone, organization, ticket, other_info, terms, payment_status, pris, custom_fields, discount_code) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id, name, email, ticket, pris, created_at",
           [
             item.eventId,
             item.name,
@@ -3301,7 +3304,8 @@ app.post("/payments/start-cart", paymentLimiter, async (req, res) => {
             item.terms,
             "paid",
             String(item.discountedAmount ?? 0),
-            JSON.stringify(item.customFields || [])
+            JSON.stringify(item.customFields || []),
+            normalizeStoredDiscountCode(item.discountCode)
           ]
         );
         const booking = insertResult.rows[0];
@@ -3631,7 +3635,7 @@ app.get("/payments/verify", async (req, res) => {
             for (const item of pay.items) {
               const finalAmount = item.discountedAmount ?? item.priceAmount;
               const booking = await client.query(
-                "INSERT INTO bookings (event_id, name, email, city, phone, organization, ticket, other_info, terms, payment_status, pris, custom_fields) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id, created_at",
+                "INSERT INTO bookings (event_id, name, email, city, phone, organization, ticket, other_info, terms, payment_status, pris, custom_fields, discount_code) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id, created_at",
                 [
                   item.eventId,
                   item.name,
@@ -3644,7 +3648,8 @@ app.get("/payments/verify", async (req, res) => {
                   item.terms,
                   "paid",
                   String(finalAmount),
-                  JSON.stringify(item.customFields || [])
+                  JSON.stringify(item.customFields || []),
+                  normalizeStoredDiscountCode(item.discountCode)
                 ]
               );
               const bid = booking.rows[0].id;
@@ -3693,7 +3698,7 @@ app.get("/payments/verify", async (req, res) => {
           } else {
             const finalAmount = pay.discountedAmount ?? pay.priceAmount;
             const booking = await client.query(
-              "INSERT INTO bookings (event_id, name, last_name, email, city, phone, organization, ticket, other_info, terms, payment_status, pris, custom_fields) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id, created_at",
+              "INSERT INTO bookings (event_id, name, last_name, email, city, phone, organization, ticket, other_info, terms, payment_status, pris, custom_fields, discount_code) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id, created_at",
               [
                 pay.eventId,
                 pay.name,
@@ -3707,7 +3712,8 @@ app.get("/payments/verify", async (req, res) => {
                 pay.terms,
                 "paid",
                 String(finalAmount),
-                JSON.stringify(pay.customFields || [])
+                JSON.stringify(pay.customFields || []),
+                normalizeStoredDiscountCode(pay.discountCode)
               ]
             );
             const bid = booking.rows[0].id;
@@ -9848,7 +9854,7 @@ app.get("/admin/bookings", requireAdmin, async (req, res) => {
     }
     const result = await pool.query(
       `SELECT b.id, b.event_id, b.name, b.email, b.city, b.phone, b.organization, b.ticket, b.terms, b.payment_status, b.pris, b.custom_fields, b.created_at, b.checked_in_at,
-        b.refunded_at, b.refund_amount, b.mollie_refund_id, b.voided_at, b.voided_by_user_id,
+        b.refunded_at, b.refund_amount, b.mollie_refund_id, b.voided_at, b.voided_by_user_id, b.discount_code,
         COALESCE(b.order_number,
           (SELECT po.payload->>'orderNumber' FROM payment_orders po
            WHERE po.booking_id = b.id OR b.id = ANY(COALESCE(po.booking_ids, ARRAY[]::integer[]))
@@ -10301,7 +10307,7 @@ app.get("/admin/bookings/export", requireAdmin, async (req, res) => {
       return;
     }
     const result = await pool.query(
-      "SELECT id, name, email, city, phone, organization, ticket, terms, payment_status, pris, created_at FROM bookings WHERE event_id = $1 ORDER BY created_at DESC",
+      "SELECT id, name, email, city, phone, organization, ticket, terms, payment_status, pris, discount_code, created_at FROM bookings WHERE event_id = $1 ORDER BY created_at DESC",
       [eventId]
     );
     const header = [
@@ -10314,6 +10320,7 @@ app.get("/admin/bookings/export", requireAdmin, async (req, res) => {
       "Villkor",
       "Betalning",
       "Pris",
+      "Rabattkod",
       "Skapad"
     ];
     const rows = result.rows.map((row) =>
@@ -10327,6 +10334,7 @@ app.get("/admin/bookings/export", requireAdmin, async (req, res) => {
         row.terms ? "Ja" : "Nej",
         row.payment_status || "",
         row.pris || "",
+        row.discount_code || "",
         row.created_at ? new Date(row.created_at).toLocaleString("sv-SE") : ""
       ])
     );
@@ -10373,7 +10381,7 @@ app.get("/admin/bookings/export.xlsx", requireAdmin, async (_req, res) => {
     );
     const customFields = customFieldsResult.rows;
     const result = await pool.query(
-      "SELECT id, name, email, city, phone, organization, ticket, terms, payment_status, pris, custom_fields, created_at, voided_at FROM bookings WHERE event_id = $1 ORDER BY created_at DESC",
+      "SELECT id, name, email, city, phone, organization, ticket, terms, payment_status, pris, discount_code, custom_fields, created_at, voided_at FROM bookings WHERE event_id = $1 ORDER BY created_at DESC",
       [eventId]
     );
     const header = [
@@ -10387,6 +10395,7 @@ app.get("/admin/bookings/export.xlsx", requireAdmin, async (_req, res) => {
       "Villkor",
       "Betalning",
       "Pris",
+      "Rabattkod",
       ...customFields.map((field) => field.label),
       "Skapad"
     ];
@@ -10404,6 +10413,7 @@ app.get("/admin/bookings/export.xlsx", requireAdmin, async (_req, res) => {
         row.terms ? "Ja" : "Nej",
         row.payment_status || "",
         row.pris || "",
+        row.discount_code || "",
         ...customFields.map((field) => {
           const entries = Array.isArray(row.custom_fields) ? row.custom_fields : [];
           const match = entries.find((entry) => String(entry.id) === String(field.id));
@@ -11208,7 +11218,8 @@ const ensureBookingsTable = async () => {
       ADD COLUMN IF NOT EXISTS refund_amount NUMERIC(10, 2),
       ADD COLUMN IF NOT EXISTS mollie_refund_id TEXT,
       ADD COLUMN IF NOT EXISTS voided_at TIMESTAMPTZ,
-      ADD COLUMN IF NOT EXISTS voided_by_user_id INTEGER
+      ADD COLUMN IF NOT EXISTS voided_by_user_id INTEGER,
+      ADD COLUMN IF NOT EXISTS discount_code TEXT NOT NULL DEFAULT ''
   `);
 
   await pool.query(`
@@ -11319,6 +11330,26 @@ const ensureBookingsTable = async () => {
   await pool.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS payment_orders_verify_token_key
       ON payment_orders (verify_token)
+  `);
+
+  await pool.query(`
+    UPDATE bookings b
+    SET discount_code = UPPER(TRIM(po.payload->>'discountCode'))
+    FROM payment_orders po
+    WHERE po.booking_id = b.id
+      AND COALESCE(b.discount_code, '') = ''
+      AND COALESCE(TRIM(po.payload->>'discountCode'), '') <> ''
+  `);
+  await pool.query(`
+    UPDATE bookings b
+    SET discount_code = UPPER(TRIM(item.elem->>'discountCode'))
+    FROM payment_orders po
+    JOIN LATERAL unnest(po.booking_ids) WITH ORDINALITY AS matched(booking_id, ord) ON true
+    JOIN LATERAL jsonb_array_elements(COALESCE(po.payload->'items', '[]'::jsonb)) WITH ORDINALITY AS item(elem, ord)
+      ON item.ord = matched.ord
+    WHERE b.id = matched.booking_id
+      AND COALESCE(b.discount_code, '') = ''
+      AND COALESCE(TRIM(item.elem->>'discountCode'), '') <> ''
   `);
 
   await pool.query(`

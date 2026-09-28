@@ -2381,6 +2381,46 @@ fieldset.field {
   gap: 1rem;
 }
 
+.admin-new-event-form {
+  gap: 0.75rem;
+}
+
+.admin-new-event-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem 1rem;
+}
+
+.admin-new-event-name {
+  flex: 1 1 16rem;
+  max-width: 22rem;
+  min-width: 12rem;
+}
+
+.admin-new-event-date {
+  flex: 0 0 auto;
+  width: 11rem;
+}
+
+.admin-new-event-kind {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  min-height: 2.6rem;
+}
+
+.admin-new-event-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.95rem;
+}
+
+.admin-new-event-row .admin-actions {
+  margin: 0;
+}
+
 .subscription-plan-box {
   padding: 0.75rem 1rem;
   border: 1px solid var(--border);
@@ -3444,6 +3484,18 @@ fieldset.field {
   align-items: center;
   gap: 0.4rem;
   text-decoration: none;
+}
+
+.admin-event-list-filter {
+  margin-top: 1.25rem;
+}
+
+.admin-event-list-filter .field-row {
+  align-items: flex-end;
+}
+
+.admin-event-list-filter .admin-actions {
+  margin: 0;
 }
 
 .admin-event-grid {
