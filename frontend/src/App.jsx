@@ -1735,7 +1735,7 @@ const LandingPage = () => {
           playsInline
           controls
         >
-          <source src="/promo.mp4" type="video/mp4" />
+          <source src="/presentation.mp4" type="video/mp4" />
         </video>
         <p className="landing-promo-caption">Skapa ditt event på några minuter</p>
       </section>
