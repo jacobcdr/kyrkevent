@@ -2,8 +2,10 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isIndexablePath } from "./siteSeo.js";
 import {
   absolutePreviewImage,
+  applyRouteMeta,
   applySharePreview,
   eventSlugFromUrl,
   fetchEventPreview,
@@ -132,11 +134,15 @@ const server = http.createServer(async (req, res) => {
     }
 
     const match = eventSlugFromUrl(urlPath);
-    const html = match ? await eventHtml(req, match) : fs.readFileSync(indexPath, "utf8");
+    const html = applyRouteMeta(
+      match ? await eventHtml(req, match) : fs.readFileSync(indexPath, "utf8"),
+      urlPath
+    );
     res.writeHead(200, {
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-cache",
-      "X-Content-Type-Options": "nosniff"
+      "X-Content-Type-Options": "nosniff",
+      ...(isIndexablePath(urlPath) ? {} : { "X-Robots-Tag": "noindex, follow" })
     });
     res.end(req.method === "HEAD" ? undefined : html);
   } catch (error) {

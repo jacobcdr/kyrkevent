@@ -39,10 +39,18 @@ body {
   padding: 2.5rem 1.5rem 3rem;
 }
 
+html:has(.landing-page),
+body:has(.landing-page) {
+  background: #fff;
+}
+
 .landing-page {
   min-height: 100vh;
+  width: 100%;
+  max-width: none;
   padding: 2rem 1.5rem;
   text-align: center;
+  background: #fff;
 }
 
 .landing-title {
@@ -63,6 +71,10 @@ body {
 .landing-logo-wrap {
   text-align: center;
   margin-bottom: 0.5rem;
+}
+
+.landing-logo-wrap a {
+  display: inline-block;
 }
 
 .landing-logo {
@@ -324,8 +336,146 @@ body {
   text-decoration: underline;
 }
 
+.landing-footer p {
+  margin: 0;
+}
+
 .landing-footer a:hover {
   color: #475569;
+}
+
+.landing-footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.2rem 0.9rem;
+  margin: 0 0 0.7rem;
+}
+
+.landing-footer-links a {
+  color: #64748b;
+  font-size: 0.75rem;
+  text-decoration: none;
+}
+
+.landing-footer-links a:hover {
+  text-decoration: underline;
+}
+
+.landing-anchor,
+#priser {
+  scroll-margin-top: 1.5rem;
+}
+
+.landing-anchor {
+  max-width: 40rem;
+  margin: 2.25rem auto 0;
+}
+
+.landing-anchor h2 {
+  margin: 0 0 0.45rem;
+  font-size: 1.15rem;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.landing-anchor h3 {
+  margin: 1rem 0 0.2rem;
+  font-size: 1rem;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.landing-anchor .landing-intro {
+  margin-bottom: 0.75rem;
+}
+
+.landing-anchor-wide {
+  max-width: 1000px;
+}
+
+.landing-steps {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1.25rem;
+  margin: 1.75rem 0 0;
+  padding: 0;
+  text-align: left;
+}
+
+.landing-step {
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 16px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+  padding: 1.35rem 1.2rem 1.4rem;
+}
+
+.landing-step-number {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  margin-bottom: 0.9rem;
+  border-radius: 999px;
+  background: var(--brand-primary);
+  color: #fff;
+  font-weight: 700;
+  font-size: 1.05rem;
+}
+
+.landing-step h3 {
+  margin: 0 0 0.4rem;
+  font-size: 1.05rem;
+}
+
+.landing-step p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.landing-anchor-follow {
+  margin-top: 1.25rem;
+}
+
+.landing-step-wide {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  text-align: left;
+}
+
+.landing-step-wide .landing-step-number {
+  margin-bottom: 0;
+  flex-shrink: 0;
+}
+
+.landing-step-wide h2 {
+  margin: 0.15rem 0 0.4rem;
+  text-align: left;
+  font-size: 1.05rem;
+}
+
+.landing-step-wide p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+@media (max-width: 768px) {
+  .landing-steps {
+    grid-template-columns: 1fr;
+  }
+}
+
+.landing-pricing-compact {
+  margin-top: 0.5rem;
+  padding-top: 0;
 }
 
 .public-host-footer {

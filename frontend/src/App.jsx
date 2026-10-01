@@ -17,6 +17,8 @@ import { EventGallery } from "./EventGallery";
 import { EventAnalytics, EventOverviewStats } from "./EventAnalytics";
 import { EventActivityLog } from "./EventActivityLog";
 import { getOrCreateVisitorId } from "./visitorId";
+import { HOME, SITE_ORIGIN, findSitePage, setCanonical, setMetaDescription, setMetaRobots } from "../siteSeo.js";
+import { AboutKyrkeventPage, LandingDetails, LandingHero, LandingPricing, SiteFooter } from "./SitePages.jsx";
 import {
   buildServiceFeeTierLines,
   calcServiceFeeAmount,
@@ -1642,34 +1644,26 @@ const CopyEventUrlButton = ({ url }) => {
   );
 };
 
-const SITE_TITLE = "Anmälningar för event & kultur";
+const SITE_TITLE = HOME.title;
 
-const LandingPage = () => {
+const LandingPage = ({ initialSection = "" }) => {
   useEffect(() => {
     document.title = SITE_TITLE;
-  }, []);
+    setMetaDescription(HOME.description);
+    setCanonical(`${SITE_ORIGIN}/`);
+    setMetaRobots("index, follow");
+    const fromPath = initialSection.replace(/^\//, "");
+    const fromHash = window.location.hash.replace(/^#/, "");
+    const id = fromPath || fromHash;
+    if (!id) return;
+    if (fromPath) window.history.replaceState(null, "", `/#${id}`);
+    const scrollToSection = () => document.getElementById(id)?.scrollIntoView();
+    scrollToSection();
+    window.requestAnimationFrame(scrollToSection);
+  }, [initialSection]);
   return (
     <div className="page landing-page">
-      <div className="landing-hero-block">
-        <div className="landing-logo-wrap">
-          <img
-            src="/kyrkevent2.png"
-            alt="Kyrkevent.se"
-            className="landing-logo"
-          />
-        </div>
-        <video
-          className="landing-image"
-          autoPlay
-          loop
-          muted
-          playsInline
-          poster="/landing-hero.png"
-          aria-label="Bokning, evenemang och aktiviteter"
-        >
-          <source src="/landing-hero.mp4" type="video/mp4" />
-        </video>
-      </div>
+      <LandingHero />
       <h2 className="landing-events-heading">Vill du anordna konserter, fester, läger, församlingshelger, hajk, julshow, middagar, nyår ?</h2>
       <p className="landing-intro landing-description">
         En plattform som gör det enkelt och snyggt att skapa anmälningssidor och biljettförsäljning för alla typer av evenemang. Oavsett om du arrangerar ett läger, en konferens, en konsert, en middag eller något helt annat kan du snabbt bygga en professionell sida som tar emot bokningar i stilren design. Vill du dessutom ta betalt för ditt arrangemang gör du det lika smidigt direkt via plattformen. Du skapar din sida på ett par minuter, testa får du se...
@@ -1684,48 +1678,7 @@ const LandingPage = () => {
         </a>
       </div>
 
-      <section className="landing-pricing" aria-labelledby="landing-pricing-heading">
-        <h2 id="landing-pricing-heading" className="landing-pricing-title">Välj abonnemangsplan</h2>
-        <div className="landing-pricing-cards">
-          <div className="landing-pricing-card landing-pricing-card-bas">
-            <div className="landing-pricing-card-header">
-              <h3 className="landing-pricing-card-title">Bas</h3>
-            </div>
-            <ul className="landing-pricing-features">
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Obegränsat aktiva event samtidigt</li>
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Onlinebetalning med swish eller kort via plattformen</li>
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Mailbekräftelse & biljett till deltagare</li>
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Rabattkoder</li>
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Statistik och besöksdata per event</li>
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Bygg dina egna anmälningsformulär</li>
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Bildgalleri</li>
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Anpassade deltagarlistor och vilka som har betalat</li>
-            </ul>
-            <p className="landing-pricing-price">Gratis</p>
-            <a href="/admin?view=signup" className="landing-pricing-btn">Kom igång</a>
-          </div>
-
-          <div className="landing-pricing-card landing-pricing-card-premium">
-            <div className="landing-pricing-card-header">
-              <h3 className="landing-pricing-card-title">Premium</h3>
-            </div>
-            <ul className="landing-pricing-features">
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Obegränsat aktiva event samtidigt</li>
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Onlinebetalning med swish eller kortvia plattformen</li>
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Mailbekräftelse & biljett till deltagare</li>
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Rabattkoder</li>
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Statistik och besöksdata per event</li>
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Bygg dina egna anmälningsformulär</li>
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Bildgalleri</li>
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Besökarstatistik</li>
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Anpassade deltagarlistor och vilka som har betalat</li>
-              <li className="landing-pricing-feature included"><span className="landing-pricing-icon" aria-hidden="true">✓</span> Möjlighet att checka in deltagare med QR-kod</li>
-            </ul>
-            <p className="landing-pricing-price">1995 kr/år</p>
-            <a href="/admin?view=signup" className="landing-pricing-btn">Kom igång</a>
-          </div>
-        </div>
-      </section>
+      <LandingPricing />
       <section className="landing-promo-video" aria-label="Introduktionsvideo om Kyrkevent">
         <video
           className="landing-promo-video-element"
@@ -1739,9 +1692,8 @@ const LandingPage = () => {
         </video>
         <p className="landing-promo-caption">Skapa ditt event på några minuter</p>
       </section>
-      <footer className="landing-footer">
-        Tjänsten drivs av Lonetec AB org. 556907-4189 – webb: <a href="https://lonetec.se" target="_blank" rel="noreferrer">lonetec.se</a> – mail: <a href="mailto:kontakt@lonetec.se">kontakt@lonetec.se</a> – tel: 010-199 86 40
-      </footer>
+      <LandingDetails />
+      <SiteFooter />
     </div>
   );
 };
@@ -14736,7 +14688,8 @@ function App() {
   const isResetPasswordRoute =
     window.location.pathname === "/reset-password" ||
     window.location.pathname.replace(/\/+$/, "") === "/reset-password";
-  const isLandingRoute = pathNorm === "/" || pathNorm === "" || pathNorm === "/en";
+  const isLandingRoute = pathNorm === "/" || pathNorm === "" || pathNorm === "/en" || pathNorm === "/funktioner";
+  const sitePage = findSitePage(pathNorm);
   const eventSlug = getEventSlugFromPath();
   const [event, setEvent] = useState(null);
   const [eventError, setEventError] = useState("");
@@ -15064,9 +15017,31 @@ function App() {
   ]);
 
   useEffect(() => {
-    if (isAdminRoute || isPaymentStatusRoute || isLandingRoute) return;
+    if (isAdminRoute || isPaymentStatusRoute || isLandingRoute || sitePage) return;
     document.title = event?.name || SITE_TITLE;
-  }, [event?.name, isAdminRoute, isPaymentStatusRoute, isLandingRoute]);
+  }, [event?.name, isAdminRoute, isPaymentStatusRoute, isLandingRoute, sitePage]);
+
+  useEffect(() => {
+    const noindex =
+      isAdminRoute ||
+      isPaymentStatusRoute ||
+      isVerifyEmailRoute ||
+      isResetPasswordRoute ||
+      Boolean(eventSlug);
+    if (isLandingRoute || sitePage) {
+      setMetaRobots("index, follow");
+      return;
+    }
+    if (noindex) setMetaRobots("noindex, follow");
+  }, [
+    isAdminRoute,
+    isPaymentStatusRoute,
+    isVerifyEmailRoute,
+    isResetPasswordRoute,
+    isLandingRoute,
+    sitePage,
+    eventSlug
+  ]);
 
   useEffect(() => {
     if (!event || isAdminRoute || isPaymentStatusRoute || isVerifyEmailRoute || isResetPasswordRoute) {
@@ -15190,7 +15165,7 @@ function App() {
       return;
     }
     if (!eventSlug) {
-      if (isLandingRoute) {
+      if (isLandingRoute || sitePage) {
         return;
       }
       setEvent(null);
@@ -15245,7 +15220,7 @@ function App() {
         setEventError("Eventet kunde inte hittas.");
       })
       .finally(() => setEventLoading(false));
-  }, [eventSlug, isAdminRoute, isPaymentStatusRoute, isVerifyEmailRoute, isResetPasswordRoute, isLandingRoute]);
+  }, [eventSlug, isAdminRoute, isPaymentStatusRoute, isVerifyEmailRoute, isResetPasswordRoute, isLandingRoute, sitePage]);
 
   const loadProgramItems = async (eventId) => {
     const response = await fetch(`${API_BASE}/program?eventId=${eventId}`);
@@ -15764,8 +15739,12 @@ function App() {
     return <AdminPage />;
   }
 
-  if (isLandingRoute) {
-    return <LandingPage />;
+  if (sitePage?.placement === "about") {
+    return <AboutKyrkeventPage />;
+  }
+
+  if (isLandingRoute || sitePage) {
+    return <LandingPage initialSection={sitePage?.path || ""} />;
   }
 
   return (

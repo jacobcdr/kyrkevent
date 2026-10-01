@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createSharePreviewMiddleware } from "./sharePreview.js";
+import { createRouteMetaMiddleware, createSharePreviewMiddleware } from "./sharePreview.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const certPath = path.resolve(__dirname, ".cert", "localhost.pfx");
@@ -17,9 +17,11 @@ function eventSharePreviewPlugin() {
   return {
     name: "event-share-preview",
     configureServer(server) {
+      server.middlewares.use(createRouteMetaMiddleware());
       server.middlewares.use(createSharePreviewMiddleware(apiBase));
     },
     configurePreviewServer(server) {
+      server.middlewares.use(createRouteMetaMiddleware());
       server.middlewares.use(createSharePreviewMiddleware(apiBase));
     },
     closeBundle() {

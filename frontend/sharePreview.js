@@ -1,3 +1,5 @@
+import { HOME, SITE_ORIGIN, isAboutPath, isIndexablePath } from "./siteSeo.js";
+
 const PREVIEW_TTL_MS = 60_000;
 const PREVIEW_TIMEOUT_MS = 1500;
 const previewCache = new Map();
@@ -30,6 +32,13 @@ function oneLine(value, maxLength) {
   return `${text.slice(0, maxLength - 1).trimEnd()}…`;
 }
 
+function upsertLink(html, rel, href) {
+  const tag = `<link rel="${rel}" href="${escapeHtml(href)}" />`;
+  const pattern = new RegExp(`<link\\s+rel=["']${rel}["']\\s+href=["'][\\s\\S]*?["']\\s*/?>`, "i");
+  if (pattern.test(html)) return html.replace(pattern, tag);
+  return html.replace("</head>", `    ${tag}\n  </head>`);
+}
+
 function upsertMeta(html, attribute, key, content) {
   const tag = `<meta ${attribute}="${key}" content="${escapeHtml(content)}" />`;
   const pattern = new RegExp(
@@ -60,7 +69,75 @@ export function applySharePreview(html, fields) {
   next = upsertMeta(next, "name", "twitter:description", description);
   next = upsertMeta(next, "name", "twitter:image", image);
   next = upsertMeta(next, "name", "description", description);
+  next = upsertMeta(next, "name", "robots", "noindex, follow");
   return next;
+}
+
+export function applyHeadMeta(html, fields) {
+  let next = html;
+  if (fields.title) {
+    next = next.replace(/<title>[\s\S]*?<\/title>/i, `<title>${escapeHtml(fields.title)}</title>`);
+    next = upsertMeta(next, "property", "og:title", fields.title);
+  }
+  if (fields.description) {
+    next = upsertMeta(next, "name", "description", fields.description);
+    next = upsertMeta(next, "property", "og:description", fields.description);
+  }
+  if (fields.canonical) {
+    next = upsertLink(next, "canonical", fields.canonical);
+  }
+  if (fields.pageUrl) {
+    next = upsertMeta(next, "property", "og:url", fields.pageUrl);
+  }
+  if (fields.robots) {
+    next = upsertMeta(next, "name", "robots", fields.robots);
+  }
+  return next;
+}
+
+export function applyRouteMeta(html, urlPath) {
+  if (isAboutPath(urlPath)) {
+    const pageUrl = `${SITE_ORIGIN}/om`;
+    return applyHeadMeta(html, {
+      title: "Så fungerar Kyrkevent",
+      description: "Så fungerar Kyrkevent och vad tjänsten är. Skapa en anmälningsida och ta emot anmälningar och betalningar.",
+      canonical: pageUrl,
+      pageUrl,
+      robots: "index, follow"
+    });
+  }
+  if (isIndexablePath(urlPath)) {
+    const pageUrl = `${SITE_ORIGIN}/`;
+    return applyHeadMeta(html, {
+      title: HOME.title,
+      description: HOME.description,
+      canonical: pageUrl,
+      pageUrl,
+      robots: "index, follow"
+    });
+  }
+  return applyHeadMeta(html, { robots: "noindex, follow" });
+}
+
+export function createRouteMetaMiddleware() {
+  return function routeMetaMiddleware(req, res, next) {
+    if (req.method !== "GET") {
+      next();
+      return;
+    }
+    const accept = String(req.headers.accept || "");
+    if (!accept.includes("text/html")) {
+      next();
+      return;
+    }
+    const urlPath = String(req.url || "/").split("?")[0];
+    if (urlPath.includes(".")) {
+      next();
+      return;
+    }
+    bufferHtmlResponse(res, (html) => applyRouteMeta(html, urlPath));
+    next();
+  };
 }
 
 export function absolutePreviewImage(imageUrl, apiBase) {
