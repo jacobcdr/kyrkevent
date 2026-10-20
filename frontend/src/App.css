@@ -87,20 +87,28 @@ body:has(.landing-page) {
   object-fit: contain;
 }
 
-.landing-image {
-  display: block;
+.landing-hero-media {
+  position: relative;
   width: 100%;
-  max-width: 100%;
-  height: auto;
   aspect-ratio: 16 / 9;
-  margin: 0;
   border-radius: 12px;
-  object-fit: cover;
+  overflow: hidden;
   background: #0b1220;
 }
 
+.landing-image {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  object-fit: cover;
+  background: transparent;
+}
+
 @media (max-width: 640px) {
-  .landing-image {
+  .landing-hero-media {
     border-radius: 8px;
   }
 }

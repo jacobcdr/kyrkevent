@@ -183,15 +183,30 @@ export function LandingHero({ linkHome = false }) {
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-    video.muted = true;
     let stopped = false;
     let handle = 0;
+    let hasPlayed = false;
+
+    const tryPlay = () => {
+      if (stopped) return;
+      video.muted = true;
+      video.defaultMuted = true;
+      video.playsInline = true;
+      video.setAttribute("playsinline", "");
+      video.setAttribute("webkit-playsinline", "");
+      if (!video.paused) return;
+      video.play()?.catch(() => {});
+    };
 
     const watch = () => {
       if (stopped) return;
       const end = video.duration;
-      // Filen slutar med några vita rutor. Hoppa tillbaka innan de visas.
-      if (Number.isFinite(end) && end > 0.3 && video.currentTime >= end - 0.12) {
+      if (
+        hasPlayed &&
+        Number.isFinite(end) &&
+        end > 0.3 &&
+        video.currentTime >= end - 0.12
+      ) {
         video.currentTime = 0.05;
       }
       handle =
@@ -200,16 +215,26 @@ export function LandingHero({ linkHome = false }) {
           : requestAnimationFrame(watch);
     };
 
-    const onEnded = () => {
-      video.currentTime = 0.05;
-      video.play()?.catch(() => {});
+    const onPlaying = () => {
+      hasPlayed = true;
     };
 
+    const onEnded = () => {
+      video.currentTime = 0.05;
+      tryPlay();
+    };
+
+    video.muted = true;
+    video.defaultMuted = true;
+    tryPlay();
+    video.addEventListener("loadeddata", tryPlay);
+    video.addEventListener("playing", onPlaying);
+    video.addEventListener("ended", onEnded);
+    window.addEventListener("touchstart", tryPlay, { passive: true });
     handle =
       typeof video.requestVideoFrameCallback === "function"
         ? video.requestVideoFrameCallback(watch)
         : requestAnimationFrame(watch);
-    video.addEventListener("ended", onEnded);
 
     return () => {
       stopped = true;
@@ -218,7 +243,10 @@ export function LandingHero({ linkHome = false }) {
       } else {
         cancelAnimationFrame(handle);
       }
+      video.removeEventListener("loadeddata", tryPlay);
+      video.removeEventListener("playing", onPlaying);
       video.removeEventListener("ended", onEnded);
+      window.removeEventListener("touchstart", tryPlay);
     };
   }, []);
 
@@ -227,17 +255,18 @@ export function LandingHero({ linkHome = false }) {
       <div className="landing-logo-wrap">
         {linkHome ? <a href="/">{logo}</a> : logo}
       </div>
-      <video
-        className="landing-image"
-        ref={videoRef}
-        autoPlay
-        muted
-        playsInline
-        preload="auto"
-        aria-label="Bokning, evenemang och aktiviteter"
-      >
-        <source src="/landningsvideo.mp4" type="video/mp4" />
-      </video>
+      <div className="landing-hero-media">
+        <video
+          className="landing-image"
+          ref={videoRef}
+          src="/landningsvideo.mp4?v=2"
+          autoPlay
+          muted
+          playsInline
+          preload="auto"
+          aria-label="Bokning, evenemang och aktiviteter"
+        />
+      </div>
     </div>
   );
 }

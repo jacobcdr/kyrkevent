@@ -65,13 +65,55 @@ function resolveStaticFile(urlPath) {
   return filePath;
 }
 
-function sendFile(res, filePath, { cacheControl }) {
+function sendFile(req, res, filePath, { cacheControl }) {
+  const stat = fs.statSync(filePath);
   const ext = path.extname(filePath).toLowerCase();
-  res.writeHead(200, {
+  const headers = {
     "Content-Type": MIME_TYPES[ext] || "application/octet-stream",
     "Cache-Control": cacheControl,
-    "X-Content-Type-Options": "nosniff"
-  });
+    "X-Content-Type-Options": "nosniff",
+    "Accept-Ranges": "bytes"
+  };
+  const range = String(req.headers.range || "");
+  const singleRange = /^bytes=(\d*)-(\d*)$/.exec(range);
+  if (range && !singleRange) {
+    res.writeHead(416, { "Content-Range": `bytes */${stat.size}` });
+    res.end();
+    return;
+  }
+  if (singleRange) {
+    let start = singleRange[1] === "" ? stat.size - Number(singleRange[2]) : Number(singleRange[1]);
+    let end = singleRange[2] === "" || singleRange[1] === "" ? stat.size - 1 : Number(singleRange[2]);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start >= stat.size || end < start) {
+      res.writeHead(416, { "Content-Range": `bytes */${stat.size}` });
+      res.end();
+      return;
+    }
+    end = Math.min(end, stat.size - 1);
+    res.writeHead(206, {
+      ...headers,
+      "Content-Range": `bytes ${start}-${end}/${stat.size}`,
+      "Content-Length": end - start + 1
+    });
+    if (req.method === "HEAD") {
+      res.end();
+      return;
+    }
+    const ranged = fs.createReadStream(filePath, { start, end });
+    ranged.on("error", () => {
+      if (!res.headersSent) {
+        res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+      }
+      res.end();
+    });
+    ranged.pipe(res);
+    return;
+  }
+  res.writeHead(200, { ...headers, "Content-Length": stat.size });
+  if (req.method === "HEAD") {
+    res.end();
+    return;
+  }
   const stream = fs.createReadStream(filePath);
   stream.on("error", () => {
     if (!res.headersSent) {
@@ -110,19 +152,10 @@ const server = http.createServer(async (req, res) => {
     const urlPath = String(req.url || "/").split("?")[0];
     const staticFile = resolveStaticFile(urlPath);
     if (staticFile && fs.existsSync(staticFile) && fs.statSync(staticFile).isFile()) {
-      if (req.method === "HEAD") {
-        const ext = path.extname(staticFile).toLowerCase();
-        res.writeHead(200, {
-          "Content-Type": MIME_TYPES[ext] || "application/octet-stream",
-          "X-Content-Type-Options": "nosniff"
-        });
-        res.end();
-        return;
-      }
       const cacheControl = urlPath.startsWith("/assets/")
         ? "public, max-age=31536000, immutable"
         : "public, max-age=3600";
-      sendFile(res, staticFile, { cacheControl });
+      sendFile(req, res, staticFile, { cacheControl });
       return;
     }
 
