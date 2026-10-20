@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { COMPANY, SITE_ORIGIN, SITE_PAGES, setCanonical, setMetaDescription, setMetaRobots } from "../siteSeo.js";
 
 function footerHref(page) {
@@ -175,9 +175,53 @@ export function LandingPricing({ compact = false }) {
 }
 
 export function LandingHero({ linkHome = false }) {
+  const videoRef = useRef(null);
   const logo = (
     <img src="/kyrkevent2.png" alt="Kyrkevent.se" className="landing-logo" />
   );
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.muted = true;
+    let stopped = false;
+    let handle = 0;
+
+    const watch = () => {
+      if (stopped) return;
+      const end = video.duration;
+      // Filen slutar med några vita rutor. Hoppa tillbaka innan de visas.
+      if (Number.isFinite(end) && end > 0.3 && video.currentTime >= end - 0.12) {
+        video.currentTime = 0.05;
+      }
+      handle =
+        typeof video.requestVideoFrameCallback === "function"
+          ? video.requestVideoFrameCallback(watch)
+          : requestAnimationFrame(watch);
+    };
+
+    const onEnded = () => {
+      video.currentTime = 0.05;
+      video.play()?.catch(() => {});
+    };
+
+    handle =
+      typeof video.requestVideoFrameCallback === "function"
+        ? video.requestVideoFrameCallback(watch)
+        : requestAnimationFrame(watch);
+    video.addEventListener("ended", onEnded);
+
+    return () => {
+      stopped = true;
+      if (typeof video.cancelVideoFrameCallback === "function") {
+        video.cancelVideoFrameCallback(handle);
+      } else {
+        cancelAnimationFrame(handle);
+      }
+      video.removeEventListener("ended", onEnded);
+    };
+  }, []);
+
   return (
     <div className="landing-hero-block">
       <div className="landing-logo-wrap">
@@ -185,14 +229,14 @@ export function LandingHero({ linkHome = false }) {
       </div>
       <video
         className="landing-image"
+        ref={videoRef}
         autoPlay
-        loop
         muted
         playsInline
-        poster="/landing-hero.png"
+        preload="auto"
         aria-label="Bokning, evenemang och aktiviteter"
       >
-        <source src="/landing-hero.mp4" type="video/mp4" />
+        <source src="/landningsvideo.mp4" type="video/mp4" />
       </video>
     </div>
   );

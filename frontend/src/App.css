@@ -60,9 +60,10 @@ body:has(.landing-page) {
   color: var(--text);
 }
 
-/* Gemensam kolumn så logga och bild blir exakt jämna */
+/* Gemensam kolumn så logga och video blir jämna, och följer sidbredden */
 .landing-hero-block {
-  max-width: 800px;
+  width: 100%;
+  max-width: 960px;
   margin-left: auto;
   margin-right: auto;
   margin-bottom: 1rem;
@@ -89,10 +90,19 @@ body:has(.landing-page) {
 .landing-image {
   display: block;
   width: 100%;
+  max-width: 100%;
   height: auto;
+  aspect-ratio: 16 / 9;
   margin: 0;
   border-radius: 12px;
   object-fit: cover;
+  background: #0b1220;
+}
+
+@media (max-width: 640px) {
+  .landing-image {
+    border-radius: 8px;
+  }
 }
 
 .landing-intro {
