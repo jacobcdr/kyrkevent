@@ -72,7 +72,19 @@ const MOLLIE_CURRENCY = process.env.MOLLIE_CURRENCY || "SEK";
 const BAS_PRICE_DEFAULT = 95;
 const BAS_PRICE_PER_EVENT = Math.max(1, Number(process.env.BAS_PRICE_PER_EVENT || String(BAS_PRICE_DEFAULT)) || BAS_PRICE_DEFAULT);
 const PREMIUM_PRICE_DEFAULT = 1995;
-const PREMIUM_PRICE_YEAR = Math.max(1, Number(process.env.PREMIUM_PRICE_YEAR || String(PREMIUM_PRICE_DEFAULT)) || PREMIUM_PRICE_DEFAULT);
+const PLATFORM_SETTINGS_PREMIUM_PRICE_KEY = "premium_price_year";
+const parsePremiumPriceYear = (value, fallback = null) => {
+  if (value === undefined || value === null || String(value).trim() === "") return fallback;
+  const parsed = Number(String(value).trim().replace(/\s/g, "").replace(",", "."));
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1000000) return fallback;
+  return Math.round(parsed * 100) / 100;
+};
+let cachedPremiumPriceYear = parsePremiumPriceYear(process.env.PREMIUM_PRICE_YEAR, PREMIUM_PRICE_DEFAULT);
+const getPremiumPriceYear = () => cachedPremiumPriceYear;
+const premiumAmountFromPayload = (payload) => {
+  const stored = parsePremiumPriceYear(payload?.amountSek, null);
+  return stored == null ? getPremiumPriceYear() : stored;
+};
 const SERVICE_FEE_VAT_RATE_PERCENT = 25;
 const SIE_BANK_ACCOUNT = String(process.env.SIE_BANK_ACCOUNT || SIE_ACCOUNTS.bank).replace(/\D/g, "") || SIE_ACCOUNTS.bank;
 const SIE_VOUCHER_SERIES = String(process.env.SIE_VOUCHER_SERIES || "A").replace(/[^A-Za-z0-9]/g, "") || "A";
@@ -114,6 +126,35 @@ const saveServiceFeeTiersToDb = async (tiers) => {
   );
   cachedServiceFeeTiers = tiers.map((tier) => ({ ...tier }));
   return cachedServiceFeeTiers;
+};
+
+const loadPremiumPriceFromDb = async () => {
+  try {
+    const result = await pool.query(
+      "SELECT value FROM platform_settings WHERE key = $1",
+      [PLATFORM_SETTINGS_PREMIUM_PRICE_KEY]
+    );
+    const stored = parsePremiumPriceYear(result.rows[0]?.value, null);
+    if (stored != null) cachedPremiumPriceYear = stored;
+  } catch {
+    // Behåll senast kända pris om inställningen inte kan läsas.
+  }
+  return cachedPremiumPriceYear;
+};
+
+const savePremiumPriceToDb = async (priceYear) => {
+  await pool.query(
+    `
+      INSERT INTO platform_settings (key, value, updated_at)
+      VALUES ($1, $2::jsonb, NOW())
+      ON CONFLICT (key) DO UPDATE SET
+        value = EXCLUDED.value,
+        updated_at = NOW()
+    `,
+    [PLATFORM_SETTINGS_PREMIUM_PRICE_KEY, JSON.stringify(priceYear)]
+  );
+  cachedPremiumPriceYear = priceYear;
+  return cachedPremiumPriceYear;
 };
 const FRONTEND_URL = process.env.FRONTEND_URL || "";
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.resolve("uploads");
@@ -748,9 +789,9 @@ function getSubscriptionPaymentDetails(payload) {
     return {
       purchaseType: "premium",
       quantity: null,
-      amountSek: PREMIUM_PRICE_YEAR,
+      amountSek: premiumAmountFromPayload(payload),
       productLabel: "Premium-abonnemang (1 år)",
-      unitPriceInclVat: PREMIUM_PRICE_YEAR
+      unitPriceInclVat: premiumAmountFromPayload(payload)
     };
   }
   return null;
@@ -794,7 +835,7 @@ async function sendSubscriptionPurchaseReceiptEmail({
   const fullName = `${profile.first_name || ""} ${profile.last_name || ""}`.trim();
   const isBas = purchaseType === "bas";
   const productLabel = isBas ? "Bas-eventkrediter" : "Premium-abonnemang (1 år)";
-  const payload = isBas ? { type: "bas", quantity } : { type: "premium" };
+  const payload = isBas ? { type: "bas", quantity } : { type: "premium", amountSek };
   const pdfData = buildSubscriptionReceiptPdfPayload({
     profile,
     payload,
@@ -3484,9 +3525,9 @@ app.get("/payments/verify", async (req, res) => {
       serviceFee = 0;
       totalPaid = basTotal;
     } else if (payload.type === "premium") {
-      ticketTotal = PREMIUM_PRICE_YEAR;
+      ticketTotal = premiumAmountFromPayload(payload);
       serviceFee = 0;
-      totalPaid = PREMIUM_PRICE_YEAR;
+      totalPaid = ticketTotal;
     }
 
     let eventNameForSummary = "";
@@ -3560,7 +3601,7 @@ app.get("/payments/verify", async (req, res) => {
       }
     } else if (payload.type === "premium") {
       summary.orderType = "premium";
-      summary.unitPrice = PREMIUM_PRICE_YEAR;
+      summary.unitPrice = premiumAmountFromPayload(payload);
       if (payload.profile_id) {
         const profileRow = await pool.query(
           "SELECT first_name, last_name, organization FROM admin_user_profiles WHERE profile_id = $1",
@@ -3621,7 +3662,7 @@ app.get("/payments/verify", async (req, res) => {
                 await sendSubscriptionPurchaseReceiptEmail({
                   profile,
                   purchaseType: "premium",
-                  amountSek: PREMIUM_PRICE_YEAR,
+                  amountSek: premiumAmountFromPayload(pay),
                   orderNumber,
                   createdDate
                 });
@@ -4619,10 +4660,6 @@ app.post("/admin/payments/start-bas", requireAdmin, paymentLimiter, async (_req,
 });
 
 app.post("/admin/payments/start-premium", requireAdmin, paymentLimiter, async (req, res) => {
-  if (!mollie) {
-    res.status(500).json({ ok: false, error: "MOLLIE_API_KEY is not set" });
-    return;
-  }
   try {
     const profileRow = await pool.query(
       "SELECT profile_id, first_name, last_name, organization, subscription_plan, premium_ends_at FROM admin_user_profiles WHERE user_id = $1",
@@ -4652,7 +4689,34 @@ app.post("/admin/payments/start-premium", requireAdmin, paymentLimiter, async (r
       res.status(400).json({ ok: false, error: "Du har redan ett aktivt Premium-abonnemang." });
       return;
     }
-    const amountSek = PREMIUM_PRICE_YEAR;
+    const amountSek = getPremiumPriceYear();
+    if (amountSek <= 0) {
+      await pool.query(
+        `
+          UPDATE admin_user_profiles
+          SET subscription_plan = 'premium',
+              premium_activated_at = NOW(),
+              premium_ends_at = NOW() + interval '1 year',
+              premium_avslut_requested_at = NULL
+          WHERE user_id = $1
+        `,
+        [req.userId]
+      );
+      const paymentId = `free-premium-${req.userId}-${Date.now()}`;
+      await pool.query(
+        `
+          INSERT INTO payment_orders (payment_id, payload, status, booking_id)
+          VALUES ($1, $2, 'paid', -1)
+        `,
+        [paymentId, { type: "premium", profile_id: profileId, amountSek: 0 }]
+      );
+      res.json({ ok: true, activated: true, amountSek: 0 });
+      return;
+    }
+    if (!mollie) {
+      res.status(500).json({ ok: false, error: "MOLLIE_API_KEY is not set" });
+      return;
+    }
     const origin = (req.get("origin") || FRONTEND_URL || req.protocol + "://" + req.get("host") || "").replace(/\/$/, "");
     const payment = await mollie.payments.create({
       amount: { currency: MOLLIE_CURRENCY, value: amountSek.toFixed(2) },
@@ -4671,7 +4735,7 @@ app.post("/admin/payments/start-premium", requireAdmin, paymentLimiter, async (r
          payload = EXCLUDED.payload,
          status = EXCLUDED.status,
          verify_token = COALESCE(payment_orders.verify_token, EXCLUDED.verify_token)`,
-      [payment.id, { type: "premium", profile_id: profileId }, payment.status, verifyToken]
+      [payment.id, { type: "premium", profile_id: profileId, amountSek }, payment.status, verifyToken]
     );
     res.json({ ok: true, checkoutUrl, verifyToken });
   } catch (error) {
@@ -5689,6 +5753,28 @@ app.put("/admin/platform-settings/service-fee-tiers", requireAdmin, requireSuper
     res.json({ ok: true, tiers });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to save service fee tiers" });
+  }
+});
+
+app.get("/premium-price", async (_req, res) => {
+  res.json({ ok: true, priceYear: getPremiumPriceYear() });
+});
+
+app.get("/admin/platform-settings/premium-price", requireAdmin, requireSuperAdmin, async (_req, res) => {
+  res.json({ ok: true, priceYear: getPremiumPriceYear() });
+});
+
+app.put("/admin/platform-settings/premium-price", requireAdmin, requireSuperAdmin, async (req, res) => {
+  const priceYear = parsePremiumPriceYear(req.body?.priceYear, null);
+  if (priceYear == null) {
+    res.status(400).json({ ok: false, error: "Ange ett pris i kronor, 0 eller högre." });
+    return;
+  }
+  try {
+    const saved = await savePremiumPriceToDb(priceYear);
+    res.json({ ok: true, priceYear: saved });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Kunde inte spara Premium-priset." });
   }
 });
 
@@ -10532,7 +10618,7 @@ app.get("/admin/event-analytics", requireAdmin, async (req, res) => {
       ORDER BY unique_count DESC, view_count DESC
     `;
 
-    const [seriesResult, deviceResult, referrerResult, locationResult, totalResult, lifetimeResult, lifetimeUniqueResult, ticketSalesResult] =
+    const [seriesResult, deviceResult, referrerResult, locationResult, totalResult, lifetimeResult, lifetimeUniqueResult, ticketSalesResult, checkInResult] =
       await Promise.all([
       pool.query(seriesQuery, baseParams),
       pool.query(breakdownQuery("device_type"), baseParams),
@@ -10590,6 +10676,18 @@ app.get("/admin/event-analytics", requireAdmin, async (req, res) => {
           ORDER BY count DESC, name ASC
         `,
         [eventId]
+      ),
+      pool.query(
+        `
+          SELECT
+            COUNT(*) FILTER (WHERE checked_in_at IS NOT NULL)::int AS checked_in,
+            COUNT(*)::int AS total
+          FROM bookings
+          WHERE event_id = $1
+            AND voided_at IS NULL
+            AND LOWER(payment_status) IN ('paid', 'manual')
+        `,
+        [eventId]
       )
     ]);
 
@@ -10617,6 +10715,10 @@ app.get("/admin/event-analytics", requireAdmin, async (req, res) => {
     const ticketCounts = (ticketSalesResult.rows || []).map((row) => Number(row.count) || 0);
     const ticketTotal = ticketCounts.reduce((sum, n) => sum + n, 0);
     const ticketPercents = allocateWholePercents(ticketCounts);
+    const checkedIn = Number(checkInResult.rows[0]?.checked_in) || 0;
+    const checkInTotal = Number(checkInResult.rows[0]?.total) || 0;
+    const notCheckedIn = Math.max(0, checkInTotal - checkedIn);
+    const [checkedPercent = 0, notCheckedPercent = 0] = allocateWholePercents([checkedIn, notCheckedIn]);
 
     res.json({
       ok: true,
@@ -10635,6 +10737,13 @@ app.get("/admin/event-analytics", requireAdmin, async (req, res) => {
             count: ticketCounts[index],
             percent: ticketPercents[index]
           }))
+        },
+        checkIn: {
+          checkedIn,
+          notCheckedIn,
+          total: checkInTotal,
+          checkedPercent,
+          notCheckedPercent
         },
         series,
         devices: withPercents(deviceResult.rows),
@@ -11556,6 +11665,14 @@ const ensureBookingsTable = async () => {
     `,
     [PLATFORM_SETTINGS_SERVICE_FEE_KEY, JSON.stringify(DEFAULT_SERVICE_FEE_TIERS)]
   );
+  await pool.query(
+    `
+      INSERT INTO platform_settings (key, value)
+      VALUES ($1, $2::jsonb)
+      ON CONFLICT (key) DO NOTHING
+    `,
+    [PLATFORM_SETTINGS_PREMIUM_PRICE_KEY, JSON.stringify(cachedPremiumPriceYear)]
+  );
 
   await pool.query(`
     ALTER TABLE admin_user_profiles
@@ -11599,6 +11716,7 @@ const ensureBookingsTable = async () => {
 waitForDatabase(pool)
   .then(() => ensureBookingsTable())
   .then(() => loadServiceFeeTiersFromDb())
+  .then(() => loadPremiumPriceFromDb())
   .then(() => {
     startHealthMonitor(pool);
     startActivityLogRetention();

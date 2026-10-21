@@ -88,6 +88,11 @@ const TICKET_DONUT_COLORS = [
   "#7f8c8d"
 ];
 
+const CHECKIN_SLICE_COLORS = {
+  checked: "#2ecc71",
+  open: "#cbd5e1"
+};
+
 export function EventOverviewStats({
   paidCount = 0,
   freeCount = 0,
@@ -130,7 +135,113 @@ export function EventOverviewStats({
   );
 }
 
-function TicketSalesDonut({ ticketSales }) {
+function CheckInChart({ checkIn }) {
+  const checkedIn = Number(checkIn?.checkedIn) || 0;
+  const total = Number(checkIn?.total) || 0;
+  const notCheckedIn = Math.max(0, Number(checkIn?.notCheckedIn) || total - checkedIn);
+  const slices = [
+    {
+      key: "checked",
+      name: "Incheckade",
+      count: checkedIn,
+      percent: Number(checkIn?.checkedPercent) || 0,
+      color: CHECKIN_SLICE_COLORS.checked
+    },
+    {
+      key: "open",
+      name: "Ej incheckade",
+      count: notCheckedIn,
+      percent: Number(checkIn?.notCheckedPercent) || 0,
+      color: CHECKIN_SLICE_COLORS.open
+    }
+  ].filter((row) => row.count > 0);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const highlighted = slices[activeIndex] || slices[0] || null;
+
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [checkedIn, total]);
+
+  return (
+    <div className="ticket-checkin">
+      <h3 className="admin-subsection-title">Incheckning</h3>
+      {checkedIn <= 0 ? (
+        <p className="muted" style={{ marginTop: 0 }}>
+          Ingen incheckning har skett.
+        </p>
+      ) : (
+        <>
+          <p className="muted" style={{ marginTop: 0 }}>
+            {checkedIn.toLocaleString("sv-SE")} av {total.toLocaleString("sv-SE")} biljetter är incheckade (
+            {Number(checkIn?.checkedPercent) || 0}%).
+          </p>
+          <div className="ticket-donut">
+            <div className="ticket-donut-chart" aria-hidden="true">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart margin={{ top: 4, right: 4, bottom: 4, left: 4 }}>
+                  <Pie
+                    data={slices}
+                    dataKey="count"
+                    nameKey="name"
+                    cx="50%"
+                    cy="50%"
+                    innerRadius="68%"
+                    outerRadius="92%"
+                    paddingAngle={slices.length > 1 ? 3 : 0}
+                    startAngle={90}
+                    endAngle={-270}
+                    stroke="#ffffff"
+                    strokeWidth={3}
+                    cornerRadius={slices.length > 1 ? 4 : 0}
+                    style={{ cursor: "pointer", outline: "none" }}
+                    onMouseEnter={(_, index) => setActiveIndex(index)}
+                  >
+                    {slices.map((row, index) => (
+                      <Cell
+                        key={row.key}
+                        fill={row.color}
+                        fillOpacity={index === activeIndex ? 1 : 0.88}
+                      />
+                    ))}
+                  </Pie>
+                </PieChart>
+              </ResponsiveContainer>
+              {highlighted ? (
+                <div className="ticket-donut-center">
+                  <strong>{highlighted.percent}%</strong>
+                  <span>{highlighted.name}</span>
+                </div>
+              ) : null}
+            </div>
+            <ul className="ticket-donut-legend">
+              {slices.map((row, index) => (
+                <li key={row.key}>
+                  <button
+                    type="button"
+                    className={`ticket-donut-legend-item${index === activeIndex ? " is-active" : ""}`}
+                    onMouseEnter={() => setActiveIndex(index)}
+                    onFocus={() => setActiveIndex(index)}
+                    onClick={() => setActiveIndex(index)}
+                  >
+                    <span className="ticket-donut-legend-swatch" style={{ background: row.color }} />
+                    <span className="ticket-donut-legend-count">
+                      {row.count.toLocaleString("sv-SE")}
+                      <span className="ticket-checkin-of"> av {total.toLocaleString("sv-SE")}</span>
+                    </span>
+                    <span className="ticket-donut-legend-label">{row.name}</span>
+                    <span className="ticket-donut-legend-percent">{row.percent}%</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function TicketSalesDonut({ ticketSales, checkIn }) {
   const types = Array.isArray(ticketSales?.types) ? ticketSales.types : [];
   const total = Number(ticketSales?.total) || 0;
   const [activeIndex, setActiveIndex] = useState(0);
@@ -211,6 +322,7 @@ function TicketSalesDonut({ ticketSales }) {
           </ul>
         </div>
       )}
+      <CheckInChart checkIn={checkIn} />
     </div>
   );
 }
@@ -326,7 +438,7 @@ export function EventAnalytics({ apiBase, token, eventId, overview }) {
       {overview ? <EventOverviewStats {...overview} /> : null}
 
       {data ? (
-        <TicketSalesDonut ticketSales={data.ticketSales} />
+        <TicketSalesDonut ticketSales={data.ticketSales} checkIn={data.checkIn} />
       ) : loading ? (
         <div className="ticket-donut-section">
           <h2>Biljettstatistik</h2>
@@ -336,7 +448,7 @@ export function EventAnalytics({ apiBase, token, eventId, overview }) {
         </div>
       ) : null}
 
-      <h2>Besöksstatistik</h2>
+      <h2>Besöksstatistik på sidan</h2>
       <p className="muted" style={{ marginTop: 0 }}>
         Unika besökare räknas per webbläsare och dag. Uppdatering av sidan ökar sidvisningar men inte
         antalet unika besökare. Klicka på en dag i diagrammet för att se fördelning per timme. Historik

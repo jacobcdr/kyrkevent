@@ -911,9 +911,10 @@ const SUBSCRIPTION_PLAN_INFO = [
   {
     id: "premium",
     title: "Premium",
-    price: "1995 kr/år",
+    price: "0 kr (12 mån)",
+    priceNote: "Därefter 1995kr/år",
     description:
-      "Samma grundfunktioner som Bas. Betalas 1995 kr/år via onlinebetalning. Ytterligare premiumfunktioner kan tillkomma framöver."
+      "Samma grundfunktioner som Bas. Ytterligare premiumfunktioner kan tillkomma framöver."
   }
 ];
 
@@ -3099,6 +3100,10 @@ const AdminPage = () => {
   const [adminSubscriptionPaymentsLoading, setAdminSubscriptionPaymentsLoading] = useState(false);
   const [adminSubscriptionPaymentsPageSize, setAdminSubscriptionPaymentsPageSize] = useState(10);
   const [adminSubscriptionPaymentsPage, setAdminSubscriptionPaymentsPage] = useState(1);
+  const [premiumPriceYear, setPremiumPriceYear] = useState(null);
+  const [premiumPriceInput, setPremiumPriceInput] = useState("");
+  const [premiumPriceSaving, setPremiumPriceSaving] = useState(false);
+  const [premiumPriceMessage, setPremiumPriceMessage] = useState("");
   const [adminPayoutAnonymizeInProgressId, setAdminPayoutAnonymizeInProgressId] = useState(null);
   const [adminPartialCandidates, setAdminPartialCandidates] = useState([]);
   const [adminPartialCandidatesLoading, setAdminPartialCandidatesLoading] = useState(false);
@@ -3912,6 +3917,54 @@ const AdminPage = () => {
     }
   };
 
+  const loadPremiumPrice = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/premium-price`);
+      const data = await response.json();
+      if (!response.ok || !data.ok || !Number.isFinite(Number(data.priceYear))) return;
+      const price = Number(data.priceYear);
+      setPremiumPriceYear(price);
+      setPremiumPriceInput(String(price));
+    } catch {
+      // Priset kan fyllas i manuellt om det inte går att hämta.
+    }
+  };
+
+  const handleSavePremiumPrice = async (event) => {
+    event.preventDefault();
+    if (!token || premiumPriceSaving) return;
+    const normalized = String(premiumPriceInput).trim().replace(/\s/g, "").replace(",", ".");
+    const price = Number(normalized);
+    if (!Number.isFinite(price) || price < 0) {
+      setPremiumPriceMessage("Ange ett pris i kronor, 0 eller högre.");
+      return;
+    }
+    setPremiumPriceSaving(true);
+    setPremiumPriceMessage("");
+    try {
+      const response = await fetch(`${API_BASE}/admin/platform-settings/premium-price`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ priceYear: price })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error || "Kunde inte spara Premium-priset.");
+      }
+      const saved = Number(data.priceYear);
+      setPremiumPriceYear(saved);
+      setPremiumPriceInput(String(saved));
+      setPremiumPriceMessage("Priset sparades.");
+    } catch (err) {
+      setPremiumPriceMessage(err.message || "Kunde inte spara Premium-priset.");
+    } finally {
+      setPremiumPriceSaving(false);
+    }
+  };
+
   const loadAdminOrganizations = async () => {
     if (!token || !isAdminUser) return;
     setAdminOrganizationsLoading(true);
@@ -4254,11 +4307,16 @@ const AdminPage = () => {
       loadAdminPayments();
       loadAdminPayoutRequests();
       loadAdminSubscriptionPayments();
+      loadPremiumPrice();
       loadAdminPartialCandidates();
       loadAdminOrganizations();
       loadAdminEventLinks();
     }
   }, [token, isAdminUser, adminSection]);
+
+  useEffect(() => {
+    loadPremiumPrice();
+  }, []);
 
   useEffect(() => {
     if (token && isAdminUser && adminSection === "admin" && adminPanelTab === "start") {
@@ -4856,6 +4914,11 @@ const AdminPage = () => {
         }
       });
       const data = await response.json();
+      if (data.ok && data.activated) {
+        showToast("Premium är aktiverat.");
+        await loadProfile(token);
+        return;
+      }
       if (!data.ok || !data.checkoutUrl || !data.verifyToken) {
         const errMsg = data.error || "Kunde inte starta betalning.";
         setError(errMsg);
@@ -7498,8 +7561,11 @@ const AdminPage = () => {
               <div key={plan.id} className={`subscription-plan-info-block subscription-plan-info-block-${plan.id}`}>
                 <div className="subscription-plan-info-block-head">
                   <h4 className="subscription-plan-info-block-title">{plan.title}</h4>
-                  <span className={`subscription-plan-info-price subscription-plan-badge subscription-plan-badge-${plan.id}`}>
-                    {plan.price}
+                  <span className="subscription-plan-price-wrap">
+                    <span className={`subscription-plan-info-price subscription-plan-badge subscription-plan-badge-${plan.id}`}>
+                      {plan.price}
+                    </span>
+                    {plan.priceNote ? <span className="subscription-plan-price-note">{plan.priceNote}</span> : null}
                   </span>
                 </div>
                 <p className="subscription-plan-info-block-body">{plan.description}</p>
@@ -8876,6 +8942,33 @@ const AdminPage = () => {
               <p className="muted">Inga utbetalningsbegäran.</p>
             )}
             <h3 className="admin-subsection-title admin-subsection-title-spaced">Abonnemangsinbetalningar</h3>
+            <form className="admin-premium-price-form" onSubmit={handleSavePremiumPrice}>
+              <label className="field">
+                <span className="field-label">Pris för Premium (kr/år)</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  inputMode="decimal"
+                  value={premiumPriceInput}
+                  onChange={(e) => {
+                    setPremiumPriceInput(e.target.value);
+                    setPremiumPriceMessage("");
+                  }}
+                  required
+                />
+              </label>
+              <button type="submit" className="button" disabled={premiumPriceSaving}>
+                {premiumPriceSaving ? "Sparar…" : "Spara"}
+              </button>
+              {premiumPriceMessage ? (
+                <p className={premiumPriceMessage.includes("sparades") ? "admin-info-text" : "admin-error admin-error-inline"}>
+                  {premiumPriceMessage}
+                </p>
+              ) : (
+                <p className="muted">Gäller nya aktiveringar. 0 kr aktiverar Premium utan betalning.</p>
+              )}
+            </form>
             {adminSubscriptionPaymentsLoading ? (
               <p className="muted">Laddar...</p>
             ) : adminSubscriptionPayments.length > 0 ? (
@@ -10514,9 +10607,17 @@ const AdminPage = () => {
                       return (
                         <>
                           <p className="premium-confirm-text">
-                            När du aktiverar Premium betalar du 1995 kr/år via onlinebetalning. Abonnemanget gäller i ett år från aktiveringsdatum.
+                            {premiumPriceYear == null
+                              ? "Premium gäller i ett år från aktiveringsdatum."
+                              : Number(premiumPriceYear) <= 0
+                                ? "Premium kostar 0 kr (12 mån) från aktiveringsdatum. Därefter 1995kr/år."
+                                : `När du aktiverar Premium betalar du ${Number(premiumPriceYear).toLocaleString("sv-SE")} kr för ett år via onlinebetalning. Abonnemanget gäller i ett år från aktiveringsdatum.`}
                           </p>
-                          <p className="premium-confirm-question">Vill du gå vidare till betalning?</p>
+                          <p className="premium-confirm-question">
+                            {premiumPriceYear != null && Number(premiumPriceYear) <= 0
+                              ? "Vill du aktivera Premium?"
+                              : "Vill du gå vidare till betalning?"}
+                          </p>
                         </>
                       );
                     })()}
@@ -10619,7 +10720,7 @@ const AdminPage = () => {
                 referensen till betalningsleverantören).
               </li>
               <li>
-                <strong>Abonnemang</strong> – alla konton får Bas vid registrering med biljettpriser och onlinebetalning. Serviceavgift tas ut per beställning enligt pristrappan. Premium (1995 kr/år) kan köpas för utökad funktionalitet framöver.
+                <strong>Abonnemang</strong> – alla konton får Bas vid registrering med biljettpriser och onlinebetalning. Serviceavgift tas ut per beställning enligt pristrappan. Premium (0 kr i 12 mån, därefter 1995kr/år) kan köpas för utökad funktionalitet framöver.
               </li>
             </ul>
 
@@ -10675,7 +10776,7 @@ const AdminPage = () => {
                 <strong>Biljettpriser</strong> – med Bas (ingår vid registrering) kan du lägga till betalda biljetter direkt. Vid onlinebetalning tas en serviceavgift ut av deltagaren (se avsnitt 7).
               </li>
               <li>
-                <strong>Premium-abonnemang</strong> – valfritt tillägg (1995 kr/år) med samma grundfunktioner som Bas. Ytterligare premiumfunktioner kan tillkomma framöver.
+                <strong>Premium-abonnemang</strong> – valfritt tillägg, 0 kr (12 mån), därefter 1995kr/år, med samma grundfunktioner som Bas. Ytterligare premiumfunktioner kan tillkomma framöver.
               </li>
               <li>
                 <strong>Rabattkoder</strong> – rabattkoder är knutna till ett specifikt event. Samma kod (t.ex. EARLYBIRD) kan användas på

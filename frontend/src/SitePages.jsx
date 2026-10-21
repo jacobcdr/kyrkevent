@@ -92,10 +92,14 @@ export function LandingPricing({ compact = false }) {
               Anpassade deltagarlistor och vilka som har betalat
             </li>
           </ul>
-          <p className="landing-pricing-price">Gratis</p>
-          <a href="/admin?view=signup" className="landing-pricing-btn">
-            Kom igång
-          </a>
+          <div className="landing-pricing-footer">
+            <a href="/admin?view=signup" className="landing-pricing-btn">
+              Kom igång
+            </a>
+            <div className="landing-pricing-price-block">
+              <p className="landing-pricing-price">Gratis</p>
+            </div>
+          </div>
         </div>
 
         <div className="landing-pricing-card landing-pricing-card-premium">
@@ -164,10 +168,15 @@ export function LandingPricing({ compact = false }) {
               Möjlighet att checka in deltagare med QR-kod
             </li>
           </ul>
-          <p className="landing-pricing-price">1995 kr/år</p>
-          <a href="/admin?view=signup" className="landing-pricing-btn">
-            Kom igång
-          </a>
+          <div className="landing-pricing-footer">
+            <a href="/admin?view=signup" className="landing-pricing-btn">
+              Kom igång
+            </a>
+            <div className="landing-pricing-price-block">
+              <p className="landing-pricing-price">0 kr (12 mån)</p>
+              <p className="landing-pricing-price-note">Därefter 1995kr/år</p>
+            </div>
+          </div>
         </div>
       </div>
     </section>
