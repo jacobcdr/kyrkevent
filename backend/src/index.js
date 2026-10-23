@@ -2635,6 +2635,14 @@ app.post("/bookings", bookingLimiter, async (req, res) => {
       return;
     }
     parsed.payload = catalog.payload;
+    const priceAmount = Number(parsed.payload.priceAmount);
+    if (!Number.isFinite(priceAmount) || priceAmount > 0) {
+      res.status(400).json({
+        ok: false,
+        error: "Betalda biljetter måste betalas i kassan."
+      });
+      return;
+    }
     const ticketCapacity = await checkTicketCapacities(parsed.payload.eventId, [parsed.payload]);
     if (!ticketCapacity.ok) {
       res.status(400).json({ ok: false, error: ticketCapacity.error });
