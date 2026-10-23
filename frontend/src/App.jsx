@@ -2843,7 +2843,7 @@ const AdminPage = () => {
       return null;
     }
   }, [token]);
-  const isAdminUser = adminUsername === "admin";
+  const [isAdminUser, setIsAdminUser] = useState(false);
   const selectedEvent = events.find((item) => String(item.id) === String(selectedEventId));
   const [bookingColumnVisibility, setBookingColumnVisibility] = useState(() => ({
     ...DEFAULT_BOOKING_COLUMN_VISIBILITY
@@ -3536,6 +3536,7 @@ const AdminPage = () => {
     const profile = data.profile || {};
     const plan = normalizeSubscriptionPlan(profile.subscription_plan);
     setActiveSubscriptionPlan(plan);
+    setIsAdminUser(data.isSuperAdmin === true);
     setProfileForm({
       profileId: profile.profile_id || "",
       subscriptionPlan: plan,
@@ -3580,6 +3581,7 @@ const AdminPage = () => {
 
   useEffect(() => {
     if (!token) {
+      setIsAdminUser(false);
       setBookings([]);
       setPricesAdmin([]);
       setDiscounts([]);

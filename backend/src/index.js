@@ -4654,7 +4654,7 @@ app.get("/admin/profile", requireAdmin, async (req, res) => {
     out.subscription_plan = normalizeSubscriptionPlan(out.subscription_plan);
     if (out.vat_exempt == null) out.vat_exempt = false;
     if (out.bas_event_credits == null) out.bas_event_credits = 0;
-    res.json({ ok: true, profile: out });
+    res.json({ ok: true, profile: out, isSuperAdmin: await userIsSuperAdmin(req.userId) });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to load profile" });
   }
@@ -5719,11 +5719,15 @@ app.post("/admin/payout-request", requireAdmin, async (req, res) => {
   }
 });
 
+const userIsSuperAdmin = async (userId) => {
+  if (!userId) return false;
+  const result = await pool.query("SELECT is_superadmin FROM admin_users WHERE id = $1", [userId]);
+  return result.rows[0]?.is_superadmin === true;
+};
+
 const requireSuperAdmin = async (req, res, next) => {
   try {
-    const r = await pool.query("SELECT username FROM admin_users WHERE id = $1", [req.userId]);
-    const username = (r.rows[0]?.username || "").toLowerCase();
-    if (username !== "admin") {
+    if (!(await userIsSuperAdmin(req.userId))) {
       res.status(403).json({ ok: false, error: "Access denied" });
       return;
     }
@@ -7533,12 +7537,8 @@ app.get("/admin/payout-disbursements/:id/receipt.pdf", requireAdmin, async (req,
     if (!row) {
       return res.status(404).json({ ok: false, error: "Delutbetalningskvitto hittades inte." });
     }
-    if (row.user_id !== req.userId) {
-      const adminRow = await pool.query("SELECT username FROM admin_users WHERE id = $1", [req.userId]);
-      const username = (adminRow.rows[0]?.username || "").toLowerCase();
-      if (username !== "admin") {
-        return res.status(403).json({ ok: false, error: "Du har inte behörighet att hämta detta kvitto." });
-      }
+    if (row.user_id !== req.userId && !(await userIsSuperAdmin(req.userId))) {
+      return res.status(403).json({ ok: false, error: "Du har inte behörighet att hämta detta kvitto." });
     }
     const [profileResult, bookingCountResult, disbursedMap] = await Promise.all([
       pool.query(
@@ -7709,12 +7709,8 @@ app.get("/admin/payout-requests/:id/receipt.pdf", requireAdmin, async (req, res)
       return res.status(404).json({ ok: false, error: "Kvitto hittades inte eller utbetalingen är inte betald." });
     }
     const ownerId = row.user_id;
-    if (ownerId !== req.userId) {
-      const adminRow = await pool.query("SELECT username FROM admin_users WHERE id = $1", [req.userId]);
-      const username = (adminRow.rows[0]?.username || "").toLowerCase();
-      if (username !== "admin") {
-        return res.status(403).json({ ok: false, error: "Du har inte behörighet att hämta detta kvitto." });
-      }
+    if (ownerId !== req.userId && !(await userIsSuperAdmin(req.userId))) {
+      return res.status(403).json({ ok: false, error: "Du har inte behörighet att hämta detta kvitto." });
     }
     const eventIds = Array.isArray(row.event_ids) ? row.event_ids : [];
     const [profileResult, bookingCountResult, eventDatesResult, partialRowsResult] = await Promise.all([
@@ -8316,8 +8312,8 @@ app.post("/admin/events", requireAdmin, async (req, res) => {
     }
 
     const eventResult = await client.query(
-      "INSERT INTO events (slug, name, user_id, event_start_date, event_end_date, vat_rate_percent) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, slug, name, theme, event_start_date, event_end_date, registration_deadline, max_participants, confirmation_note, vat_rate_percent, created_at",
-      [finalSlug, String(name).trim(), req.userId, eventStartDate, eventEndDate, vatRatePercent]
+      "INSERT INTO events (slug, name, user_id, theme, event_start_date, event_end_date, vat_rate_percent) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, slug, name, theme, event_start_date, event_end_date, registration_deadline, max_participants, confirmation_note, vat_rate_percent, created_at",
+      [finalSlug, String(name).trim(), req.userId, "zinc", eventStartDate, eventEndDate, vatRatePercent]
     );
     const newEvent = eventResult.rows[0];
 
@@ -10815,8 +10811,7 @@ app.get("/admin/event-activity-log", requireAdmin, async (req, res) => {
     const organizationFilter = String(req.query.organization || "").trim();
     const filterEventId = normalizeEventId(req.query.eventId);
 
-    const adminRow = await pool.query("SELECT username FROM admin_users WHERE id = $1", [req.userId]);
-    const isSuperAdmin = (adminRow.rows[0]?.username || "").toLowerCase() === "admin";
+    const isSuperAdmin = await userIsSuperAdmin(req.userId);
 
     const dateWhere = `(l.created_at AT TIME ZONE '${ANALYTICS_TZ}')::date >= $1::date AND (l.created_at AT TIME ZONE '${ANALYTICS_TZ}')::date <= $2::date`;
     const params = [range.from, range.to];
@@ -11013,6 +11008,34 @@ const ensureBookingsTable = async () => {
       ADD COLUMN IF NOT EXISTS reset_password_token TEXT,
       ADD COLUMN IF NOT EXISTS reset_password_expires_at TIMESTAMPTZ
   `);
+  const migration = await pool.connect();
+  try {
+    await migration.query("BEGIN");
+    const superAdminColumn = await migration.query(
+      `
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'admin_users'
+          AND column_name = 'is_superadmin'
+      `
+    );
+    await migration.query(`
+      ALTER TABLE admin_users
+        ADD COLUMN IF NOT EXISTS is_superadmin BOOLEAN NOT NULL DEFAULT FALSE
+    `);
+    if (superAdminColumn.rowCount === 0) {
+      await migration.query(
+        "UPDATE admin_users SET is_superadmin = TRUE WHERE LOWER(username) = 'admin'"
+      );
+    }
+    await migration.query("COMMIT");
+  } catch (error) {
+    await migration.query("ROLLBACK");
+    throw error;
+  } finally {
+    migration.release();
+  }
   await pool.query(`
     CREATE TABLE IF NOT EXISTS admin_trusted_devices (
       id SERIAL PRIMARY KEY,
@@ -11127,6 +11150,7 @@ const ensureBookingsTable = async () => {
       ADD COLUMN IF NOT EXISTS vat_rate_percent INTEGER NOT NULL DEFAULT 25,
       ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   `);
+  await pool.query(`ALTER TABLE events ALTER COLUMN theme SET DEFAULT 'zinc'`);
   const defaultEventResult = await pool.query(
     `
       INSERT INTO events (slug, name)
