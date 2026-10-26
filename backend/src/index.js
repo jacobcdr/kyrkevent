@@ -1047,17 +1047,17 @@ const ensureEventOwnership = async (eventId, userId, res) => {
 };
 
 const defaultSectionVisibility = {
-  showProgram: true,
-  showPlace: true,
+  showProgram: false,
+  showPlace: false,
   showText: true,
-  showSpeakers: true,
-  showPartners: true,
+  showSpeakers: false,
+  showPartners: false,
   showName: true,
   showEmail: true,
   showPhone: true,
   showCity: true,
-  showOrganization: true,
-  showTranslate: true,
+  showOrganization: false,
+  showTranslate: false,
   showDiscountCode: true,
   sectionLabelProgram: "",
   sectionLabelSpeakers: "",
@@ -1213,14 +1213,24 @@ function parseSectionOrder(raw) {
 const DEFAULT_FORM_FIELD_ORDER = ["name", "email", "city", "phone", "organization", "custom", "discountCode"];
 const VALID_FORM_FIELD_BASE_KEYS = new Set(["name", "email", "city", "phone", "organization", "discountCode"]);
 
+function parseCustomOrderToken(key) {
+  const match = /^custom:(\d+)(@2)?$/.exec(String(key || "").trim());
+  if (!match) return null;
+  return {
+    id: Number(match[1]),
+    beside: match[2] === "@2",
+    key: `custom:${match[1]}${match[2] ? "@2" : ""}`
+  };
+}
+
 function parseFormFieldOrder(raw, customFieldIds = []) {
-  const customKeys = customFieldIds.map((id) => `custom:${id}`);
+  const customIds = customFieldIds.map((id) => Number(id)).filter(Number.isFinite);
+  const customIdSet = new Set(customIds);
   const normalize = (k) => String(k || "").trim();
   const onlyValid = (key) => {
     if (VALID_FORM_FIELD_BASE_KEYS.has(key)) return true;
     if (key === "custom") return true;
-    if (key.startsWith("custom:")) return true;
-    return false;
+    return parseCustomOrderToken(key) !== null;
   };
 
   let arr;
@@ -1238,37 +1248,58 @@ function parseFormFieldOrder(raw, customFieldIds = []) {
   const expanded = [];
   filtered.forEach((k) => {
     if (k === "custom") {
-      expanded.push(...customKeys);
+      customIds.forEach((id) => expanded.push(`custom:${id}`));
     } else {
-      expanded.push(k);
+      const token = parseCustomOrderToken(k);
+      expanded.push(token ? token.key : k);
     }
   });
 
   // Ensure all base keys exist (keep relative order of expanded)
-  const present = new Set(expanded);
+  const presentBase = new Set(expanded.filter((k) => VALID_FORM_FIELD_BASE_KEYS.has(k)));
+  const presentCustom = new Set(
+    expanded.map((k) => parseCustomOrderToken(k)?.id).filter((id) => Number.isFinite(id))
+  );
   const withMissingBase = [...expanded];
   baseDefault.forEach((k) => {
     if (k === "custom") return;
-    if (!present.has(k)) {
+    if (!presentBase.has(k)) {
       withMissingBase.push(k);
-      present.add(k);
+      presentBase.add(k);
     }
   });
 
   // Ensure all custom fields exist
-  customKeys.forEach((k) => {
-    if (!present.has(k)) {
-      withMissingBase.push(k);
-      present.add(k);
+  customIds.forEach((id) => {
+    if (!presentCustom.has(id)) {
+      withMissingBase.push(`custom:${id}`);
+      presentCustom.add(id);
     }
   });
 
-  // Drop custom:* ids that no longer exist
-  const customSet = new Set(customKeys);
-  return withMissingBase.filter((k) => {
-    if (k.startsWith("custom:")) return customSet.has(k);
-    return true;
+  // Drop custom ids that no longer exist, and keep at most one token per field.
+  // @2 means the field sits in the right column of the previous custom field.
+  const seenCustom = new Set();
+  const normalized = [];
+  let openHalf = false;
+  withMissingBase.forEach((k) => {
+    if (VALID_FORM_FIELD_BASE_KEYS.has(k)) {
+      normalized.push(k);
+      openHalf = false;
+      return;
+    }
+    const token = parseCustomOrderToken(k);
+    if (!token || !customIdSet.has(token.id) || seenCustom.has(token.id)) return;
+    seenCustom.add(token.id);
+    if (token.beside && openHalf) {
+      normalized.push(`custom:${token.id}@2`);
+      openHalf = false;
+      return;
+    }
+    normalized.push(`custom:${token.id}`);
+    openHalf = true;
   });
+  return normalized;
 }
 
 const normalizeCustomFieldType = (value) => {
@@ -1282,10 +1313,7 @@ const normalizeCustomFieldType = (value) => {
 
 const isCustomFieldVisibleOnForm = (field) => {
   if (!field) return false;
-  if (field.field_type === "checkbox") {
-    return field.is_visible !== false;
-  }
-  return true;
+  return field.is_visible !== false;
 };
 
 const formatProfileAddress = (profile) => {
@@ -8162,8 +8190,7 @@ app.patch("/admin/form-fields/order", requireAdmin, async (req, res) => {
 
     // Also update custom field positions to match their relative order
     const orderedCustomIds = normalizedOrder
-      .filter((k) => String(k).startsWith("custom:"))
-      .map((k) => Number(String(k).slice("custom:".length)))
+      .map((k) => parseCustomOrderToken(k)?.id)
       .filter(Number.isFinite);
     if (orderedCustomIds.length > 0) {
       await pool.query(
@@ -8189,7 +8216,7 @@ app.patch("/admin/form-fields/order", requireAdmin, async (req, res) => {
 
 app.patch("/admin/custom-fields/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { visible } = req.body || {};
+  const { visible, label, required } = req.body || {};
   const eventId = await ensureEventOwnership(req.body?.eventId ?? req.query.eventId, req.userId, res);
   if (!eventId) {
     return;
@@ -8208,18 +8235,36 @@ app.patch("/admin/custom-fields/:id", requireAdmin, async (req, res) => {
       res.status(404).json({ ok: false, error: "Field not found" });
       return;
     }
-    if (existing.rows[0].field_type !== "checkbox") {
-      res.status(400).json({ ok: false, error: "Visibility can only be changed for checkbox fields" });
+    const current = existing.rows[0];
+    const isLinebreak = current.field_type === "linebreak";
+    const nextLabel = isLinebreak || label === undefined ? null : String(label).trim();
+    if (!isLinebreak && label !== undefined && !nextLabel) {
+      res.status(400).json({ ok: false, error: "Ange ett namn för fältet." });
+      return;
+    }
+    const cannotRequire = current.field_type === "paragraph" || current.field_type === "linebreak";
+    const nextRequired =
+      required === undefined ? null : cannotRequire ? false : required === true;
+    if (nextLabel === null && visible === undefined && required === undefined) {
+      res.status(400).json({ ok: false, error: "Nothing to update" });
       return;
     }
     const result = await pool.query(
       `
         UPDATE event_custom_fields
-        SET is_visible = $3
+        SET label = COALESCE($3, label),
+            is_visible = COALESCE($4, is_visible),
+            is_required = COALESCE($5, is_required)
         WHERE id = $1 AND event_id = $2
         RETURNING id, label, field_type, is_required, is_visible
       `,
-      [fieldId, eventId, visible === true]
+      [
+        fieldId,
+        eventId,
+        nextLabel,
+        visible === undefined ? null : visible === true,
+        nextRequired
+      ]
     );
     res.json({ ok: true, field: result.rows[0] });
   } catch (error) {
@@ -8323,7 +8368,7 @@ app.post("/admin/events", requireAdmin, async (req, res) => {
           (event_id, show_program, show_place, show_text, show_speakers, show_partners,
            show_name, show_email, show_phone, show_organization, show_translate, show_discount_code, show_faq)
         VALUES
-          ($1, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, FALSE)
+          ($1, FALSE, FALSE, TRUE, FALSE, FALSE, TRUE, TRUE, TRUE, FALSE, FALSE, TRUE, FALSE)
         ON CONFLICT (event_id) DO NOTHING
       `,
       [newEvent.id]

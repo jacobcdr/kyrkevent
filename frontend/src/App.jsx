@@ -775,6 +775,175 @@ function HeroBannerMiniPreview({
   );
 }
 
+const FORM_FIELD_TYPES = [
+  { id: "text", label: "Liten textbox" },
+  { id: "textarea", label: "Större textbox" },
+  { id: "checkbox", label: "Checkbox" },
+  { id: "paragraph", label: "Informations text" },
+  { id: "linebreak", label: "Radbrytning" }
+];
+
+const formFieldTypeLabel = (type) =>
+  FORM_FIELD_TYPES.find((item) => item.id === type)?.label || "Liten textbox";
+
+const isCustomFieldFullWidth = (field) =>
+  field?.field_type === "paragraph" || field?.field_type === "linebreak";
+
+const customOrderId = (key) => {
+  const match = /^custom:(\d+)/.exec(String(key || ""));
+  return match ? match[1] : "";
+};
+
+const buildCustomFieldRows = (order, fields) => {
+  const byId = new Map((Array.isArray(fields) ? fields : []).map((field) => [String(field.id), field]));
+  const tokens = [];
+  const seen = new Set();
+  (Array.isArray(order) ? order : []).forEach((raw) => {
+    const match = /^custom:(\d+)(@2)?$/.exec(String(raw || "").trim());
+    if (!match || seen.has(match[1]) || !byId.has(match[1])) return;
+    seen.add(match[1]);
+    tokens.push({ id: match[1], beside: match[2] === "@2", field: byId.get(match[1]) });
+  });
+  byId.forEach((field, id) => {
+    if (!seen.has(id)) tokens.push({ id, beside: false, field });
+  });
+  const rows = [];
+  tokens.forEach((token) => {
+    const full = isCustomFieldFullWidth(token.field);
+    const prev = rows[rows.length - 1];
+    if (!full && token.beside && prev && !prev.full && prev.slots.length === 1) {
+      prev.slots.push(token);
+      return;
+    }
+    rows.push({ full, slots: [token] });
+  });
+  return rows;
+};
+
+const serializeFormFieldOrder = (rows) => {
+  const custom = [];
+  (Array.isArray(rows) ? rows : []).forEach((row) => {
+    row.slots.forEach((slot, index) => {
+      custom.push(!row.full && index === 1 ? `custom:${slot.id}@2` : `custom:${slot.id}`);
+    });
+  });
+  return ["name", "email", "city", "phone", "organization", "discountCode", ...custom];
+};
+
+const placeCustomField = (rows, dragId, targetId, position) => {
+  const draggedId = String(dragId || "");
+  const target = String(targetId || "");
+  if (!draggedId || !target || draggedId === target) return rows;
+  let dragged = null;
+  const stripped = (Array.isArray(rows) ? rows : [])
+    .map((row) => ({
+      full: row.full,
+      slots: row.slots.filter((slot) => {
+        if (String(slot.id) === draggedId) {
+          dragged = slot;
+          return false;
+        }
+        return true;
+      })
+    }))
+    .filter((row) => row.slots.length > 0);
+  if (!dragged) return rows;
+  const ownRow = { full: isCustomFieldFullWidth(dragged.field), slots: [dragged] };
+  const targetIndex = stripped.findIndex((row) => row.slots.some((slot) => String(slot.id) === target));
+  if (targetIndex < 0) {
+    stripped.push(ownRow);
+    return stripped;
+  }
+  const targetRow = stripped[targetIndex];
+  const canBeside =
+    !ownRow.full && !targetRow.full && (position === "left" || position === "right");
+  if (!canBeside) {
+    stripped.splice(position === "below" ? targetIndex + 1 : targetIndex, 0, ownRow);
+    return stripped;
+  }
+  if (targetRow.slots.length >= 2) {
+    const stay = position === "left" ? targetRow.slots[1] : targetRow.slots[0];
+    const displaced = position === "left" ? targetRow.slots[0] : targetRow.slots[1];
+    targetRow.slots = position === "left" ? [dragged, stay] : [stay, dragged];
+    targetRow.full = false;
+    stripped.splice(targetIndex + 1, 0, {
+      full: isCustomFieldFullWidth(displaced.field),
+      slots: [displaced]
+    });
+    return stripped;
+  }
+  targetRow.slots = position === "left" ? [dragged, ...targetRow.slots] : [...targetRow.slots, dragged];
+  targetRow.full = false;
+  return stripped;
+};
+
+const customFieldDropPosition = (event, row, dragField) => {
+  const rect = event.currentTarget.getBoundingClientRect();
+  const relX = (event.clientX - rect.left) / Math.max(rect.width, 1);
+  const relY = (event.clientY - rect.top) / Math.max(rect.height, 1);
+  const canBeside = !isCustomFieldFullWidth(dragField) && !row.full;
+  if (!canBeside) return relY < 0.5 ? "above" : "below";
+  if (row.slots.length < 2) {
+    if (relX >= 0.5) return "right";
+    if (relY < 0.28) return "above";
+    if (relY > 0.72) return "below";
+    return relY < 0.5 ? "above" : "below";
+  }
+  if (relY < 0.24) return "above";
+  if (relY > 0.76) return "below";
+  if (relX < 0.27) return "left";
+  if (relX > 0.73) return "right";
+  return relY < 0.5 ? "above" : "below";
+};
+
+function FormFieldTypeIcon({ type }) {
+  const common = {
+    width: 28,
+    height: 28,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 1.8,
+    "aria-hidden": true
+  };
+  if (type === "textarea") {
+    return (
+      <svg {...common}>
+        <rect x="4" y="4" width="16" height="16" rx="2" />
+        <path d="M7 8h10M7 12h10M7 16h6" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  if (type === "checkbox") {
+    return (
+      <svg {...common}>
+        <rect x="4" y="4" width="16" height="16" rx="3" />
+        <path d="M8 12.5l2.5 2.5L16 9" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+  if (type === "paragraph") {
+    return (
+      <svg {...common}>
+        <path d="M6 6h12M6 10h12M6 14h12M6 18h8" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  if (type === "linebreak") {
+    return (
+      <svg {...common}>
+        <path d="M4 12h16" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  return (
+    <svg {...common}>
+      <path d="M6 7h12M6 12h8" strokeLinecap="round" />
+      <rect x="4" y="15" width="16" height="4" rx="1" />
+    </svg>
+  );
+}
+
 const FRONTPAGE_EDITOR_TABS = [
   { id: "order", label: "Sektionsordning" },
   { id: "text", label: "Eventbeskrivning" },
@@ -3002,9 +3171,14 @@ const AdminPage = () => {
   }, []);
   const [customFieldForm, setCustomFieldForm] = useState({
     label: "",
-    fieldType: "text",
+    fieldType: "",
     required: false
   });
+  const [editingCustomFieldId, setEditingCustomFieldId] = useState(null);
+  const [editingCustomFieldLabel, setEditingCustomFieldLabel] = useState("");
+  const [editingCustomFieldVisible, setEditingCustomFieldVisible] = useState(true);
+  const [editingCustomFieldRequired, setEditingCustomFieldRequired] = useState(false);
+  const [customFieldPendingDelete, setCustomFieldPendingDelete] = useState(null);
   const [customFieldsAdmin, setCustomFieldsAdmin] = useState([]);
   useEffect(() => {
     setBookingCustomFieldVisibility((prev) => {
@@ -6103,14 +6277,23 @@ const AdminPage = () => {
 
   const handleCustomFieldFormChange = (event) => {
     const { name, value, type, checked } = event.target;
+    setCustomFieldForm((prev) => ({
+      ...prev,
+      [name]: type === "checkbox" ? checked : value
+    }));
+  };
+
+  const selectCustomFieldType = (fieldType) => {
     setCustomFieldForm((prev) => {
-      const nextValue = type === "checkbox" ? checked : value;
-      const next = { ...prev, [name]: nextValue };
-      if (name === "fieldType" && (String(value) === "paragraph" || String(value) === "linebreak")) {
-        next.required = false;
-      }
-      if (name === "fieldType" && String(value) === "linebreak") {
+      const next = { ...prev, fieldType };
+      if (fieldType === "linebreak") {
         next.label = "Radbrytning";
+        next.required = false;
+      } else if (prev.fieldType === "linebreak") {
+        next.label = "";
+      }
+      if (fieldType === "paragraph") {
+        next.required = false;
       }
       return next;
     });
@@ -6122,7 +6305,15 @@ const AdminPage = () => {
       setError("Välj ett event först.");
       return;
     }
-    if (!customFieldForm.label.trim()) {
+    if (!customFieldForm.fieldType) {
+      setError("Välj vilken typ av fält du vill lägga till.");
+      return;
+    }
+    const label =
+      customFieldForm.fieldType === "linebreak" && !customFieldForm.label.trim()
+        ? "Radbrytning"
+        : customFieldForm.label.trim();
+    if (!label) {
       setError("Ange ett namn för fältet.");
       return;
     }
@@ -6136,7 +6327,7 @@ const AdminPage = () => {
         },
         body: JSON.stringify({
           eventId: Number(selectedEventId),
-          label: customFieldForm.label.trim(),
+          label,
           fieldType: customFieldForm.fieldType,
           required:
             customFieldForm.fieldType === "paragraph" || customFieldForm.fieldType === "linebreak"
@@ -6147,7 +6338,7 @@ const AdminPage = () => {
       if (!response.ok) {
         throw new Error("Custom field save failed");
       }
-      setCustomFieldForm({ label: "", fieldType: "text", required: false });
+      setCustomFieldForm({ label: "", fieldType: "", required: false });
       await loadAdminCustomFields(token, selectedEventId);
     };
     saveField().catch(() => setError("Kunde inte spara fältet."));
@@ -6166,35 +6357,50 @@ const AdminPage = () => {
   );
 
   const [draggingFormItemKey, setDraggingFormItemKey] = useState(null);
+  const [formDropPlace, setFormDropPlace] = useState(null);
+  const formDragGhostRef = useRef(null);
+
+  const clearFormDragGhost = () => {
+    formDragGhostRef.current?.remove();
+    formDragGhostRef.current = null;
+  };
+
+  const beginFormFieldDrag = (event, itemKey) => {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", String(itemKey));
+    setDraggingFormItemKey(itemKey);
+    setFormDropPlace(null);
+    clearFormDragGhost();
+    const card = event.currentTarget;
+    const ghost = card.cloneNode(true);
+    ghost.classList.add("form-preview-ghost");
+    ghost.style.width = `${card.offsetWidth}px`;
+    document.body.appendChild(ghost);
+    formDragGhostRef.current = ghost;
+    const rect = card.getBoundingClientRect();
+    event.dataTransfer.setDragImage(
+      ghost,
+      Math.max(0, event.clientX - rect.left),
+      Math.max(0, event.clientY - rect.top)
+    );
+  };
+
+  const endFormFieldDrag = () => {
+    setDraggingFormItemKey(null);
+    setFormDropPlace(null);
+    clearFormDragGhost();
+  };
 
   const getMergedFormFieldOrder = (rawOrder) => {
     const baseKeys = BASE_FORM_ITEMS.map((b) => b.key);
-    const customKeys = customFieldsAdmin.map((f) => `custom:${f.id}`);
-    const normalize = (v) => String(v || "").trim();
-    const isValid = (k) =>
-      baseKeys.includes(k) || k.startsWith("custom:") || k === "custom";
-    const initial = Array.isArray(rawOrder) && rawOrder.length > 0 ? rawOrder.map(normalize) : [];
-    const filtered = initial.filter(isValid);
-    const expanded = [];
-    filtered.forEach((k) => {
-      if (k === "custom") expanded.push(...customKeys);
-      else expanded.push(k);
+    const rows = buildCustomFieldRows(rawOrder, customFieldsAdmin);
+    const customKeys = [];
+    rows.forEach((row) => {
+      row.slots.forEach((slot, index) => {
+        customKeys.push(!row.full && index === 1 ? `custom:${slot.id}@2` : `custom:${slot.id}`);
+      });
     });
-    const present = new Set(expanded);
-    baseKeys.forEach((k) => {
-      if (!present.has(k)) {
-        expanded.push(k);
-        present.add(k);
-      }
-    });
-    customKeys.forEach((k) => {
-      if (!present.has(k)) {
-        expanded.push(k);
-        present.add(k);
-      }
-    });
-    const customSet = new Set(customKeys);
-    return expanded.filter((k) => (k.startsWith("custom:") ? customSet.has(k) : true));
+    return [...baseKeys, ...customKeys];
   };
 
   const adminMergedFormFieldOrder = useMemo(
@@ -6227,18 +6433,29 @@ const AdminPage = () => {
     await loadAdminCustomFields(token, selectedEventId);
   };
 
-  const moveFormFieldItem = (fromKey, toKey) => {
-    const order = [...adminMergedFormFieldOrder];
-    const fromIndex = order.findIndex((k) => String(k) === String(fromKey));
-    const toIndex = order.findIndex((k) => String(k) === String(toKey));
-    if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return;
-    const next = [...order];
-    const [moved] = next.splice(fromIndex, 1);
-    next.splice(toIndex, 0, moved);
+  const saveCustomFieldRows = (rows) => {
+    const next = serializeFormFieldOrder(rows);
     setAdminFormFieldOrder(next);
     persistFormFieldOrder(next).catch(() => {
       setError("Kunde inte spara ordningen för formulärfälten.");
     });
+  };
+
+  const moveCustomFormField = (itemKey, direction) => {
+    const id = customOrderId(itemKey);
+    const rows = buildCustomFieldRows(adminFormFieldOrder, customFieldsAdmin);
+    const flat = rows.flatMap((row) => row.slots);
+    const index = flat.findIndex((slot) => String(slot.id) === id);
+    const neighbor = flat[direction === "up" ? index - 1 : index + 1];
+    if (index < 0 || !neighbor) return;
+    saveCustomFieldRows(placeCustomField(rows, id, neighbor.id, direction === "up" ? "above" : "below"));
+  };
+
+  const applyCustomFieldDrop = (targetId, position) => {
+    const dragId = customOrderId(draggingFormItemKey);
+    if (!dragId || !targetId) return;
+    const rows = buildCustomFieldRows(adminFormFieldOrder, customFieldsAdmin);
+    saveCustomFieldRows(placeCustomField(rows, dragId, targetId, position));
   };
 
   const handleCustomFieldDelete = (field) => {
@@ -6246,9 +6463,12 @@ const AdminPage = () => {
       setError("Välj ett event först.");
       return;
     }
-    if (!window.confirm(`Ta bort fältet "${field.label}"?`)) {
-      return;
-    }
+    setCustomFieldPendingDelete(field);
+  };
+
+  const confirmCustomFieldDelete = () => {
+    const field = customFieldPendingDelete;
+    if (!field || !token || !selectedEventId) return;
     const removeField = async () => {
       const response = await fetch(
         `${API_BASE}/admin/custom-fields/${field.id}?eventId=${selectedEventId}`,
@@ -6260,26 +6480,50 @@ const AdminPage = () => {
       if (!response.ok) {
         throw new Error("Custom field delete failed");
       }
+      if (String(editingCustomFieldId) === String(field.id)) {
+        cancelCustomFieldEdit();
+      }
+      setCustomFieldPendingDelete(null);
       await loadAdminCustomFields(token, selectedEventId);
     };
-    removeField().catch(() => setError("Kunde inte ta bort fältet."));
+    removeField().catch(() => {
+      setCustomFieldPendingDelete(null);
+      setError("Kunde inte ta bort fältet.");
+    });
   };
 
-  const handleCustomFieldVisibilityChange = (field, visible) => {
+  const startCustomFieldEdit = (field) => {
+    setEditingCustomFieldId(field.id);
+    setEditingCustomFieldLabel(field.label || "");
+    setEditingCustomFieldVisible(field.is_visible !== false);
+    setEditingCustomFieldRequired(
+      field.field_type === "paragraph" || field.field_type === "linebreak" ? false : field.is_required === true
+    );
+    setError("");
+  };
+
+  const cancelCustomFieldEdit = () => {
+    setEditingCustomFieldId(null);
+    setEditingCustomFieldLabel("");
+    setEditingCustomFieldVisible(true);
+    setEditingCustomFieldRequired(false);
+  };
+
+  const saveCustomFieldLabel = (field) => {
     if (!token || !selectedEventId) {
       setError("Välj ett event först.");
       return;
     }
-    if (field?.field_type !== "checkbox") {
+    const label =
+      field.field_type === "linebreak"
+        ? String(field.label || "Radbrytning").trim() || "Radbrytning"
+        : editingCustomFieldLabel.trim();
+    if (!label) {
+      setError("Ange ett namn för fältet.");
       return;
     }
-    const previous = customFieldsAdmin;
-    setCustomFieldsAdmin((prev) =>
-      prev.map((item) =>
-        String(item.id) === String(field.id) ? { ...item, is_visible: visible } : item
-      )
-    );
-    const persist = async () => {
+    setError("");
+    const save = async () => {
       const response = await fetch(`${API_BASE}/admin/custom-fields/${field.id}`, {
         method: "PATCH",
         headers: {
@@ -6288,25 +6532,28 @@ const AdminPage = () => {
         },
         body: JSON.stringify({
           eventId: Number(selectedEventId),
-          visible
+          label,
+          visible: editingCustomFieldVisible,
+          required:
+            field.field_type === "paragraph" || field.field_type === "linebreak"
+              ? false
+              : editingCustomFieldRequired
         })
       });
       if (!response.ok) {
-        throw new Error("Custom field visibility failed");
+        throw new Error("Custom field rename failed");
       }
       const data = await response.json().catch(() => ({}));
       if (data.field) {
         setCustomFieldsAdmin((prev) =>
-          prev.map((item) =>
-            String(item.id) === String(data.field.id) ? data.field : item
-          )
+          prev.map((item) => (String(item.id) === String(data.field.id) ? data.field : item))
         );
+      } else {
+        await loadAdminCustomFields(token, selectedEventId);
       }
+      cancelCustomFieldEdit();
     };
-    persist().catch(() => {
-      setCustomFieldsAdmin(previous);
-      setError("Kunde inte spara visning för fältet.");
-    });
+    save().catch(() => setError("Kunde inte spara fältet."));
   };
 
   const handleSpeakerChange = (event) => {
@@ -7538,6 +7785,35 @@ const AdminPage = () => {
               </button>
               <button type="button" className="button button-danger" onClick={confirmEventDelete} disabled={eventDeleteLoading}>
                 {eventDeleteLoading ? "Tar bort…" : "Ta bort"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {customFieldPendingDelete ? (
+        <div
+          className="toaster-overlay"
+          onClick={() => setCustomFieldPendingDelete(null)}
+          aria-hidden="false"
+        >
+          <div
+            className="toaster toaster-confirm"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-labelledby="toaster-field-delete-title"
+            aria-modal="true"
+          >
+            <h3 id="toaster-field-delete-title" className="toaster-title">Ta bort fält</h3>
+            <p className="toaster-message">
+              Vill du ta bort fältet &quot;{customFieldPendingDelete.label || "fält"}&quot;?
+            </p>
+            <div className="toaster-actions">
+              <button type="button" className="button button-outline" onClick={() => setCustomFieldPendingDelete(null)}>
+                Nej
+              </button>
+              <button type="button" className="button button-danger" onClick={confirmCustomFieldDelete}>
+                Ja
               </button>
             </div>
           </div>
@@ -13878,9 +14154,37 @@ const AdminPage = () => {
               <div className="section">
                 <h2>Formulärfält</h2>
                 <p className="muted" style={{ marginTop: 0 }}>
-                  Här kan du slå på/av standardfält (namn, e-post m.m.) och hantera egna fält.
-                  För checkbox kan du välja att visa eller dölja fältet utan att ta bort det.
+                  Standardfälten ligger fast och kan bara stängas av. Namn och e-post visas alltid.
+                  Egna fält lägger du till nedan och sorterar genom att dra dem i förhandsvisningen.
                 </p>
+                <h3 className="form-fields-subtitle">Standardfält</h3>
+                <div className="standard-field-list">
+                  {BASE_FORM_ITEMS.map((item) => (
+                    <div className="standard-field-row" key={item.key}>
+                      <span>{item.label}</span>
+                      {item.canHide === false ? (
+                        <span className="muted">Alltid på</span>
+                      ) : (
+                        <label className="standard-field-toggle">
+                          <input
+                            type="checkbox"
+                            checked={adminSectionVisibility[item.visibilityKey] !== false}
+                            onChange={(e) =>
+                              handleSectionVisibilityChange({
+                                target: {
+                                  name: item.visibilityKey,
+                                  checked: e.target.checked
+                                }
+                              })
+                            }
+                          />
+                          <span>Visa</span>
+                        </label>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <h3 className="form-fields-subtitle">Lägg till fält</h3>
                 <form className="admin-form" onSubmit={handleCustomFieldSubmit}>
                   <label className="field">
                     <span className="field-label">Fältnamn</span>
@@ -13889,24 +14193,31 @@ const AdminPage = () => {
                       type="text"
                       value={customFieldForm.label}
                       onChange={handleCustomFieldFormChange}
-                      required
+                      required={customFieldForm.fieldType !== "linebreak"}
                       disabled={customFieldForm.fieldType === "linebreak"}
                     />
                   </label>
-                  <label className="field">
+                  <div className="field">
                     <span className="field-label">Typ</span>
-                    <select
-                      name="fieldType"
-                      value={customFieldForm.fieldType}
-                      onChange={handleCustomFieldFormChange}
-                    >
-                      <option value="text">Liten textbox</option>
-                      <option value="textarea">Större textbox</option>
-                      <option value="checkbox">Checkbox</option>
-                      <option value="paragraph">Informations text</option>
-                      <option value="linebreak">Radbrytning (ny rad)</option>
-                    </select>
-                  </label>
+                    <div className="form-type-picker" role="listbox" aria-label="Fälttyp">
+                      {FORM_FIELD_TYPES.map((type) => {
+                        const selected = customFieldForm.fieldType === type.id;
+                        return (
+                          <button
+                            key={type.id}
+                            type="button"
+                            role="option"
+                            aria-selected={selected}
+                            className={`form-type-tile${selected ? " form-type-tile--selected" : ""}`}
+                            onClick={() => selectCustomFieldType(type.id)}
+                          >
+                            <FormFieldTypeIcon type={type.id} />
+                            <span className="form-type-tile-label">{type.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                   <label className="field checkbox-field">
                     <span className="field-label">Obligatoriskt</span>
                     <input
@@ -13919,123 +14230,270 @@ const AdminPage = () => {
                   </label>
                   <div className="admin-actions">
                     <button className="button" type="submit">
-                      Lägg till fält
+                      Lägg till
                     </button>
                   </div>
                 </form>
-                <div className="table-wrap">
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th></th>
-                        <th>Fältnamn</th>
-                        <th>Typ</th>
-                        <th>Visa</th>
-                        <th>Obligatoriskt</th>
-                        <th></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {adminMergedFormFieldOrder.map((itemKey) => {
-                        const isCustom = String(itemKey).startsWith("custom:");
-                        const base = BASE_FORM_ITEMS.find((b) => b.key === itemKey);
-                        const customId = isCustom ? String(itemKey).slice("custom:".length) : null;
-                        const field = isCustom
-                          ? customFieldsAdmin.find((f) => String(f.id) === String(customId))
-                          : null;
-                        if (!base && !field) {
-                          return null;
-                        }
-                        return (
-                          <tr
-                            key={String(itemKey)}
-                            onDragOver={(event) => event.preventDefault()}
-                            onDrop={() => {
-                              if (!draggingFormItemKey) return;
-                              moveFormFieldItem(draggingFormItemKey, itemKey);
-                            }}
-                          >
-                            <td style={{ width: "2.25rem" }}>
-                              <span
-                                className="drag-handle"
-                                role="button"
-                                tabIndex={0}
-                                aria-label="Dra för att ändra ordning"
-                                draggable
-                                onDragStart={() => setDraggingFormItemKey(itemKey)}
-                                onDragEnd={() => setDraggingFormItemKey(null)}
-                              >
-                                ≡
-                              </span>
-                            </td>
-                            <td>{base ? base.label : field?.label}</td>
-                            <td>
-                              {base
-                                ? "Standardfält"
-                                : field?.field_type === "checkbox"
-                                ? "Checkbox"
-                                : field?.field_type === "textarea"
-                                ? "Större textbox"
-                                : field?.field_type === "paragraph"
-                                ? "Informations text"
-                                : field?.field_type === "linebreak"
-                                ? "Radbrytning"
-                                : "Liten textbox"}
-                            </td>
-                            <td>
-                              {base ? (
-                                base.canHide === false ? (
-                                  <span className="muted">Alltid</span>
+                <h3 className="form-fields-subtitle">Egna fält</h3>
+                {customFieldsAdmin.length === 0 ? (
+                  <p className="muted">Inga egna fält ännu.</p>
+                ) : (
+                  <div className="table-wrap">
+                    <table className="table">
+                      <thead>
+                        <tr>
+                          <th></th>
+                          <th>Fältnamn</th>
+                          <th>Typ</th>
+                          <th>Visa</th>
+                          <th>Obligatoriskt</th>
+                          <th></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {adminMergedFormFieldOrder
+                          .filter((itemKey) => String(itemKey).startsWith("custom:"))
+                          .map((itemKey, index, customOrderKeys) => {
+                          const customId = customOrderId(itemKey);
+                          const field = customFieldsAdmin.find((f) => String(f.id) === customId);
+                          if (!field) return null;
+                          return (
+                            <tr key={String(itemKey)}>
+                              <td>
+                                <span className="section-order-arrows">
+                                  <button
+                                    type="button"
+                                    className="icon-button"
+                                    aria-label={`Flytta ${field.label || "fält"} upp`}
+                                    disabled={index === 0}
+                                    onClick={() => moveCustomFormField(itemKey, "up")}
+                                  >
+                                    ↑
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="icon-button"
+                                    aria-label={`Flytta ${field.label || "fält"} ner`}
+                                    disabled={index === customOrderKeys.length - 1}
+                                    onClick={() => moveCustomFormField(itemKey, "down")}
+                                  >
+                                    ↓
+                                  </button>
+                                </span>
+                              </td>
+                              <td>
+                                {String(editingCustomFieldId) === String(field.id) ? (
+                                  <input
+                                    type="text"
+                                    value={
+                                      field.field_type === "linebreak" ? field.label || "Radbrytning" : editingCustomFieldLabel
+                                    }
+                                    onChange={(event) => setEditingCustomFieldLabel(event.target.value)}
+                                    disabled={field.field_type === "linebreak"}
+                                    aria-label="Fältnamn"
+                                  />
                                 ) : (
+                                  field.label
+                                )}
+                              </td>
+                              <td>{formFieldTypeLabel(field.field_type)}</td>
+                              <td>
+                                {String(editingCustomFieldId) === String(field.id) ? (
                                   <input
                                     type="checkbox"
-                                    checked={adminSectionVisibility[base.visibilityKey] !== false}
-                                    onChange={(e) =>
-                                      handleSectionVisibilityChange({
-                                        target: {
-                                          name: base.visibilityKey,
-                                          checked: e.target.checked
-                                        }
-                                      })
-                                    }
+                                    checked={editingCustomFieldVisible}
+                                    onChange={(event) => setEditingCustomFieldVisible(event.target.checked)}
+                                    aria-label={`Visa ${field.label || "fält"} på formuläret`}
                                   />
-                                )
-                              ) : field?.field_type === "checkbox" ? (
-                                <input
-                                  type="checkbox"
-                                  checked={field.is_visible !== false}
-                                  onChange={(e) =>
-                                    handleCustomFieldVisibilityChange(field, e.target.checked)
-                                  }
-                                  aria-label={`Visa ${field?.label || "checkbox"} på formuläret`}
-                                />
-                              ) : (
-                                "–"
-                              )}
-                            </td>
-                            <td>{base ? "Ja" : field?.is_required ? "Ja" : "Nej"}</td>
-                            <td>
-                              {base ? null : (
-                                <button
-                                  type="button"
-                                  className="icon-button danger"
-                                  onClick={() => handleCustomFieldDelete(field)}
-                                >
-                                  Ta bort
-                                </button>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-                {customFieldsAdmin.length === 0 ? (
-                  <p className="muted" style={{ marginTop: "0.75rem" }}>
-                    Inga egna fält ännu.
+                                ) : field.is_visible === false ? (
+                                  "Nej"
+                                ) : (
+                                  "Ja"
+                                )}
+                              </td>
+                              <td>
+                                {String(editingCustomFieldId) === String(field.id) ? (
+                                  <input
+                                    type="checkbox"
+                                    checked={editingCustomFieldRequired}
+                                    onChange={(event) => setEditingCustomFieldRequired(event.target.checked)}
+                                    disabled={field.field_type === "paragraph" || field.field_type === "linebreak"}
+                                    aria-label={`Obligatoriskt ${field.label || "fält"}`}
+                                  />
+                                ) : field.is_required ? (
+                                  "Ja"
+                                ) : (
+                                  "Nej"
+                                )}
+                              </td>
+                              <td>
+                                <div className="program-actions">
+                                  {String(editingCustomFieldId) === String(field.id) ? (
+                                    <>
+                                      <button
+                                        type="button"
+                                        className="icon-button edit"
+                                        onClick={() => saveCustomFieldLabel(field)}
+                                      >
+                                        Spara
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="icon-button"
+                                        onClick={cancelCustomFieldEdit}
+                                      >
+                                        Avbryt
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      className="icon-button edit"
+                                      onClick={() => startCustomFieldEdit(field)}
+                                    >
+                                      Redigera
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    className="icon-button danger"
+                                    onClick={() => handleCustomFieldDelete(field)}
+                                  >
+                                    Ta bort
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                <div className="form-preview">
+                  <h3 className="form-fields-subtitle">Förhandsvisning</h3>
+                  <p className="muted form-preview-hint">
+                    <span className="form-preview-info-icon" aria-hidden="true">i</span>
+                    <span>Dra ett eget fält till den markerade rutan över, under eller bredvid. Sidan använder samma placering. Standardfälten går inte att flytta.</span>
                   </p>
-                ) : null}
+                  <div className="form-preview-fields">
+                    {adminMergedFormFieldOrder.map((itemKey) => {
+                      if (String(itemKey).startsWith("custom:")) return null;
+                      const base = BASE_FORM_ITEMS.find((item) => item.key === itemKey);
+                      if (!base) return null;
+                      if (base.canHide !== false && adminSectionVisibility[base.visibilityKey] === false) {
+                        return null;
+                      }
+                      const previewControl =
+                        base.key === "name" ? (
+                          <div className="form-name-row">
+                            <label className="field">
+                              <span className="field-label">Förnamn</span>
+                              <input type="text" disabled tabIndex={-1} />
+                            </label>
+                            <label className="field">
+                              <span className="field-label">Efternamn</span>
+                              <input type="text" disabled tabIndex={-1} />
+                            </label>
+                          </div>
+                        ) : (
+                          <label className="field">
+                            <span className="field-label">{base.label}</span>
+                            <input type="text" disabled tabIndex={-1} placeholder={base.key === "discountCode" ? "Ange kod" : ""} />
+                          </label>
+                        );
+                      return (
+                        <div
+                          key={String(itemKey)}
+                          className={`form-preview-card${
+                            base.key === "name" || base.key === "discountCode" ? " form-preview-card--span" : ""
+                          }`}
+                        >
+                          {previewControl}
+                        </div>
+                      );
+                    })}
+                    {buildCustomFieldRows(adminFormFieldOrder, customFieldsAdmin).map((row) => {
+                      const anchorId = row.slots[0]?.id;
+                      const dropHere =
+                        formDropPlace && String(formDropPlace.id) === String(anchorId) ? formDropPlace.position : "";
+                      const dragField = customFieldsAdmin.find(
+                        (item) => String(item.id) === customOrderId(draggingFormItemKey)
+                      );
+                      return (
+                        <div
+                          key={row.slots.map((slot) => slot.id).join("-")}
+                          className="form-layout-block"
+                          onDragOver={(event) => {
+                            if (!dragField) return;
+                            event.preventDefault();
+                            event.dataTransfer.dropEffect = "move";
+                            const position = customFieldDropPosition(event, row, dragField);
+                            setFormDropPlace((prev) =>
+                              prev && String(prev.id) === String(anchorId) && prev.position === position
+                                ? prev
+                                : { id: anchorId, position }
+                            );
+                          }}
+                          onDrop={(event) => {
+                            event.preventDefault();
+                            if (!dragField || !anchorId) return;
+                            applyCustomFieldDrop(anchorId, customFieldDropPosition(event, row, dragField));
+                            endFormFieldDrag();
+                          }}
+                        >
+                          {dropHere ? <div className={`form-drop-marker form-drop-marker--${dropHere}`} /> : null}
+                          <div className={`form-layout-row${row.full ? " form-layout-row--full" : ""}`}>
+                            {row.slots.map((slot) => {
+                              const field = slot.field;
+                              const itemKey = `custom:${slot.id}`;
+                              const hidden = field?.is_visible === false;
+                              const previewControl =
+                                field.field_type === "linebreak" ? (
+                                  <div className="form-linebreak" aria-hidden="true" />
+                                ) : field.field_type === "paragraph" ? (
+                                  <div className="form-static-text">{field.label}</div>
+                                ) : field.field_type === "textarea" ? (
+                                  <label className="field">
+                                    <span className="field-label">{field.label}</span>
+                                    <textarea rows="3" disabled tabIndex={-1} />
+                                  </label>
+                                ) : field.field_type === "checkbox" ? (
+                                  <label className="field checkbox-field">
+                                    <span className="field-label">{field.label}</span>
+                                    <input type="checkbox" disabled tabIndex={-1} />
+                                  </label>
+                                ) : (
+                                  <label className="field">
+                                    <span className="field-label">{field.label}</span>
+                                    <input type="text" disabled tabIndex={-1} />
+                                  </label>
+                                );
+                              return (
+                                <div key={slot.id} className="form-layout-slot">
+                                  <div
+                                    className={`form-preview-card form-preview-card--draggable${
+                                      hidden ? " is-hidden-field" : ""
+                                    }${draggingFormItemKey === itemKey ? " is-dragging" : ""}`}
+                                    draggable
+                                    onDragStart={(event) => beginFormFieldDrag(event, itemKey)}
+                                    onDragEnd={endFormFieldDrag}
+                                  >
+                                    <span className="drag-handle" title="Dra för att flytta" aria-label="Dra för att flytta">
+                                      ≡
+                                    </span>
+                                    {hidden ? <span className="form-preview-hidden-label">Dold</span> : null}
+                                    {previewControl}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
                 ) : null}
                 {eventSettingsTab === "tickets" ? (
@@ -15622,7 +16080,7 @@ function App() {
     }
     for (const field of customFields) {
       if (!field.is_required) continue;
-      if (field.field_type === "checkbox" && field.is_visible === false) continue;
+      if (field.is_visible === false) continue;
       const value = customFieldValues[field.id];
       if (field.field_type === "checkbox") {
         if (!value) {
@@ -15676,7 +16134,7 @@ function App() {
           const field = customFields.find((f) => String(f.id) === String(entry.id));
           if (!field) return false;
           if (field.field_type === "paragraph" || field.field_type === "linebreak") return false;
-          if (field.field_type === "checkbox" && field.is_visible === false) return false;
+          if (field.is_visible === false) return false;
           return true;
         })
     };
@@ -15687,30 +16145,29 @@ function App() {
   const getMergedPublicFormFieldOrder = () => {
     const baseKeys = ["name", "email", "city", "phone", "organization", "discountCode"];
     const customKeys = customFields.map((f) => `custom:${f.id}`);
-    const normalize = (v) => String(v || "").trim();
-    const isValid = (k) => baseKeys.includes(k) || k.startsWith("custom:") || k === "custom";
-    const initial = Array.isArray(formFieldOrder) && formFieldOrder.length > 0 ? formFieldOrder.map(normalize) : [];
-    const filtered = initial.filter(isValid);
-    const expanded = [];
-    filtered.forEach((k) => {
-      if (k === "custom") expanded.push(...customKeys);
-      else expanded.push(k);
-    });
-    const present = new Set(expanded);
-    baseKeys.forEach((k) => {
-      if (!present.has(k)) {
-        expanded.push(k);
-        present.add(k);
-      }
-    });
-    customKeys.forEach((k) => {
-      if (!present.has(k)) {
-        expanded.push(k);
-        present.add(k);
-      }
-    });
     const customSet = new Set(customKeys);
-    return expanded.filter((k) => (k.startsWith("custom:") ? customSet.has(k) : true));
+    const savedCustom = [];
+    const seen = new Set();
+    (Array.isArray(formFieldOrder) ? formFieldOrder : []).forEach((raw) => {
+      const key = String(raw || "").trim();
+      if (key === "custom") {
+        customKeys.forEach((customKey) => {
+          if (!seen.has(customKey)) {
+            savedCustom.push(customKey);
+            seen.add(customKey);
+          }
+        });
+        return;
+      }
+      if (key.startsWith("custom:") && customSet.has(key) && !seen.has(key)) {
+        savedCustom.push(key);
+        seen.add(key);
+      }
+    });
+    customKeys.forEach((key) => {
+      if (!seen.has(key)) savedCustom.push(key);
+    });
+    return [...baseKeys, ...savedCustom];
   };
 
   const handleApplyDiscountCode = async () => {
@@ -15852,7 +16309,7 @@ function App() {
 
   return (
     <div className="page public-event-page" ref={pageRef}>
-      {heroBackground.url && !heroImageError ? (
+      {event && heroBackground.url && !heroImageError ? (
         <div className="hero hero--banner" ref={heroBannerRef}>
           {sectionVisibility.showTranslate && eventSectionsLoaded ? (
             <div className="translate-row translate-row--overlay notranslate">
@@ -15923,16 +16380,16 @@ function App() {
             </button>
           </div>
         </div>
-      ) : sectionVisibility.showTranslate && eventSectionsLoaded ? (
+      ) : event && sectionVisibility.showTranslate && eventSectionsLoaded ? (
         <div className="translate-row notranslate">
           <span className="translate-label">Språk</span>
           <div id="google_translate_element" className="notranslate" />
         </div>
       ) : null}
       {eventLoading ? <p className="muted">Laddar event...</p> : null}
-      {eventError ? <p className="admin-error">{eventError}</p> : null}
-      {sectionOrder.map((key) => {
-        if (key === "text" && sectionVisibility.showText) {
+      {!event && eventError ? <p className="admin-error">{eventError}</p> : null}
+      {event ? sectionOrder.map((key) => {
+        if (key === "text" && sectionVisibility.showText && (hero.title || hero.bodyHtml)) {
           return (
             <div className="section" key="text">
               {hero.title ? <h2>{hero.title}</h2> : null}
@@ -15941,9 +16398,7 @@ function App() {
                   className="hero-body"
                   dangerouslySetInnerHTML={{ __html: hero.bodyHtml }}
                 />
-              ) : (
-                <p className="muted">Lägg till din text här.</p>
-              )}
+              ) : null}
             </div>
           );
         }
@@ -16113,7 +16568,6 @@ function App() {
               <form className="form" onSubmit={handleAddToCart} id="booking-form">
           {(() => {
             const order = getMergedPublicFormFieldOrder();
-            const customMap = new Map(customFields.map((f) => [String(f.id), f]));
             const renderDiscount = () =>
               sectionVisibility.showDiscountCode && prices.length > 0 ? (
                 <div className="field discount-field">
@@ -16153,7 +16607,70 @@ function App() {
                 </div>
               ) : null;
 
-            return order.map((k) => {
+            const renderCustomControl = (field) => {
+              if (field.field_type === "linebreak") {
+                return <div className="form-linebreak" aria-hidden="true" />;
+              }
+              if (field.field_type === "paragraph") {
+                return (
+                  <div className="form-static-text">
+                    {(field.label || "").split("\n").map((line, idx) => (
+                      <p key={idx} style={{ margin: idx === 0 ? 0 : "0.5rem 0 0" }}>
+                        {line}
+                      </p>
+                    ))}
+                  </div>
+                );
+              }
+              if (field.field_type === "checkbox") {
+                return (
+                  <label className="field checkbox-field">
+                    <span className="field-label">{field.label}</span>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(customFieldValues[field.id])}
+                      onChange={(event) =>
+                        handleCustomFieldChange(field.id, field.field_type, event.target.checked)
+                      }
+                      required={field.is_required}
+                    />
+                  </label>
+                );
+              }
+              if (field.field_type === "textarea") {
+                return (
+                  <label className="field">
+                    <span className="field-label">{field.label}</span>
+                    <textarea
+                      rows="3"
+                      value={customFieldValues[field.id] ?? ""}
+                      onChange={(event) =>
+                        handleCustomFieldChange(field.id, field.field_type, event.target.value)
+                      }
+                      required={field.is_required}
+                    ></textarea>
+                  </label>
+                );
+              }
+              return (
+                <label className="field">
+                  <span className="field-label">{field.label}</span>
+                  <input
+                    type="text"
+                    value={customFieldValues[field.id] ?? ""}
+                    onChange={(event) =>
+                      handleCustomFieldChange(field.id, field.field_type, event.target.value)
+                    }
+                    required={field.is_required}
+                  />
+                </label>
+              );
+            };
+            const customRows = buildCustomFieldRows(formFieldOrder, customFields);
+
+            return (
+              <>
+            {order.map((k) => {
               if (k === "name") {
                 if (!sectionVisibility.showName) return null;
                 return (
@@ -16243,71 +16760,26 @@ function App() {
               if (k === "discountCode") {
                 return <div key="discountCode">{renderDiscount()}</div>;
               }
-              if (String(k).startsWith("custom:")) {
-                const id = String(k).slice("custom:".length);
-                const field = customMap.get(id);
-                if (!field) return null;
-                if (field.field_type === "linebreak") {
-                  return <div className="form-linebreak" key={field.id} aria-hidden="true" />;
-                }
-                if (field.field_type === "paragraph") {
-                  return (
-                    <div className="form-static-text" key={field.id}>
-                      {(field.label || "").split("\n").map((line, idx) => (
-                        <p key={idx} style={{ margin: idx === 0 ? 0 : "0.5rem 0 0" }}>
-                          {line}
-                        </p>
-                      ))}
-                    </div>
-                  );
-                }
-                if (field.field_type === "checkbox") {
-                  if (field.is_visible === false) return null;
-                  return (
-                    <label className="field checkbox-field" key={field.id}>
-                      <span className="field-label">{field.label}</span>
-                      <input
-                        type="checkbox"
-                        checked={Boolean(customFieldValues[field.id])}
-                        onChange={(event) =>
-                          handleCustomFieldChange(field.id, field.field_type, event.target.checked)
-                        }
-                        required={field.is_required}
-                      />
-                    </label>
-                  );
-                }
-                if (field.field_type === "textarea") {
-                  return (
-                    <label className="field" key={field.id}>
-                      <span className="field-label">{field.label}</span>
-                      <textarea
-                        rows="3"
-                        value={customFieldValues[field.id] ?? ""}
-                        onChange={(event) =>
-                          handleCustomFieldChange(field.id, field.field_type, event.target.value)
-                        }
-                        required={field.is_required}
-                      ></textarea>
-                    </label>
-                  );
-                }
-                return (
-                  <label className="field" key={field.id}>
-                    <span className="field-label">{field.label}</span>
-                    <input
-                      type="text"
-                      value={customFieldValues[field.id] ?? ""}
-                      onChange={(event) =>
-                        handleCustomFieldChange(field.id, field.field_type, event.target.value)
-                      }
-                      required={field.is_required}
-                    />
-                  </label>
-                );
-              }
+              if (String(k).startsWith("custom:")) return null;
               return null;
-            });
+            })}
+            {customRows.map((row) => {
+              const visibleSlots = row.slots.filter((slot) => slot.field && slot.field.is_visible !== false);
+              if (visibleSlots.length === 0) return null;
+              return (
+                <div className="form-layout-block" key={row.slots.map((slot) => slot.id).join("-")}>
+                  <div className={`form-layout-row${row.full ? " form-layout-row--full" : ""}`}>
+                    {row.slots.map((slot) => (
+                      <div key={slot.id} className="form-layout-slot">
+                        {slot.field && slot.field.is_visible !== false ? renderCustomControl(slot.field) : null}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+              </>
+            );
           })()}
           <label className="field checkbox-field form-terms">
             <span className="field-label">
@@ -16496,7 +16968,7 @@ function App() {
           );
         }
         return null;
-      })}
+      }) : null}
 
       <footer className="public-host-footer" aria-label="Kyrkevent sidfot">
         <a
