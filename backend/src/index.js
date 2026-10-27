@@ -156,6 +156,64 @@ const savePremiumPriceToDb = async (priceYear) => {
   cachedPremiumPriceYear = priceYear;
   return cachedPremiumPriceYear;
 };
+const PLATFORM_SETTINGS_TICKET_PRICE_CAP_KEY = "ticket_price_cap";
+const TICKET_PRICE_CAP_MAX = 10000000;
+let cachedTicketPriceCap = null;
+const parseTicketPriceCap = (value) => {
+  if (value === undefined || value === null || String(value).trim() === "") return null;
+  const parsed = Number(String(value).trim().replace(/\s/g, "").replace(",", "."));
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > TICKET_PRICE_CAP_MAX) return null;
+  return Math.round(parsed);
+};
+const getTicketPriceCap = () => cachedTicketPriceCap;
+const loadTicketPriceCapFromDb = async () => {
+  try {
+    const result = await pool.query(
+      "SELECT value FROM platform_settings WHERE key = $1",
+      [PLATFORM_SETTINGS_TICKET_PRICE_CAP_KEY]
+    );
+    cachedTicketPriceCap =
+      result.rowCount === 0 ? null : parseTicketPriceCap(result.rows[0]?.value);
+  } catch {
+    cachedTicketPriceCap = null;
+  }
+  return cachedTicketPriceCap;
+};
+const saveTicketPriceCapToDb = async (maxAmount) => {
+  await pool.query(
+    `
+      INSERT INTO platform_settings (key, value, updated_at)
+      VALUES ($1, $2::jsonb, NOW())
+      ON CONFLICT (key) DO UPDATE SET
+        value = EXCLUDED.value,
+        updated_at = NOW()
+    `,
+    [PLATFORM_SETTINGS_TICKET_PRICE_CAP_KEY, JSON.stringify(maxAmount)]
+  );
+  cachedTicketPriceCap = maxAmount;
+  return cachedTicketPriceCap;
+};
+const ticketPriceCapViolation = async (amount, { eventId, priceId } = {}) => {
+  const cap = getTicketPriceCap();
+  if (cap == null) return null;
+  const rounded = Math.round(Number(amount));
+  if (!Number.isFinite(rounded) || rounded <= cap) return null;
+  if (priceId != null && eventId != null) {
+    const existing = await pool.query(
+      "SELECT amount FROM prices WHERE id = $1 AND event_id = $2",
+      [priceId, eventId]
+    );
+    const previous =
+      existing.rowCount > 0 ? Math.round(Number(existing.rows[0].amount)) : null;
+    if (previous != null && previous === rounded) return null;
+  }
+  return {
+    ok: false,
+    code: "ticket_price_cap",
+    maxAmount: cap,
+    error: `Biljettpriset får högst vara ${cap} kr.`
+  };
+};
 const FRONTEND_URL = process.env.FRONTEND_URL || "";
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.resolve("uploads");
 const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
@@ -5818,6 +5876,26 @@ app.put("/admin/platform-settings/premium-price", requireAdmin, requireSuperAdmi
   }
 });
 
+app.get("/admin/ticket-price-cap", requireAdmin, async (_req, res) => {
+  res.json({ ok: true, maxAmount: getTicketPriceCap() });
+});
+
+app.put("/admin/platform-settings/ticket-price-cap", requireAdmin, requireSuperAdmin, async (req, res) => {
+  const raw = req.body?.maxAmount;
+  const clearing = raw === null || raw === undefined || String(raw).trim() === "";
+  const maxAmount = clearing ? null : parseTicketPriceCap(raw);
+  if (!clearing && maxAmount == null) {
+    res.status(400).json({ ok: false, error: "Ange ett pristak i kronor, 0 eller högre." });
+    return;
+  }
+  try {
+    const saved = await saveTicketPriceCapToDb(maxAmount);
+    res.json({ ok: true, maxAmount: saved });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Kunde inte spara biljettpristaket." });
+  }
+});
+
 app.get("/admin/admin-payments", requireAdmin, requireSuperAdmin, async (req, res) => {
   const fromDate = (req.query.fromDate || "").toString().trim() || null;
   const toDate = (req.query.toDate || "").toString().trim() || null;
@@ -8671,6 +8749,11 @@ app.post("/admin/prices", requireAdmin, async (req, res) => {
     res.status(400).json({ ok: false, error: "Invalid amount" });
     return;
   }
+  const capError = await ticketPriceCapViolation(parsedAmount);
+  if (capError) {
+    res.status(400).json(capError);
+    return;
+  }
   const parsedMaxQuantity = parseMaxQuantity(maxQuantity);
   if (!parsedMaxQuantity.ok) {
     res.status(400).json({ ok: false, error: parsedMaxQuantity.error });
@@ -8719,6 +8802,14 @@ app.put("/admin/prices/:id", requireAdmin, async (req, res) => {
   const parsedAmount = Number(amount);
   if (!Number.isFinite(parsedAmount)) {
     res.status(400).json({ ok: false, error: "Invalid amount" });
+    return;
+  }
+  const capError = await ticketPriceCapViolation(parsedAmount, {
+    eventId: parsedEventId,
+    priceId: id
+  });
+  if (capError) {
+    res.status(400).json(capError);
     return;
   }
   const parsedMaxQuantity = parseMaxQuantity(maxQuantity);
@@ -11794,6 +11885,7 @@ waitForDatabase(pool)
   .then(() => ensureBookingsTable())
   .then(() => loadServiceFeeTiersFromDb())
   .then(() => loadPremiumPriceFromDb())
+  .then(() => loadTicketPriceCapFromDb())
   .then(() => {
     startHealthMonitor(pool);
     startActivityLogRetention();

@@ -201,6 +201,14 @@ function roundCartMoney(value) {
   return Math.round(amount * 100) / 100;
 }
 
+function ticketPriceCapToastMessage(maxAmount) {
+  const max = Number(maxAmount);
+  if (!Number.isFinite(max)) {
+    return "Biljettpriset överskrider det angivna pristaket.";
+  }
+  return `Biljettpriset får högst vara ${max.toLocaleString("sv-SE")} kr enligt angivet pristak.`;
+}
+
 function formatUptime(seconds) {
   if (!Number.isFinite(seconds) || seconds < 0) return "—";
   const d = Math.floor(seconds / 86400);
@@ -3278,6 +3286,10 @@ const AdminPage = () => {
   const [premiumPriceInput, setPremiumPriceInput] = useState("");
   const [premiumPriceSaving, setPremiumPriceSaving] = useState(false);
   const [premiumPriceMessage, setPremiumPriceMessage] = useState("");
+  const [ticketPriceCap, setTicketPriceCap] = useState(null);
+  const [ticketPriceCapInput, setTicketPriceCapInput] = useState("");
+  const [ticketPriceCapSaving, setTicketPriceCapSaving] = useState(false);
+  const [ticketPriceCapMessage, setTicketPriceCapMessage] = useState("");
   const [adminPayoutAnonymizeInProgressId, setAdminPayoutAnonymizeInProgressId] = useState(null);
   const [adminPartialCandidates, setAdminPartialCandidates] = useState([]);
   const [adminPartialCandidatesLoading, setAdminPartialCandidatesLoading] = useState(false);
@@ -4106,6 +4118,62 @@ const AdminPage = () => {
     }
   };
 
+  const loadTicketPriceCap = async () => {
+    if (!token) return;
+    try {
+      const response = await fetch(`${API_BASE}/admin/ticket-price-cap`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) return;
+      const max = data.maxAmount == null ? null : Number(data.maxAmount);
+      const cap = Number.isFinite(max) && max >= 0 ? Math.round(max) : null;
+      setTicketPriceCap(cap);
+      setTicketPriceCapInput(cap == null ? "" : String(cap));
+    } catch {
+      // Taket kan fyllas i manuellt om det inte går att hämta.
+    }
+  };
+
+  const handleSaveTicketPriceCap = async (event) => {
+    event.preventDefault();
+    if (!token || ticketPriceCapSaving) return;
+    const raw = String(ticketPriceCapInput).trim().replace(/\s/g, "").replace(",", ".");
+    const clearing = raw === "";
+    const cap = clearing ? null : Number(raw);
+    if (!clearing && (!Number.isFinite(cap) || cap < 0)) {
+      setTicketPriceCapMessage("Ange ett pristak i kronor, 0 eller högre.");
+      return;
+    }
+    setTicketPriceCapSaving(true);
+    setTicketPriceCapMessage("");
+    try {
+      const response = await fetch(`${API_BASE}/admin/platform-settings/ticket-price-cap`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ maxAmount: clearing ? null : Math.round(cap) })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error || "Kunde inte spara biljettpristaket.");
+      }
+      const saved = data.maxAmount == null ? null : Number(data.maxAmount);
+      const nextCap = Number.isFinite(saved) && saved >= 0 ? Math.round(saved) : null;
+      setTicketPriceCap(nextCap);
+      setTicketPriceCapInput(nextCap == null ? "" : String(nextCap));
+      setTicketPriceCapMessage(
+        nextCap == null ? "Biljettpristaket togs bort." : "Biljettpristaket sparades."
+      );
+    } catch (err) {
+      setTicketPriceCapMessage(err.message || "Kunde inte spara biljettpristaket.");
+    } finally {
+      setTicketPriceCapSaving(false);
+    }
+  };
+
   const handleSavePremiumPrice = async (event) => {
     event.preventDefault();
     if (!token || premiumPriceSaving) return;
@@ -4484,6 +4552,7 @@ const AdminPage = () => {
       loadAdminPayoutRequests();
       loadAdminSubscriptionPayments();
       loadPremiumPrice();
+      loadTicketPriceCap();
       loadAdminPartialCandidates();
       loadAdminOrganizations();
       loadAdminEventLinks();
@@ -4493,6 +4562,10 @@ const AdminPage = () => {
   useEffect(() => {
     loadPremiumPrice();
   }, []);
+
+  useEffect(() => {
+    if (token) loadTicketPriceCap();
+  }, [token]);
 
   useEffect(() => {
     if (token && isAdminUser && adminSection === "admin" && adminPanelTab === "start") {
@@ -5324,6 +5397,22 @@ const AdminPage = () => {
     }
     setPriceSectionError("");
     setError("");
+    const parsedAmount = Number(String(priceForm.amount).trim().replace(/\s/g, "").replace(",", "."));
+    const roundedAmount = Math.round(parsedAmount);
+    const editingPrice = priceEditingId
+      ? pricesAdmin.find((price) => String(price.id) === String(priceEditingId))
+      : null;
+    const unchangedAmount =
+      editingPrice != null && Math.round(Number(editingPrice.amount)) === roundedAmount;
+    if (
+      ticketPriceCap != null &&
+      Number.isFinite(parsedAmount) &&
+      roundedAmount > ticketPriceCap &&
+      !unchangedAmount
+    ) {
+      showToast(ticketPriceCapToastMessage(ticketPriceCap), 7000);
+      return;
+    }
     const savePrice = async () => {
       const profileRes = await fetch(`${API_BASE}/admin/profile`, {
         headers: { Authorization: `Bearer ${token}` }
@@ -5364,6 +5453,10 @@ const AdminPage = () => {
       });
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
+        if (errData.code === "ticket_price_cap") {
+          showToast(ticketPriceCapToastMessage(errData.maxAmount), 7000);
+          return;
+        }
         throw new Error(errData.error || "Kunde inte spara priset.");
       }
       setPriceForm({ name: "", amount: "", description: "", maxQuantity: "", isActive: true });
@@ -8246,7 +8339,10 @@ const AdminPage = () => {
                   aria-selected={adminPanelTab === "settings"}
                   onClick={() => {
                     setAdminPanelTab("settings");
-                    if (token) loadServiceFeeTierSettings(token).catch(() => {});
+                    if (token) {
+                      loadServiceFeeTierSettings(token).catch(() => {});
+                      loadTicketPriceCap();
+                    }
                   }}
                 >
                   Inställningar
@@ -9655,7 +9751,36 @@ const AdminPage = () => {
             {adminPanelTab === "settings" ? (
               <div className="admin-panel admin-panel-settings">
                 <h2>Inställningar</h2>
-                <h3 className="admin-subsection-title">Serviceavgift – pristrappa</h3>
+                <h3 className="admin-subsection-title">Biljettpristak</h3>
+                <p className="muted">
+                  Arrangörer kan inte spara biljettpriser högre än detta belopp. Lämna rutan tom om inget tak ska gälla.
+                </p>
+                <form className="admin-premium-price-form" onSubmit={handleSaveTicketPriceCap}>
+                  <label className="field">
+                    <span className="field-label">Högsta biljettpris (kr)</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      inputMode="numeric"
+                      value={ticketPriceCapInput}
+                      onChange={(e) => {
+                        setTicketPriceCapInput(e.target.value);
+                        setTicketPriceCapMessage("");
+                      }}
+                      placeholder="Inget tak"
+                    />
+                  </label>
+                  <button type="submit" className="button" disabled={ticketPriceCapSaving}>
+                    {ticketPriceCapSaving ? "Sparar…" : "Spara"}
+                  </button>
+                  {ticketPriceCapMessage ? (
+                    <p className={ticketPriceCapMessage.includes("sparades") || ticketPriceCapMessage.includes("togs bort") ? "admin-info-text" : "admin-error admin-error-inline"}>
+                      {ticketPriceCapMessage}
+                    </p>
+                  ) : null}
+                </form>
+                <h3 className="admin-subsection-title admin-subsection-title-spaced">Serviceavgift – pristrappa</h3>
                 <p className="muted">
                   Styr serviceavgiften per beställning baserat på biljettbelopp efter rabatt. Ändringar gäller
                   nya köp direkt i checkout, kvitto och utbetalningsrapporter.
@@ -14544,6 +14669,11 @@ const AdminPage = () => {
                       onChange={handlePriceChange}
                       required
                     />
+                    {ticketPriceCap != null ? (
+                      <span className="muted">
+                        Högsta tillåtna biljettpris är {Number(ticketPriceCap).toLocaleString("sv-SE")} kr.
+                      </span>
+                    ) : null}
                   </label>
                   {(() => {
                     const previewAmount = Number(priceForm.amount);
@@ -16826,7 +16956,9 @@ function App() {
                     }}
                   >
                     <div className="pricing-name">{price.name}</div>
-                    <div className="pricing-price">{price.amount}</div>
+                    <div className="pricing-price">
+                      {Number(price.amount).toLocaleString("sv-SE")} kr
+                    </div>
                     {price.description ? (
                       <div className="pricing-desc">{price.description}</div>
                     ) : null}
