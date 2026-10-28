@@ -11102,11 +11102,18 @@ const AdminPage = () => {
           </div>
         ) : null}
         {token && adminSection === "help" ? (
-          <div className="section">
+          <div className="section help-guide">
             <h2>Hjälp – kom igång med Kyrkevent.se</h2>
             <p className="muted">
-              Här följer en genomgång av hur du sätter upp ett event från start till mål: profil, event, formulär, biljetter och priser,
+              Här följer en genomgång av hur du sätter upp ett event från start till mål: profil, framsida, eventinställningar,
               betalningar, utbetalningar och anonymisering.
+            </p>
+            <p>
+              <strong>Exempel.</strong> Så här kan en färdig anmälningssida se ut för deltagaren:{" "}
+              <a href="https://www.kyrkevent.se/e/kyrkokonsert-gqarszlxozheaqdilvcx" target="_blank" rel="noreferrer">
+                Kyrkokonsert
+              </a>
+              .
             </p>
 
             <h3>1. Börja med profilen</h3>
@@ -11127,67 +11134,100 @@ const AdminPage = () => {
               </li>
             </ul>
 
-            <h3>2. Skapa och ställ in ditt event</h3>
+            <p>
+              Eventet skapar du under <strong>Hem</strong>. Ange namn och datum där. Namnet går inte att ändra i efterhand. Datum styr
+              när anmälan stängs och när utbetalning kan ske. Själva sidan bygger du sedan i menyerna <strong>Framsida</strong> och{" "}
+              <strong>Eventinställningar</strong>. Båda har flikar.
+            </p>
+
+            <h3>2. Framsida</h3>
+            <p className="muted">
+              Flikarna under Framsida är delarna på den publika sidan. De flesta kan aktiveras eller döljas, och flera rubriker kan bytas ut.
+            </p>
+            <h4>Sektionsordning</h4>
+            <p>Styr i vilken ordning sektionerna visas. Flytta med pilarna.</p>
+            <h4>Eventbeskrivning</h4>
+            <p>Rubrik och brödtext överst på sidan. Texten kan formateras med fetstil, listor och länkar.</p>
+            <h4>Call to action</h4>
+            <p>Knappen som leder till anmälan. Här sätter du knapptext och bredd, eller döljer knappen.</p>
+            <h4>Program</h4>
+            <p>Programpunkter med tid och beskrivning.</p>
+            <h4>FAQ</h4>
+            <p>Frågor och svar. Rubriken på sidan kan bytas ut.</p>
+            <h4>Personer</h4>
+            <p>Medverkande med bild och text. Rubriken kan bytas ut.</p>
+            <h4>Partner</h4>
+            <p>Logotyper och länkar till partners. Rubriken kan bytas ut.</p>
+            <h4>Galleri</h4>
+            <p>Bilder från eventet. Rubriken kan bytas ut.</p>
+            <h4>Plats</h4>
+            <p>Adress och beskrivning. Använd adressförslagen (gata, nummer, ort) så att platsen blir tydlig.</p>
+
+            <h3>3. Eventinställningar</h3>
+            <p className="muted">
+              Flikarna under Eventinställningar styr anmälan, utseende och uppföljning.
+            </p>
+            <h4>Inställningar</h4>
             <ul>
               <li>
-                <strong>Skapa event</strong> – ange namn och datum. Var noga med namnet, det går inte att ändra i efterhand.
+                <strong>Senaste anmälningsdag</strong> – stäng anmälan ett visst datum, även om eventet är senare. Lämnas rutan tom används
+                eventdatum. Efter datumet är anmälan stängd.
               </li>
               <li>
-                <strong>Datum</strong> – ange start- och ev. slutdatum. Dessa styr bland annat när anmälan stängs och när utbetalning kan ske.
+                <strong>Text i bekräftelsemail</strong> – valfri text som läggs till i bekräftelsen, både för vanliga anmälningar och biljetter.
               </li>
               <li>
-                <strong>Plats</strong> – skriv in adressen, använd adressförslagen (gata, nummer, ort) för att få en tydlig plats.
+                <strong>Bild och video</strong> – bilden eller videon högst upp på sidan.
               </li>
               <li>
-                <strong>Tema/färger</strong> – välj färgtema för sidan under Eventinställningar &rarr; Tema. Förhandsgranska för att se
-                hur sidan ser ut för deltagaren.
+                <strong>Språk</strong> – visa eller dölj Google-översättning, och välj om besökaren ska mötas av svenska eller engelska.
               </li>
               <li>
-                <strong>Senaste anmälningsdag</strong> – under Eventinställningar kan du sätta ett datum när anmälan ska stängas, även
-                om eventdatumet är senare. Efter detta datum visas anmälan som stängd (knapparna spärras).
+                <strong>Tema</strong> – färgtema för sidan. Förhandsgranska för att se hur deltagaren möter sidan.
               </li>
               <li>
-                <strong>Synliga sektioner</strong> – du kan slå av/på t.ex. språk-raden (Google-översättning) och rabattkods-fältet per event.
+                <strong>Momssats</strong> – vilken moms som gäller för biljetterna till eventet.
               </li>
             </ul>
-
-            <h3>3. Formulär och extra fält</h3>
+            <h4>Biljetter</h4>
             <ul>
               <li>
-                <strong>Grundfält</strong> – namn, e-post, telefon, ort, organisation m.m. finns inbyggt i formuläret.
+                <strong>Vanlig anmälan</strong> – lägger du inte upp någon biljett visas inget val. Deltagaren fyller i formuläret och skickar
+                in anmälan, utan biljettval och utan betalning.
               </li>
               <li>
-                <strong>Formulärfält (egna fält)</strong> – under Eventinställningar &rarr; Formulärfält kan du lägga till egna fält:
-                textfält, större textrutor och kryssrutor.
+                <strong>Biljettpriser</strong> – lägg till biljetter (t.ex. vuxen, ungdom, tidig bokning) med pris och valfritt maxantal.
+                En biljett kan inaktiveras utan att tas bort. När 5 eller färre finns kvar visas ”Fåtal biljetter kvar”, och vid 0 visas ”Slutsålt”.
+                Vid onlinebetalning tas en serviceavgift ut av deltagaren (se avsnitt 6).
               </li>
               <li>
-                <strong>Obligatoriska fält</strong> – markera vilka fält som måste vara ifyllda, så hindras anmälan om något saknas.
-              </li>
-              <li>
-                <strong>Visning i admin och export</strong> – alla egna formulärfält visas som kolumner i bokningslistan och följer
-                med i Excel-exporten.
+                <strong>Rabattkoder</strong> – koden gäller det här eventet. Samma kod (t.ex. EARLYBIRD) kan användas på flera event utan att krocka.
               </li>
             </ul>
-
-            <h3>4. Biljetter, priser och rabattkoder</h3>
+            <h4>Formulär</h4>
             <ul>
               <li>
-                <strong>Biljett- och prisnivåer</strong> – lägg till olika biljetter (t.ex. vuxen, ungdom, tidig-bokning) med pris och
-                valfritt maxantal. En biljett kan inaktiveras utan att tas bort. När 5 eller färre finns kvar visas ”Fåtal biljetter kvar”, och vid 0 visas ”Slutsålt”.
+                <strong>Standardfält</strong> – namn och e-post visas alltid. Telefon, ort, organisation och rabattkod kan visas eller döljas.
               </li>
               <li>
-                <strong>Biljettpriser</strong> – med Bas (ingår vid registrering) kan du lägga till betalda biljetter direkt. Vid onlinebetalning tas en serviceavgift ut av deltagaren (se avsnitt 7).
+                <strong>Egna fält</strong> – textfält, textrutor och kryssrutor. Ordningen ändras genom att dra fälten i förhandsvisningen.
               </li>
               <li>
-                <strong>Premium-abonnemang</strong> – valfritt tillägg, 0 kr (12 mån), därefter 1995kr/år, med samma grundfunktioner som Bas. Ytterligare premiumfunktioner kan tillkomma framöver.
+                <strong>Obligatoriska fält</strong> – markera vad som måste fyllas i, så går anmälan inte att skicka om något saknas.
               </li>
               <li>
-                <strong>Rabattkoder</strong> – rabattkoder är knutna till ett specifikt event. Samma kod (t.ex. EARLYBIRD) kan användas på
-                flera olika event utan att krocka.
+                <strong>Bokningar och export</strong> – egna fält visas som kolumner i bokningslistan och följer med i Excel-exporten.
               </li>
             </ul>
+            <h4>Sociala medier</h4>
+            <p>
+              Länkar till era profiler. Aktivera de plattformar som ska synas och välj ikonernas form och färg. Placeringen på framsidan
+              styrs under Framsida, fliken Sektionsordning.
+            </p>
+            <h4>Statistik</h4>
+            <p>Besök, anmälningar och intäkter för eventet.</p>
 
-            <h3>5. Publicera och dela din sida</h3>
+            <h3>4. Publicera och dela din sida</h3>
             <ul>
               <li>
                 <strong>Förhandsgranska event</strong> – använd knappen för att se sidan som deltagare ser den.
@@ -11198,7 +11238,7 @@ const AdminPage = () => {
               </li>
             </ul>
 
-            <h3>6. Bokningar, betalningar och kvitton</h3>
+            <h3>5. Bokningar, betalningar och kvitton</h3>
             <ul>
               <li>
                 <strong>Bokningslista</strong> – under Bokningar ser du alla anmälningar, kan filtrera kolumner och exportera till Excel.
@@ -11212,7 +11252,7 @@ const AdminPage = () => {
               </li>
             </ul>
 
-            <h3>7. Avgifter i biljett- och betalprocessen</h3>
+            <h3>6. Avgifter i biljett- och betalprocessen</h3>
             <ul>
               <li>
                 <strong>Biljettpris</strong> – det pris du anger på biljetten är det pris som deltagaren utgår från innan eventuella
@@ -11235,7 +11275,7 @@ const AdminPage = () => {
               </li>
             </ul>
 
-            <h3>8. Utbetalningar</h3>
+            <h3>7. Utbetalningar</h3>
             <ul>
               <li>
                 <strong>När kan du begära utbetalning?</strong> – i fliken Utbetalning ser du intäkter per event. Utbetalning kan bara
@@ -11259,7 +11299,7 @@ const AdminPage = () => {
                   ).toLocaleString("sv-SE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{" "}
                   kr inkl. moms
                 </strong>
-                ) per utbetalningsbegäran. Delutbetalningar under pågående event är avgiftsfria. Momsuppdelningen visas på utbetalningskvittot.
+                ) per utbetalningsbegäran. Momsuppdelningen visas på utbetalningskvittot.
               </li>
               <li>
                 <strong>Utbetalningskvitto (PDF)</strong> – när du markerar en utbetalning som betald kan du ladda ner ett
@@ -11297,7 +11337,7 @@ const AdminPage = () => {
               </li>
             </ul>
 
-            <h3>9. Anonymisering av bokningar och GDPR</h3>
+            <h3>8. Anonymisering av bokningar och GDPR</h3>
             <p className="muted" style={{ marginTop: 0 }}>
               GDPR (EU:s dataskyddsförordning) styr hur personuppgifter får behandlas. Plattformen följer principer om
               minimering, lagringsbegränsning och rätt till radering. Här beskrivs vad deltagare och arrangör godkänner samt
@@ -14625,15 +14665,20 @@ const AdminPage = () => {
                   <>
               <div className="section">
                 <h2>Biljettpriser</h2>
-                {(normalizeSubscriptionPlan(profileForm.subscriptionPlan) === "bas" ||
-                  normalizeSubscriptionPlan(profileForm.subscriptionPlan) === "premium") ? (
-                  <div className="admin-info-text admin-service-fee-tiers">
-                    <p className="muted">
-                      Vid onlinebetalning tillkommer en serviceavgift per beställning. Avgiften betalas av deltagaren och
+                <div className="admin-info-text admin-service-fee-tiers">
+                  <p>
+                    <strong>Vanlig anmälan.</strong> Du behöver inte lägga upp några biljetter. Utan biljetter visas inget
+                    val för deltagaren. De fyller i formuläret och skickar in anmälan, utan biljettval och utan betalning.
+                  </p>
+                  {(normalizeSubscriptionPlan(profileForm.subscriptionPlan) === "bas" ||
+                    normalizeSubscriptionPlan(profileForm.subscriptionPlan) === "premium") ? (
+                    <p>
+                      <strong>Biljetter med pris.</strong> Lägger du upp biljetter väljer deltagaren ett alternativ. Vid
+                      onlinebetalning tillkommer en serviceavgift per beställning. Avgiften betalas av deltagaren och
                       ingår inte i din utbetalning.
                     </p>
-                  </div>
-                ) : null}
+                  ) : null}
+                </div>
                 {priceSectionError ? (
                   <p className="admin-error admin-error-inline">
                     {priceSectionError}
@@ -14804,7 +14849,7 @@ const AdminPage = () => {
                     </table>
                   </div>
                 ) : (
-                  <p className="muted">Inga priser ännu.</p>
+                  <p className="muted">Inga biljetter ännu. Deltagaren gör då en vanlig anmälan, utan biljettval och utan betalning.</p>
                 )}
               </div>
 

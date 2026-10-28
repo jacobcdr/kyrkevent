@@ -969,6 +969,19 @@ h2 {
   box-shadow: var(--shadow);
 }
 
+.help-guide h3 {
+  margin-top: 1.8rem;
+}
+
+.help-guide h4 {
+  margin: 1.15rem 0 0.3rem;
+  font-size: 1.02rem;
+}
+
+.help-guide h4 + p {
+  margin-top: 0;
+}
+
 /* Publika eventsidan: slå ihop sektionerna till en enda sammanhängande yta.
    Sektionerna renderas som en obruten följd av .section direkt i .page, så vi
    tar bort mellanrum, inre kanter och hörn – och rundar bara de yttre hörnen
