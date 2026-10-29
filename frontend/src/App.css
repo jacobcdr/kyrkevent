@@ -181,26 +181,145 @@ body:has(.landing-page) {
   margin-right: auto;
 }
 
-.landing-promo-video {
-  margin-top: 3rem;
-  margin-bottom: 2rem;
+.landing-demo {
+  margin: 3rem auto 2rem;
+  max-width: 1000px;
+  padding: 1.5rem 1.5rem 1.75rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 2px 12px rgba(51, 65, 85, 0.08);
+  color: #334155;
 }
 
-.landing-promo-video-element {
-  width: 100%;
-  max-width: 960px;
-  display: block;
-  margin: 0 auto;
-  border-radius: 12px;
-  box-shadow: var(--shadow);
-}
-
-.landing-promo-caption {
-  margin-top: 0.75rem;
+.landing-demo h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.45rem;
   text-align: center;
-  font-size: 1.1rem;
-  font-weight: 500;
-  color: var(--text);
+  color: #334155;
+}
+
+.landing-demo .landing-intro,
+.landing-demo .field-label {
+  color: #64748b;
+}
+
+.landing-demo .landing-intro {
+  text-align: center;
+  margin-bottom: 1.25rem;
+}
+
+.landing-demo .field-label {
+  color: #334155;
+}
+
+.landing-demo .field input:not(.file-upload-input) {
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  color: #334155;
+}
+
+.landing-demo .field input:not(.file-upload-input):focus {
+  border-color: #66788d;
+  box-shadow: 0 0 0 3px rgba(102, 120, 141, 0.2);
+}
+
+.landing-demo-form .field {
+  margin-bottom: 0.95rem;
+}
+
+.landing-demo .field textarea {
+  min-height: 7.5rem;
+  padding: 0.75rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: #fff;
+  color: #334155;
+  font: inherit;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.landing-demo .field textarea:focus {
+  outline: none;
+  border-color: #66788d;
+  box-shadow: 0 0 0 3px rgba(102, 120, 141, 0.2);
+}
+
+.landing-demo .landing-pricing-btn {
+  background: #66788d;
+  color: #fff !important;
+}
+
+.landing-demo .landing-pricing-btn:hover {
+  background: #556678;
+}
+
+.landing-demo-form {
+  position: relative;
+}
+
+.landing-demo-hp {
+  position: absolute;
+  left: -10000px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+
+.landing-demo-captcha {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.55rem;
+}
+
+.landing-demo-captcha img,
+.landing-demo-captcha-wait {
+  height: 58px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.landing-demo-captcha-wait {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 0.8rem;
+  color: #64748b;
+  font-size: 0.9rem;
+}
+
+.landing-demo-captcha-refresh {
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #334155;
+  border-radius: 8px;
+  padding: 0.4rem 0.7rem;
+  cursor: pointer;
+}
+
+.landing-demo-captcha-refresh:hover {
+  border-color: #66788d;
+  color: #334155;
+}
+
+.landing-demo-form .landing-btn {
+  width: 100%;
+  margin-top: 1.35rem;
+  cursor: pointer;
+}
+
+.landing-demo-form .landing-btn:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+.landing-demo-success {
+  margin: 0;
+  text-align: center;
+  font-weight: 600;
+  color: #334155;
 }
 
 .landing-pricing-title {
@@ -223,6 +342,10 @@ body:has(.landing-page) {
 @media (max-width: 768px) {
   .landing-pricing-cards {
     grid-template-columns: 1fr;
+    max-width: 420px;
+  }
+
+  .landing-demo {
     max-width: 420px;
   }
 }

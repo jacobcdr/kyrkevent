@@ -1766,6 +1766,25 @@ const THEME_OPTIONS = [
   { id: "sage", label: "Salvia (dämpat grönt)", colors: ["#f6f7f4", "#e8ebe3", "#b5c4b5", "#4a7c59", "#3d6b4a"] }
 ];
 
+const demoRequestUrl = (path = "/demo-request") => {
+  if (
+    typeof window !== "undefined" &&
+    window.location.protocol === "https:" &&
+    API_BASE_NORMALIZED.startsWith("http://")
+  ) {
+    try {
+      const host = new URL(API_BASE_NORMALIZED).hostname;
+      if (host === "localhost" || host === "127.0.0.1") {
+        return `${window.location.origin}${path}`;
+      }
+    } catch {
+      /* Använd API-adressen nedan. */
+    }
+  }
+  if (!API_BASE_NORMALIZED) return path;
+  return `${API_BASE_NORMALIZED}${path}`;
+};
+
 const resolveAssetUrl = (url) => {
   if (!url) return "";
   if (url.startsWith("http://") || url.startsWith("https://")) {
@@ -1825,6 +1844,91 @@ const CopyEventUrlButton = ({ url }) => {
 const SITE_TITLE = HOME.title;
 
 const LandingPage = ({ initialSection = "" }) => {
+  const [demoForm, setDemoForm] = useState({ name: "", email: "", phone: "", about: "" });
+  const [demoWebsite, setDemoWebsite] = useState("");
+  const [demoToken, setDemoToken] = useState("");
+  const [demoCaptcha, setDemoCaptcha] = useState("");
+  const [demoSending, setDemoSending] = useState(false);
+  const [demoSent, setDemoSent] = useState(false);
+  const [demoError, setDemoError] = useState("");
+
+  const loadDemoToken = async () => {
+    const response = await fetch(demoRequestUrl("/demo-request-token"));
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.token) {
+      throw new Error(data.error || "Ladda om sidan och försök igen.");
+    }
+    setDemoToken(data.token);
+    setDemoCaptcha("");
+    return data.token;
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const response = await fetch(demoRequestUrl("/demo-request-token"));
+        const data = await response.json().catch(() => ({}));
+        if (cancelled || !response.ok || !data.token) return;
+        setDemoToken(data.token);
+      } catch {
+        /* Försök igen när formuläret skickas. */
+      }
+    };
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleDemoChange = (event) => {
+    const { name, value } = event.target;
+    setDemoForm((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleDemoSubmit = async (event) => {
+    event.preventDefault();
+    if (demoSending) return;
+    setDemoError("");
+    setDemoSending(true);
+    try {
+      if (!demoToken) {
+        throw new Error("Ladda om sidan och försök igen.");
+      }
+      const response = await fetch(demoRequestUrl(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: demoForm.name.trim(),
+          email: demoForm.email.trim(),
+          phone: demoForm.phone.trim(),
+          about: demoForm.about.trim(),
+          website: demoWebsite,
+          captcha: demoCaptcha.trim(),
+          token: demoToken
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) {
+        if (data.refresh) {
+          setDemoCaptcha("");
+          loadDemoToken().catch(() => {});
+        }
+        throw new Error(data.error || "Kunde inte skicka förfrågan.");
+      }
+      setDemoSent(true);
+    } catch (error) {
+      const message = error?.message || "Kunde inte skicka förfrågan.";
+      setDemoError(
+        message === "Failed to fetch"
+          ? "Kunde inte nå servern. Om du kör lokalt, starta om frontend och försök igen."
+          : message
+      );
+    } finally {
+      setDemoSending(false);
+    }
+  };
+
   useEffect(() => {
     document.title = SITE_TITLE;
     setMetaDescription(HOME.description);
@@ -1857,18 +1961,113 @@ const LandingPage = ({ initialSection = "" }) => {
       </div>
 
       <LandingPricing />
-      <section className="landing-promo-video" aria-label="Introduktionsvideo om Kyrkevent">
-        <video
-          className="landing-promo-video-element"
-          autoPlay
-          loop
-          muted
-          playsInline
-          controls
-        >
-          <source src="/presentation.mp4" type="video/mp4" />
-        </video>
-        <p className="landing-promo-caption">Skapa ditt event på några minuter</p>
+      <section className="landing-demo" aria-labelledby="landing-demo-heading">
+        <h2 id="landing-demo-heading">Boka en live-demo</h2>
+        <p className="landing-intro">
+          Vill du se hur systemet fungerar och hur du kommer igång? Fyll i uppgifterna så hör vi av oss och bokar en genomgång.
+        </p>
+        {demoSent ? (
+          <p className="landing-demo-success" role="status">
+            Tack! Vi har tagit emot din förfrågan och hör av oss för att boka demon.
+          </p>
+        ) : (
+          <form className="landing-demo-form" onSubmit={handleDemoSubmit}>
+            <div className="landing-demo-hp" aria-hidden="true">
+              <label>
+                Webbplats
+                <input
+                  name="website"
+                  type="text"
+                  tabIndex={-1}
+                  autoComplete="off"
+                  value={demoWebsite}
+                  onChange={(event) => setDemoWebsite(event.target.value)}
+                />
+              </label>
+            </div>
+            <label className="field">
+              <span className="field-label">Namn</span>
+              <input
+                name="name"
+                type="text"
+                value={demoForm.name}
+                onChange={handleDemoChange}
+                autoComplete="name"
+                required
+              />
+            </label>
+            <label className="field">
+              <span className="field-label">E-post</span>
+              <input
+                name="email"
+                type="email"
+                value={demoForm.email}
+                onChange={handleDemoChange}
+                autoComplete="email"
+                required
+              />
+            </label>
+            <label className="field">
+              <span className="field-label">Telefonnummer</span>
+              <input
+                name="phone"
+                type="tel"
+                value={demoForm.phone}
+                onChange={handleDemoChange}
+                autoComplete="tel"
+                required
+              />
+            </label>
+            <label className="field">
+              <span className="field-label">Organisation eller annan information</span>
+              <textarea
+                name="about"
+                value={demoForm.about}
+                onChange={handleDemoChange}
+                rows={4}
+                maxLength={1000}
+                placeholder="Till exempel församling, förening eller vad ni vill se i demon"
+              />
+            </label>
+            <label className="field">
+              <span className="field-label">Skriv koden</span>
+              <div className="landing-demo-captcha">
+                {demoToken ? (
+                  <img
+                    src={demoRequestUrl(`/demo-request-captcha/${demoToken}`)}
+                    alt="Verifieringskod"
+                  />
+                ) : (
+                  <span className="landing-demo-captcha-wait">Laddar kod...</span>
+                )}
+                <button
+                  type="button"
+                  className="landing-demo-captcha-refresh"
+                  onClick={() => {
+                    loadDemoToken().catch(() => setDemoError("Kunde inte hämta en ny kod."));
+                  }}
+                >
+                  Ny kod
+                </button>
+              </div>
+              <input
+                name="captcha"
+                type="text"
+                value={demoCaptcha}
+                onChange={(event) => setDemoCaptcha(event.target.value)}
+                autoComplete="off"
+                autoCapitalize="characters"
+                spellCheck={false}
+                maxLength={8}
+                required
+              />
+            </label>
+            {demoError ? <p className="admin-error">{demoError}</p> : null}
+            <button className="landing-btn landing-pricing-btn" type="submit" disabled={demoSending}>
+              {demoSending ? "Skickar..." : "Skicka förfrågan"}
+            </button>
+          </form>
+        )}
       </section>
       <LandingDetails />
       <SiteFooter />

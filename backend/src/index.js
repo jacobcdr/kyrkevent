@@ -22,6 +22,7 @@ import xlsx from "xlsx-js-style";
 import { Resend } from "resend";
 import PDFDocument from "pdfkit";
 import QRCode from "qrcode";
+import { captchaMatches, createDemoCaptchaCode, createDemoCaptchaPng } from "./demoCaptcha.js";
 import { startHealthMonitor, sendDbMonitorAlert } from "./healthMonitor.js";
 import { assertHeroImageAspectRatio, optimizeImageFile } from "./imageOptimize.js";
 import { getUploadDirectoryStats, getVolumeStats } from "./uploadStats.js";
@@ -377,6 +378,27 @@ const receiptResendLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { ok: false, error: "För många kvitto-utskick. Försök igen om en stund." }
+});
+const demoRequestLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: "För många förfrågningar. Försök igen om en stund." }
+});
+const demoRequestDailyLimiter = rateLimit({
+  windowMs: 24 * 60 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: "För många förfrågningar. Försök igen om en stund." }
+});
+const demoTokenLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: "För många förfrågningar. Försök igen om en stund." }
 });
 
 if (!fs.existsSync(UPLOAD_DIR)) {
@@ -1909,6 +1931,167 @@ const sendReceiptEmail = async (payload) => {
     return { ok: false, error: "Kunde inte skicka kvitto." };
   }
 };
+
+const DEMO_REQUEST_EMAIL = process.env.DEMO_REQUEST_EMAIL || "jacob@ceder.se";
+const DEMO_TOKEN_MAX_MS = 2 * 60 * 60 * 1000;
+const DEMO_EMAIL_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+const DEMO_GLOBAL_MAX = 30;
+const DEMO_GLOBAL_WINDOW_MS = 60 * 60 * 1000;
+const demoTokens = new Map();
+const demoRecentEmails = new Map();
+const demoSentAt = [];
+
+const pruneDemoGuards = (now) => {
+  for (const [token, entry] of demoTokens) {
+    if (now - entry.issuedAt > DEMO_TOKEN_MAX_MS) demoTokens.delete(token);
+  }
+  for (const [email, sentAt] of demoRecentEmails) {
+    if (now - sentAt > DEMO_EMAIL_COOLDOWN_MS) demoRecentEmails.delete(email);
+  }
+  while (demoSentAt.length && now - demoSentAt[0] > DEMO_GLOBAL_WINDOW_MS) {
+    demoSentAt.shift();
+  }
+  if (demoTokens.size > 2000) {
+    const oldest = [...demoTokens.entries()]
+      .sort((a, b) => a[1].issuedAt - b[1].issuedAt)
+      .slice(0, demoTokens.size - 2000);
+    for (const [token] of oldest) demoTokens.delete(token);
+  }
+};
+
+const escapeHtml = (value) =>
+  String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+
+app.get("/demo-request-token", demoTokenLimiter, (req, res) => {
+  const now = Date.now();
+  pruneDemoGuards(now);
+  const token = crypto.randomBytes(24).toString("hex");
+  demoTokens.set(token, { issuedAt: now, code: createDemoCaptchaCode(), attempts: 0 });
+  res.json({ ok: true, token });
+});
+
+app.get("/demo-request-captcha/:token", demoTokenLimiter, (req, res) => {
+  const token = String(req.params.token || "");
+  const entry = demoTokens.get(token);
+  if (!entry) {
+    res.status(404).end();
+    return;
+  }
+  res.set("Content-Type", "image/png");
+  res.set("Cache-Control", "no-store");
+  res.send(createDemoCaptchaPng(entry.code));
+});
+
+app.post("/demo-request", demoRequestLimiter, demoRequestDailyLimiter, async (req, res) => {
+  const body = req.body || {};
+  const honeypot = String(body.website || "").trim();
+  if (honeypot) {
+    res.json({ ok: true });
+    return;
+  }
+  const name = String(body.name || "").trim();
+  const email = String(body.email || "").trim();
+  const phone = String(body.phone || "").trim();
+  const about = String(body.about || "").trim();
+  const token = String(body.token || "").trim();
+  const now = Date.now();
+  pruneDemoGuards(now);
+  const entry = demoTokens.get(token);
+  if (!entry) {
+    res.status(400).json({ ok: false, error: "Ladda om sidan och försök igen." });
+    return;
+  }
+  const age = now - entry.issuedAt;
+  if (age > DEMO_TOKEN_MAX_MS) {
+    demoTokens.delete(token);
+    res.status(400).json({ ok: false, error: "Ladda om sidan och försök igen." });
+    return;
+  }
+  if (!captchaMatches(entry.code, body.captcha)) {
+    entry.attempts += 1;
+    if (entry.attempts >= 5) {
+      demoTokens.delete(token);
+      res.status(400).json({ ok: false, error: "Koden stämmer inte. Hämta en ny kod.", refresh: true });
+      return;
+    }
+    res.status(400).json({ ok: false, error: "Koden stämmer inte. Försök igen." });
+    return;
+  }
+  const emailKey = email.toLowerCase();
+  if (demoRecentEmails.has(emailKey)) {
+    res.status(429).json({
+      ok: false,
+      error: "Vi har redan tagit emot en förfrågan från den här e-postadressen."
+    });
+    return;
+  }
+  if (demoSentAt.length >= DEMO_GLOBAL_MAX) {
+    res.status(429).json({ ok: false, error: "För många förfrågningar just nu. Försök igen senare." });
+    return;
+  }
+  if (!name || name.length > 120) {
+    res.status(400).json({ ok: false, error: "Ange ditt namn." });
+    return;
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 200) {
+    res.status(400).json({ ok: false, error: "Ange en giltig e-postadress." });
+    return;
+  }
+  if (!phone || phone.length > 40) {
+    res.status(400).json({ ok: false, error: "Ange ett telefonnummer." });
+    return;
+  }
+  if (about.length > 1000) {
+    res.status(400).json({ ok: false, error: "Texten får vara högst 1000 tecken." });
+    return;
+  }
+  if (!resend || !RESEND_FROM) {
+    res.status(500).json({ ok: false, error: "E-post är inte konfigurerat." });
+    return;
+  }
+  try {
+    const sent = await resend.emails.send({
+      from: RESEND_FROM,
+      to: DEMO_REQUEST_EMAIL,
+      replyTo: email,
+      subject: "Önskemål om live-demo – Kyrkevent",
+      text: [
+        "Någon vill ha en live-demo om hur systemet fungerar för att komma igång.",
+        "",
+        `Namn: ${name}`,
+        `E-post: ${email}`,
+        `Telefon: ${phone}`,
+        `Organisation eller annan information: ${about || "–"}`
+      ].join("\n"),
+      html: `
+        <p>Någon vill ha en live-demo om hur systemet fungerar för att komma igång.</p>
+        <p><strong>Namn:</strong> ${escapeHtml(name)}<br/>
+        <strong>E-post:</strong> ${escapeHtml(email)}<br/>
+        <strong>Telefon:</strong> ${escapeHtml(phone)}<br/>
+        <strong>Organisation eller annan information:</strong> ${escapeHtml(about || "–")}</p>
+      `
+    });
+    if (sent?.error) {
+      const message = sent.error.message || "Kunde inte skicka förfrågan.";
+      // eslint-disable-next-line no-console
+      console.error("Failed to send demo request", sent.error);
+      res.status(500).json({ ok: false, error: message });
+      return;
+    }
+    demoTokens.delete(token);
+    demoRecentEmails.set(emailKey, Date.now());
+    demoSentAt.push(Date.now());
+    res.json({ ok: true });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Failed to send demo request", error);
+    res.status(500).json({ ok: false, error: "Kunde inte skicka förfrågan. Försök igen." });
+  }
+});
 
 app.get("/", (req, res) => {
   res.json({

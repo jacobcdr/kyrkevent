@@ -55,6 +55,7 @@ export default defineConfig({
       "/speakers": "http://localhost:3001",
       "/partners": "http://localhost:3001",
       "/uploads": "http://localhost:3001",
+      "/demo-request": "http://localhost:3001",
       "/admin": {
         target: "http://localhost:3001",
         bypass(req) {
