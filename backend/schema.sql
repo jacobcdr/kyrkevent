@@ -287,6 +287,16 @@ CREATE INDEX IF NOT EXISTS idx_event_page_view_hits_event_visitor
   ON event_page_view_hits (event_id, visitor_id)
   WHERE visitor_id <> '';
 
+CREATE TABLE IF NOT EXISTS site_page_view_hits (
+  id BIGSERIAL PRIMARY KEY,
+  page_key TEXT NOT NULL DEFAULT 'home',
+  viewed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  visitor_id TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_site_page_view_hits_page_viewed
+  ON site_page_view_hits (page_key, viewed_at DESC);
+
 ALTER TABLE bookings
   ADD COLUMN IF NOT EXISTS event_id INTEGER,
   ADD COLUMN IF NOT EXISTS last_name TEXT NOT NULL DEFAULT '',

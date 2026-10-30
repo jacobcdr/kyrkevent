@@ -211,6 +211,12 @@ body:has(.landing-page) {
 
 .landing-demo .field-label {
   color: #334155;
+  text-align: left;
+}
+
+.landing-demo-form,
+.landing-demo .field input:not(.file-upload-input) {
+  text-align: left;
 }
 
 .landing-demo .field input:not(.file-upload-input) {
@@ -224,26 +230,16 @@ body:has(.landing-page) {
   box-shadow: 0 0 0 3px rgba(102, 120, 141, 0.2);
 }
 
-.landing-demo-form .field {
+.landing-demo-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
   margin-bottom: 0.95rem;
 }
 
-.landing-demo .field textarea {
-  min-height: 7.5rem;
-  padding: 0.75rem;
-  border: 1px solid #cbd5e1;
-  border-radius: 10px;
-  background: #fff;
-  color: #334155;
-  font: inherit;
-  line-height: 1.45;
-  resize: vertical;
-}
-
-.landing-demo .field textarea:focus {
-  outline: none;
-  border-color: #66788d;
-  box-shadow: 0 0 0 3px rgba(102, 120, 141, 0.2);
+.landing-demo-row .field {
+  margin-bottom: 0;
+  min-width: 0;
 }
 
 .landing-demo .landing-pricing-btn {
@@ -308,6 +304,7 @@ body:has(.landing-page) {
   width: 100%;
   margin-top: 1.35rem;
   cursor: pointer;
+  text-align: center;
 }
 
 .landing-demo-form .landing-btn:disabled {
@@ -347,6 +344,10 @@ body:has(.landing-page) {
 
   .landing-demo {
     max-width: 420px;
+  }
+
+  .landing-demo-row {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -6090,6 +6091,43 @@ button.admin-booking-void-button:hover {
   background: var(--danger-bg, #ffebee);
   border: 1px solid #ffcdd2;
   color: var(--danger-text, #b71c1c);
+}
+
+.admin-visitor-block {
+  margin: 0 0 1.5rem;
+  padding: 1rem 1.1rem 1.15rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+}
+
+.admin-visitor-block .admin-subsection-title {
+  margin-top: 0;
+}
+
+.admin-visitor-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: flex-end;
+  margin: 0.75rem 0 1rem;
+}
+
+.admin-visitor-filters .field {
+  margin-bottom: 0;
+  min-width: 11rem;
+}
+
+.admin-visitor-chart {
+  margin-top: 0.25rem;
+}
+
+.admin-visitor-pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
 }
 
 .admin-status-header {

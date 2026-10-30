@@ -393,6 +393,12 @@ const demoRequestDailyLimiter = rateLimit({
   legacyHeaders: false,
   message: { ok: false, error: "För många förfrågningar. Försök igen om en stund." }
 });
+const siteViewLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false
+});
 const demoTokenLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 30,
@@ -2446,6 +2452,27 @@ app.get("/events/:slug/preview", async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to load preview" });
+  }
+});
+
+app.post("/site/view", siteViewLimiter, async (req, res) => {
+  const pageKey = String(req.body?.page || "home").trim().toLowerCase();
+  if (pageKey !== "home") {
+    res.status(400).json({ ok: false, error: "Unknown page" });
+    return;
+  }
+  if (parseDeviceType(req.headers["user-agent"] || "") === "bot") {
+    res.json({ ok: true });
+    return;
+  }
+  try {
+    await pool.query(
+      "INSERT INTO site_page_view_hits (page_key, visitor_id) VALUES ($1, $2)",
+      [pageKey, parseVisitorId(req.body?.visitorId)]
+    );
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Failed to track view" });
   }
 });
 
@@ -9800,6 +9827,104 @@ app.delete("/admin/gallery/:id", requireAdmin, async (req, res) => {
   }
 });
 
+const clampVisitorRange = (range, maxDays = 366) => {
+  const minFrom = addDaysToDateStr(range.to, -(maxDays - 1));
+  if (minFrom && range.from < minFrom) return { from: minFrom, to: range.to };
+  return range;
+};
+
+app.get("/admin/visitor-stats", requireAdmin, requireSuperAdmin, async (req, res) => {
+  const shared = resolveAnalyticsRange({ from: req.query.from, to: req.query.to });
+  const homeRange = clampVisitorRange(
+    resolveAnalyticsRange({
+      from: req.query.homeFrom || shared.from,
+      to: req.query.homeTo || shared.to
+    })
+  );
+  const eventRange = clampVisitorRange(
+    resolveAnalyticsRange({
+      from: req.query.eventFrom || shared.from,
+      to: req.query.eventTo || shared.to
+    })
+  );
+  const homeDateSql = `(viewed_at AT TIME ZONE '${ANALYTICS_TZ}')::date >= $1::date AND (viewed_at AT TIME ZONE '${ANALYTICS_TZ}')::date <= $2::date`;
+  try {
+    const [homeResult, homeSeriesResult, eventResult] = await Promise.all([
+      pool.query(
+        `
+          SELECT
+            COUNT(*)::int AS views,
+            COUNT(DISTINCT NULLIF(visitor_id, ''))::int AS unique_visitors
+          FROM site_page_view_hits
+          WHERE page_key = 'home'
+            AND ${homeDateSql}
+        `,
+        [homeRange.from, homeRange.to]
+      ),
+      pool.query(
+        `
+          SELECT
+            TO_CHAR((viewed_at AT TIME ZONE '${ANALYTICS_TZ}')::date, 'YYYY-MM-DD') AS bucket,
+            COUNT(*)::int AS view_count,
+            COUNT(DISTINCT NULLIF(visitor_id, ''))::int AS unique_count
+          FROM site_page_view_hits
+          WHERE page_key = 'home'
+            AND ${homeDateSql}
+          GROUP BY 1
+          ORDER BY 1
+        `,
+        [homeRange.from, homeRange.to]
+      ),
+      pool.query(
+        `
+          SELECT
+            e.id,
+            e.name,
+            e.slug,
+            COALESCE(NULLIF(TRIM(p.organization), ''), '–') AS organization,
+            COUNT(h.id)::int AS views,
+            COUNT(DISTINCT NULLIF(h.visitor_id, ''))::int AS unique_visitors
+          FROM events e
+          LEFT JOIN admin_user_profiles p ON p.user_id = e.user_id
+          LEFT JOIN event_page_view_hits h
+            ON h.event_id = e.id
+           AND (h.viewed_at AT TIME ZONE '${ANALYTICS_TZ}')::date >= $1::date
+           AND (h.viewed_at AT TIME ZONE '${ANALYTICS_TZ}')::date <= $2::date
+          WHERE e.event_end_date IS NULL OR e.event_end_date >= CURRENT_DATE
+          GROUP BY e.id, e.name, e.slug, p.organization
+          ORDER BY unique_visitors DESC, LOWER(e.name) ASC
+        `,
+        [eventRange.from, eventRange.to]
+      )
+    ]);
+    const home = homeResult.rows[0] || {};
+    res.json({
+      ok: true,
+      home: {
+        from: homeRange.from,
+        to: homeRange.to,
+        views: home.views || 0,
+        uniqueVisitors: home.unique_visitors || 0,
+        series: fillDailySeries(homeRange.from, homeRange.to, homeSeriesResult.rows)
+      },
+      events: {
+        from: eventRange.from,
+        to: eventRange.to,
+        rows: eventResult.rows.map((row) => ({
+          id: row.id,
+          name: row.name,
+          slug: row.slug,
+          organization: row.organization,
+          views: row.views || 0,
+          uniqueVisitors: row.unique_visitors || 0
+        }))
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Kunde inte hämta besöksstatistik." });
+  }
+});
+
 app.get("/admin/system-status", requireAdmin, requireSuperAdmin, async (_req, res) => {
   try {
     let databaseOk = false;
@@ -11638,6 +11763,18 @@ const ensureBookingsTable = async () => {
     CREATE INDEX IF NOT EXISTS idx_event_page_view_hits_event_visitor
       ON event_page_view_hits (event_id, visitor_id)
       WHERE visitor_id <> ''
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS site_page_view_hits (
+      id BIGSERIAL PRIMARY KEY,
+      page_key TEXT NOT NULL DEFAULT 'home',
+      viewed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      visitor_id TEXT NOT NULL DEFAULT ''
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_site_page_view_hits_page_viewed
+      ON site_page_view_hits (page_key, viewed_at DESC)
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS event_activity_log (
