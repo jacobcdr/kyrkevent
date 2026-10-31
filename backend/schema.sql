@@ -297,6 +297,14 @@ CREATE TABLE IF NOT EXISTS site_page_view_hits (
 CREATE INDEX IF NOT EXISTS idx_site_page_view_hits_page_viewed
   ON site_page_view_hits (page_key, viewed_at DESC);
 
+ALTER TABLE site_page_view_hits
+  ADD COLUMN IF NOT EXISTS device_type TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS referrer_type TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS referrer_host TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS country_code TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION,
+  ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION;
+
 ALTER TABLE bookings
   ADD COLUMN IF NOT EXISTS event_id INTEGER,
   ADD COLUMN IF NOT EXISTS last_name TEXT NOT NULL DEFAULT '',

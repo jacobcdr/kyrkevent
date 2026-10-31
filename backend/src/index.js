@@ -2465,10 +2465,30 @@ app.post("/site/view", siteViewLimiter, async (req, res) => {
     res.json({ ok: true });
     return;
   }
+  const userAgent = req.headers["user-agent"] || "";
+  const referrerHeader = req.headers.referer || req.headers.referrer || "";
+  const referrerBody = typeof req.body?.referrer === "string" ? req.body.referrer : "";
+  const referrerInfo = parseReferrer(referrerBody || referrerHeader);
+  const deviceType = parseDeviceType(userAgent);
+  const geo = resolveGeoFromRequest(req);
   try {
     await pool.query(
-      "INSERT INTO site_page_view_hits (page_key, visitor_id) VALUES ($1, $2)",
-      [pageKey, parseVisitorId(req.body?.visitorId)]
+      `
+        INSERT INTO site_page_view_hits (
+          page_key, visitor_id, device_type, referrer_type, referrer_host, country_code, latitude, longitude
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `,
+      [
+        pageKey,
+        parseVisitorId(req.body?.visitorId),
+        deviceType,
+        referrerInfo.type,
+        referrerInfo.host || "",
+        geo.countryCode || "",
+        geo.latitude,
+        geo.longitude
+      ]
     );
     res.json({ ok: true });
   } catch (error) {
@@ -9833,6 +9853,40 @@ const clampVisitorRange = (range, maxDays = 366) => {
   return range;
 };
 
+const visitorRangeDayCount = (range) => {
+  const [fy, fm, fd] = String(range.from || "").split("-").map(Number);
+  const [ty, tm, td] = String(range.to || "").split("-").map(Number);
+  if (!fy || !ty) return 0;
+  const start = Date.UTC(fy, fm - 1, fd);
+  const end = Date.UTC(ty, tm - 1, td);
+  return Math.round((end - start) / 86400000) + 1;
+};
+
+const fillHomeHourlySeries = (fromStr, toStr, rows) => {
+  const viewMap = new Map();
+  const uniqueMap = new Map();
+  for (const row of rows || []) {
+    const key = String(row.bucket || "").trim();
+    viewMap.set(key, Number(row.view_count) || 0);
+    uniqueMap.set(key, Number(row.unique_count) || 0);
+  }
+  const [fy, fm, fd] = fromStr.split("-").map(Number);
+  const [ty, tm, td] = toStr.split("-").map(Number);
+  const cursor = new Date(fy, fm - 1, fd, 0, 0, 0, 0);
+  const end = new Date(ty, tm - 1, td, 23, 0, 0, 0);
+  const series = [];
+  while (cursor <= end) {
+    const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}-${String(cursor.getDate()).padStart(2, "0")} ${String(cursor.getHours()).padStart(2, "0")}`;
+    series.push({
+      label: key,
+      count: viewMap.get(key) || 0,
+      uniqueCount: uniqueMap.get(key) || 0
+    });
+    cursor.setHours(cursor.getHours() + 1);
+  }
+  return series;
+};
+
 app.get("/admin/visitor-stats", requireAdmin, requireSuperAdmin, async (req, res) => {
   const shared = resolveAnalyticsRange({ from: req.query.from, to: req.query.to });
   const homeRange = clampVisitorRange(
@@ -9848,8 +9902,45 @@ app.get("/admin/visitor-stats", requireAdmin, requireSuperAdmin, async (req, res
     })
   );
   const homeDateSql = `(viewed_at AT TIME ZONE '${ANALYTICS_TZ}')::date >= $1::date AND (viewed_at AT TIME ZONE '${ANALYTICS_TZ}')::date <= $2::date`;
+  const homeDayCount = visitorRangeDayCount(homeRange);
+  const homeHourly = homeDayCount > 0 && homeDayCount < 3;
+  const homeSeriesSql = homeHourly
+    ? `
+        SELECT
+          TO_CHAR(viewed_at AT TIME ZONE '${ANALYTICS_TZ}', 'YYYY-MM-DD HH24') AS bucket,
+          COUNT(*)::int AS view_count,
+          COUNT(DISTINCT NULLIF(visitor_id, ''))::int AS unique_count
+        FROM site_page_view_hits
+        WHERE page_key = 'home'
+          AND ${homeDateSql}
+        GROUP BY 1
+        ORDER BY 1
+      `
+    : `
+        SELECT
+          TO_CHAR((viewed_at AT TIME ZONE '${ANALYTICS_TZ}')::date, 'YYYY-MM-DD') AS bucket,
+          COUNT(*)::int AS view_count,
+          COUNT(DISTINCT NULLIF(visitor_id, ''))::int AS unique_count
+        FROM site_page_view_hits
+        WHERE page_key = 'home'
+          AND ${homeDateSql}
+        GROUP BY 1
+        ORDER BY 1
+      `;
   try {
-    const [homeResult, homeSeriesResult, eventResult] = await Promise.all([
+    const homeBreakdownSql = (column) => `
+      SELECT ${column} AS type,
+        COUNT(*)::int AS view_count,
+        COUNT(DISTINCT NULLIF(visitor_id, ''))::int AS unique_count
+      FROM site_page_view_hits
+      WHERE page_key = 'home'
+        AND ${homeDateSql}
+        AND ${column} <> ''
+      GROUP BY 1
+      ORDER BY unique_count DESC, view_count DESC
+    `;
+    const [homeResult, homeSeriesResult, homeDeviceResult, homeReferrerResult, homeLocationResult, eventResult] =
+      await Promise.all([
       pool.query(
         `
           SELECT
@@ -9861,17 +9952,24 @@ app.get("/admin/visitor-stats", requireAdmin, requireSuperAdmin, async (req, res
         `,
         [homeRange.from, homeRange.to]
       ),
+      pool.query(homeSeriesSql, [homeRange.from, homeRange.to]),
+      pool.query(homeBreakdownSql("device_type"), [homeRange.from, homeRange.to]),
+      pool.query(homeBreakdownSql("referrer_type"), [homeRange.from, homeRange.to]),
       pool.query(
         `
           SELECT
-            TO_CHAR((viewed_at AT TIME ZONE '${ANALYTICS_TZ}')::date, 'YYYY-MM-DD') AS bucket,
+            COALESCE(NULLIF(country_code, ''), 'XX') AS country_code,
+            AVG(latitude)::float AS latitude,
+            AVG(longitude)::float AS longitude,
             COUNT(*)::int AS view_count,
             COUNT(DISTINCT NULLIF(visitor_id, ''))::int AS unique_count
           FROM site_page_view_hits
           WHERE page_key = 'home'
             AND ${homeDateSql}
-          GROUP BY 1
-          ORDER BY 1
+            AND latitude IS NOT NULL
+            AND longitude IS NOT NULL
+          GROUP BY COALESCE(NULLIF(country_code, ''), 'XX')
+          ORDER BY unique_count DESC, view_count DESC
         `,
         [homeRange.from, homeRange.to]
       ),
@@ -9898,6 +9996,17 @@ app.get("/admin/visitor-stats", requireAdmin, requireSuperAdmin, async (req, res
       )
     ]);
     const home = homeResult.rows[0] || {};
+    const withVisitorPercents = (rows) => {
+      const total = rows.reduce((sum, row) => sum + (Number(row.unique_count) || 0), 0);
+      return rows
+        .filter((row) => (Number(row.unique_count) || 0) > 0 || (Number(row.view_count) || 0) > 0)
+        .map((row) => ({
+          type: row.type || "unknown",
+          count: Number(row.unique_count) || 0,
+          viewCount: Number(row.view_count) || 0,
+          percent: total > 0 ? Math.round(((Number(row.unique_count) || 0) / total) * 100) : 0
+        }));
+    };
     res.json({
       ok: true,
       home: {
@@ -9905,7 +10014,21 @@ app.get("/admin/visitor-stats", requireAdmin, requireSuperAdmin, async (req, res
         to: homeRange.to,
         views: home.views || 0,
         uniqueVisitors: home.unique_visitors || 0,
-        series: fillDailySeries(homeRange.from, homeRange.to, homeSeriesResult.rows)
+        granularity: homeHourly ? "hour" : "day",
+        series: homeHourly
+          ? fillHomeHourlySeries(homeRange.from, homeRange.to, homeSeriesResult.rows)
+          : fillDailySeries(homeRange.from, homeRange.to, homeSeriesResult.rows),
+        devices: withVisitorPercents(homeDeviceResult.rows || []),
+        referrers: withVisitorPercents(homeReferrerResult.rows || []),
+        locations: (homeLocationResult.rows || [])
+          .map((row) => ({
+            countryCode: row.country_code || "XX",
+            count: Number(row.unique_count) || 0,
+            viewCount: Number(row.view_count) || 0,
+            latitude: row.latitude != null ? Number(row.latitude) : null,
+            longitude: row.longitude != null ? Number(row.longitude) : null
+          }))
+          .filter((row) => row.latitude != null && row.longitude != null && row.count > 0)
       },
       events: {
         from: eventRange.from,
@@ -11775,6 +11898,15 @@ const ensureBookingsTable = async () => {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_site_page_view_hits_page_viewed
       ON site_page_view_hits (page_key, viewed_at DESC)
+  `);
+  await pool.query(`
+    ALTER TABLE site_page_view_hits
+      ADD COLUMN IF NOT EXISTS device_type TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS referrer_type TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS referrer_host TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS country_code TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION,
+      ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS event_activity_log (

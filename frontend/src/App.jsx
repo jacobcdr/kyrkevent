@@ -15,6 +15,7 @@ import "leaflet/dist/leaflet.css";
 import "./App.css";
 import { EventGallery } from "./EventGallery";
 import { EventAnalytics, EventOverviewStats } from "./EventAnalytics";
+import { EventAnalyticsMap } from "./EventAnalyticsMap";
 import { EventActivityLog } from "./EventActivityLog";
 import { getOrCreateVisitorId } from "./visitorId";
 import { HOME, SITE_ORIGIN, findSitePage, setCanonical, setMetaDescription, setMetaRobots } from "../siteSeo.js";
@@ -240,8 +241,76 @@ function formatVisitorDay(ymd) {
   return date.toLocaleDateString("sv-SE", { day: "numeric", month: "short" });
 }
 
+function formatVisitorChartName(label, granularity) {
+  if (granularity === "hour") {
+    const match = String(label || "").match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2})$/);
+    if (!match) return label || "";
+    return `${match[4]}:00`;
+  }
+  return formatVisitorDay(label);
+}
+
+function formatVisitorTwoDayHour(label) {
+  const match = String(label || "").match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2})$/);
+  if (!match) return label || "";
+  return `${Number(match[3])}/${Number(match[2])} ${match[4]}`;
+}
+
+function formatVisitorChartTooltip(label, granularity) {
+  if (granularity === "hour") {
+    const match = String(label || "").match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2})$/);
+    if (!match) return label || "";
+    const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+    const day = date.toLocaleDateString("sv-SE", { day: "numeric", month: "short" });
+    return `${day}, ${match[4]}:00`;
+  }
+  return formatVisitorDay(label);
+}
+
+function visitorRangeDayCountClient(range) {
+  const from = String(range?.from || "");
+  const to = String(range?.to || "");
+  const start = from.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const end = to.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!start || !end) return 0;
+  const fromUtc = Date.UTC(Number(start[1]), Number(start[2]) - 1, Number(start[3]));
+  const toUtc = Date.UTC(Number(end[1]), Number(end[2]) - 1, Number(end[3]));
+  return Math.round((toUtc - fromUtc) / 86400000) + 1;
+}
+
+const HOME_DEVICE_LABELS = {
+  mobile: "Mobil",
+  desktop: "Dator",
+  tablet: "Surfplatta",
+  bot: "Bot",
+  unknown: "Okänd"
+};
+
+const HOME_REFERRER_LABELS = {
+  direct: "Direkt",
+  search: "Sökmotor",
+  social: "Sociala medier",
+  external: "Extern webbplats",
+  unknown: "Okänd"
+};
+
+const homeCountryNames =
+  typeof Intl !== "undefined" && Intl.DisplayNames ? new Intl.DisplayNames(["sv"], { type: "region" }) : null;
+
+function homeCountryLabel(code) {
+  const normalized = String(code || "").trim().toUpperCase();
+  if (!normalized || normalized === "XX") return "Okänd plats";
+  try {
+    return homeCountryNames?.of(normalized) || normalized;
+  } catch {
+    return normalized;
+  }
+}
+
 const VISITOR_EVENT_PAGE_SIZE = 8;
 const HOME_VISITOR_PRESETS = [
+  { id: "1d", label: "Idag", days: 1 },
+  { id: "2d", label: "2 dagar", days: 2 },
   { id: "7d", label: "Senaste 7 dagarna", days: 7 },
   { id: "30d", label: "Senaste 30 dagarna", days: 30 },
   { id: "90d", label: "Senaste 90 dagarna", days: 90 }
@@ -3402,12 +3471,25 @@ const AdminPage = () => {
     (visitorEventPageSafe - 1) * VISITOR_EVENT_PAGE_SIZE,
     visitorEventPageSafe * VISITOR_EVENT_PAGE_SIZE
   );
+  const homeVisitorGranularity = visitorStats?.home?.granularity === "hour" ? "hour" : "day";
   const homeVisitorChart = (visitorStats?.home?.series || []).map((point) => ({
-    name: formatVisitorDay(point.label),
+    name:
+      homeVisitorGranularity === "hour" && visitorRangeDayCountClient(visitorStats?.home) > 1
+        ? formatVisitorTwoDayHour(point.label)
+        : formatVisitorChartName(point.label, homeVisitorGranularity),
     label: point.label,
     uniqueCount: point.uniqueCount || 0,
     count: point.count || 0
   }));
+  const homeLocationRows = (() => {
+    const locations = visitorStats?.home?.locations || [];
+    const total = locations.reduce((sum, row) => sum + (Number(row.count) || 0), 0);
+    return locations.map((row) => ({
+      ...row,
+      label: homeCountryLabel(row.countryCode),
+      percent: total > 0 ? Math.round((Number(row.count) / total) * 100) : 0
+    }));
+  })();
   useEffect(() => {
     if (eventVisitorPage > visitorEventPageCount) {
       setEventVisitorPage(visitorEventPageCount);
@@ -9866,7 +9948,7 @@ const AdminPage = () => {
                 <section className="admin-visitor-block">
                   <h3 className="admin-subsection-title">Huvudsidan kyrkevent.se</h3>
                   <p className="muted">
-                    Unika besökare och sidvisningar på startsidan. Mätningen gäller från och med att den är igång.
+                    Unika besökare och sidvisningar på startsidan. Välj Idag eller 2 dagar för att se vilka timmar besökarna varit inne. Mätningen gäller från och med att den är igång.
                   </p>
                   <div className="event-analytics-chips" role="group" aria-label="Datum för huvudsidan">
                     {HOME_VISITOR_PRESETS.map((preset) => (
@@ -9936,23 +10018,86 @@ const AdminPage = () => {
                           <ResponsiveContainer width="100%" height={260}>
                             <BarChart data={homeVisitorChart} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
                               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                              <XAxis dataKey="name" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
+                              <XAxis
+                                dataKey="name"
+                                tick={{ fontSize: 11 }}
+                                interval={homeVisitorGranularity === "hour" ? 2 : "preserveStartEnd"}
+                              />
                               <YAxis allowDecimals={false} tick={{ fontSize: 12 }} width={36} />
                               <Tooltip
                                 formatter={(value, name) => [Number(value || 0).toLocaleString("sv-SE"), name]}
                                 labelFormatter={(_label, payload) => {
                                   const raw = payload?.[0]?.payload?.label;
-                                  return raw ? formatVisitorDay(raw) : _label;
+                                  return raw ? formatVisitorChartTooltip(raw, homeVisitorGranularity) : _label;
                                 }}
                               />
                               <Bar dataKey="uniqueCount" fill="var(--accent)" radius={[4, 4, 0, 0]} name="Unika besökare" />
                               <Bar dataKey="count" fill="#94a3b8" radius={[4, 4, 0, 0]} name="Sidvisningar" />
                             </BarChart>
                           </ResponsiveContainer>
+                          {homeVisitorGranularity === "hour" ? (
+                            <p className="muted event-analytics-hint">Visar unika besökare och sidvisningar per timme.</p>
+                          ) : null}
                         </div>
                       ) : (
                         <p className="muted">Inga besök på huvudsidan i valt intervall.</p>
                       )}
+                      <div className="event-analytics-breakdown">
+                        <div className="event-analytics-breakdown-col event-analytics-breakdown-col--wide">
+                          <h3 className="admin-subsection-title">Var besökarna kommer ifrån</h3>
+                          {homeLocationRows.length ? (
+                            <>
+                              <EventAnalyticsMap locations={homeLocationRows} />
+                              <ul className="event-analytics-breakdown-list event-analytics-location-list">
+                                {homeLocationRows.map((row) => (
+                                  <li key={row.countryCode}>
+                                    <span>{row.label}</span>
+                                    <span>
+                                      {row.count} ({row.percent}%)
+                                    </span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </>
+                          ) : (
+                            <p className="muted">Ingen plats ännu för valt intervall. Plats sparas från nya besök.</p>
+                          )}
+                        </div>
+                        <div className="event-analytics-breakdown-col">
+                          <h3 className="admin-subsection-title">Enhet</h3>
+                          {visitorStats.home.devices?.length ? (
+                            <ul className="event-analytics-breakdown-list">
+                              {visitorStats.home.devices.map((row) => (
+                                <li key={row.type}>
+                                  <span>{HOME_DEVICE_LABELS[row.type] || row.type}</span>
+                                  <span>
+                                    {row.count} ({row.percent}%)
+                                  </span>
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <p className="muted">Ingen enhetsdata ännu.</p>
+                          )}
+                        </div>
+                        <div className="event-analytics-breakdown-col">
+                          <h3 className="admin-subsection-title">Trafikkälla</h3>
+                          {visitorStats.home.referrers?.length ? (
+                            <ul className="event-analytics-breakdown-list">
+                              {visitorStats.home.referrers.map((row) => (
+                                <li key={row.type}>
+                                  <span>{HOME_REFERRER_LABELS[row.type] || row.type}</span>
+                                  <span>
+                                    {row.count} ({row.percent}%)
+                                  </span>
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <p className="muted">Ingen källdata ännu.</p>
+                          )}
+                        </div>
+                      </div>
                     </>
                   ) : visitorStatsLoading ? (
                     <p className="muted">Laddar besöksstatistik…</p>
@@ -16434,7 +16579,11 @@ function App() {
     fetch(demoRequestUrl("/site/view"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ page: "home", visitorId: visitorId || "" })
+      body: JSON.stringify({
+      page: "home",
+      visitorId: visitorId || "",
+      referrer: document.referrer || ""
+    })
     }).catch(() => {});
     return undefined;
   }, [isAdminRoute, isLandingRoute]);
