@@ -12138,6 +12138,31 @@ const AdminPage = () => {
           </div>
         ) : null}
 
+        {token && selectedEventId && (adminSection === "bookings" || adminSection === "frontpage" || adminSection === "settings") ? (
+          <nav className="admin-event-tabs" role="tablist" aria-label="Event">
+            {[
+              { id: "bookings", label: "Bokningar" },
+              { id: "frontpage", label: "Framsida" },
+              { id: "settings", label: "Eventinställningar" }
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                className={`admin-event-tab ${adminSection === tab.id ? "is-active" : ""}`}
+                aria-selected={adminSection === tab.id}
+                onClick={() => {
+                  if (adminSection === tab.id) return;
+                  setAdminSection(tab.id);
+                  window.scrollTo({ top: 0, behavior: "smooth" });
+                }}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </nav>
+        ) : null}
+
         {adminSection !== "profile" && adminSection !== "payout" && adminSection !== "admin" && adminSection !== "help" && (statusMessage || error || (token && !selectedEventId)) ? (
           <div className="section">
             {statusMessage ? <p className="admin-error">{statusMessage}</p> : null}
