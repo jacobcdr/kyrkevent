@@ -1168,7 +1168,16 @@ const defaultSectionVisibility = {
   socialShowLinkedin: true,
   socialIconStyle: "color",
   socialIconShape: "rounded",
-  socialCaption: ""
+  socialCaption: "",
+  invertText: false,
+  invertProgram: false,
+  invertFaq: false,
+  invertSpeakers: false,
+  invertPartners: false,
+  invertGallery: false,
+  invertPlace: false,
+  invertFormButton: false,
+  invertSocial: false
 };
 
 const DEFAULT_SECTION_ORDER = ["text", "formButton", "program", "faq", "form", "speakers", "partners", "gallery", "social", "place"];
@@ -1228,7 +1237,9 @@ const EVENT_SECTIONS_SELECT = `
   social_instagram_url, social_facebook_url, social_linkedin_url,
   social_show_instagram, social_show_facebook, social_show_linkedin,
   social_icon_style, social_icon_shape, social_caption,
-  faq_collapse
+  faq_collapse,
+  invert_text, invert_program, invert_faq, invert_speakers, invert_partners,
+  invert_gallery, invert_place, invert_form_button, invert_social
 `;
 
 function formatSectionsResponse(row, customIds = []) {
@@ -1272,7 +1283,16 @@ function formatSectionsResponse(row, customIds = []) {
     socialShowLinkedin: row.social_show_linkedin !== false,
     socialIconStyle: parseSocialIconStyle(row.social_icon_style),
     socialIconShape: parseSocialIconShape(row.social_icon_shape),
-    socialCaption: row.social_caption ?? ""
+    socialCaption: row.social_caption ?? "",
+    invertText: row.invert_text === true,
+    invertProgram: row.invert_program === true,
+    invertFaq: row.invert_faq === true,
+    invertSpeakers: row.invert_speakers === true,
+    invertPartners: row.invert_partners === true,
+    invertGallery: row.invert_gallery === true,
+    invertPlace: row.invert_place === true,
+    invertFormButton: row.invert_form_button === true,
+    invertSocial: row.invert_social === true
   };
 }
 
@@ -8220,7 +8240,16 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
     socialIconStyle,
     socialIconShape,
     socialCaption,
-    faqCollapse
+    faqCollapse,
+    invertText,
+    invertProgram,
+    invertFaq,
+    invertSpeakers,
+    invertPartners,
+    invertGallery,
+    invertPlace,
+    invertFormButton,
+    invertSocial
   } = req.body || {};
   const parsedEventId = await ensureEventOwnership(eventId, req.userId, res);
   if (!parsedEventId) {
@@ -8264,10 +8293,13 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
            show_form_button, section_label_form_button, form_button_width,
            show_social, section_label_social, social_instagram_url, social_facebook_url, social_linkedin_url,
            social_show_instagram, social_show_facebook, social_show_linkedin, social_icon_style, social_icon_shape, social_caption,
-           faq_collapse)
+           faq_collapse,
+           invert_text, invert_program, invert_faq, invert_speakers, invert_partners,
+           invert_gallery, invert_place, invert_form_button, invert_social)
         VALUES
           ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28,
-           $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41)
+           $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41,
+           $42, $43, $44, $45, $46, $47, $48, $49, $50)
         ON CONFLICT (event_id) DO UPDATE SET
           show_program = EXCLUDED.show_program,
           show_place = EXCLUDED.show_place,
@@ -8308,7 +8340,16 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
           social_icon_style = EXCLUDED.social_icon_style,
           social_icon_shape = EXCLUDED.social_icon_shape,
           social_caption = EXCLUDED.social_caption,
-          faq_collapse = EXCLUDED.faq_collapse
+          faq_collapse = EXCLUDED.faq_collapse,
+          invert_text = EXCLUDED.invert_text,
+          invert_program = EXCLUDED.invert_program,
+          invert_faq = EXCLUDED.invert_faq,
+          invert_speakers = EXCLUDED.invert_speakers,
+          invert_partners = EXCLUDED.invert_partners,
+          invert_gallery = EXCLUDED.invert_gallery,
+          invert_place = EXCLUDED.invert_place,
+          invert_form_button = EXCLUDED.invert_form_button,
+          invert_social = EXCLUDED.invert_social
         RETURNING ${EVENT_SECTIONS_SELECT}
       `,
       [
@@ -8352,7 +8393,16 @@ app.put("/admin/sections", requireAdmin, async (req, res) => {
         socialIconStyleNormalized,
         socialIconShapeNormalized,
         socialCaptionNormalized,
-        faqCollapse === true
+        faqCollapse === true,
+        invertText === true,
+        invertProgram === true,
+        invertFaq === true,
+        invertSpeakers === true,
+        invertPartners === true,
+        invertGallery === true,
+        invertPlace === true,
+        invertFormButton === true,
+        invertSocial === true
       ]
     );
     res.json({
@@ -11826,7 +11876,16 @@ const ensureBookingsTable = async () => {
       ADD COLUMN IF NOT EXISTS social_show_linkedin BOOLEAN NOT NULL DEFAULT TRUE,
       ADD COLUMN IF NOT EXISTS social_icon_style TEXT NOT NULL DEFAULT 'color',
       ADD COLUMN IF NOT EXISTS social_icon_shape TEXT NOT NULL DEFAULT 'rounded',
-      ADD COLUMN IF NOT EXISTS social_caption TEXT DEFAULT ''
+      ADD COLUMN IF NOT EXISTS social_caption TEXT DEFAULT '',
+      ADD COLUMN IF NOT EXISTS invert_text BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS invert_program BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS invert_faq BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS invert_speakers BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS invert_partners BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS invert_gallery BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS invert_place BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS invert_form_button BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS invert_social BOOLEAN NOT NULL DEFAULT FALSE
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS event_gallery_images (

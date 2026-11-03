@@ -1061,13 +1061,19 @@ const FRONTPAGE_EDITOR_TABS = [
   { id: "place", label: "Plats" }
 ];
 
-function SectionVisibilityToggle({ name, checked, onChange }) {
+function SectionVisibilityToggle({ name, checked, onChange, invertName, invertChecked }) {
   return (
     <div className="section-visibility-control">
-      <label className="field checkbox-field section-toggle">
-        <span className="field-label">Aktivera</span>
-        <input name={name} type="checkbox" checked={checked} onChange={onChange} />
-      </label>
+      <div className="section-visibility-toggles">
+        <label className="field checkbox-field section-toggle">
+          <span className="field-label">Aktivera</span>
+          <input name={name} type="checkbox" checked={checked} onChange={onChange} />
+        </label>
+        <label className="field checkbox-field section-toggle">
+          <span className="field-label">Invertera bakgrund</span>
+          <input name={invertName} type="checkbox" checked={invertChecked === true} onChange={onChange} />
+        </label>
+      </div>
       <span className={`section-visibility-status ${checked ? "is-active" : "is-inactive"}`}>
         {checked ? "Sektionen visas" : "Sektionen visas inte"}
       </span>
@@ -2169,6 +2175,22 @@ const LandingPage = ({ initialSection = "" }) => {
             </button>
           </form>
         )}
+      </section>
+      <section className="landing-example" aria-labelledby="landing-example-heading">
+        <h2 id="landing-example-heading">Så här kan en anmälningssida se ut</h2>
+        <p className="landing-intro">
+          Ett exempel på sidan deltagaren möter, med information om eventet och anmälan.
+        </p>
+        <video
+          className="landing-example-video"
+          src="/webmobpress.mp4"
+          autoPlay
+          muted
+          loop
+          playsInline
+          preload="auto"
+          aria-label="Exempel på en anmälningssida"
+        />
       </section>
       <LandingDetails />
       <SiteFooter />
@@ -3343,7 +3365,16 @@ const AdminPage = () => {
     showFaq: false,
     showGallery: false,
     showFormButton: false,
-    showSocial: false
+    showSocial: false,
+    invertText: false,
+    invertProgram: false,
+    invertFaq: false,
+    invertSpeakers: false,
+    invertPartners: false,
+    invertGallery: false,
+    invertPlace: false,
+    invertFormButton: false,
+    invertSocial: false
   });
   const [adminSectionLabels, setAdminSectionLabels] = useState({
     program: "",
@@ -4053,7 +4084,16 @@ const AdminPage = () => {
       showFaq: data.sections?.showFaq || false,
       showGallery: data.sections?.showGallery === true,
       showFormButton: data.sections?.showFormButton === true,
-      showSocial: data.sections?.showSocial === true
+      showSocial: data.sections?.showSocial === true,
+      invertText: data.sections?.invertText === true,
+      invertProgram: data.sections?.invertProgram === true,
+      invertFaq: data.sections?.invertFaq === true,
+      invertSpeakers: data.sections?.invertSpeakers === true,
+      invertPartners: data.sections?.invertPartners === true,
+      invertGallery: data.sections?.invertGallery === true,
+      invertPlace: data.sections?.invertPlace === true,
+      invertFormButton: data.sections?.invertFormButton === true,
+      invertSocial: data.sections?.invertSocial === true
     });
     setAdminSectionOrder(mergeSectionOrder(data.sections?.sectionOrder, DEFAULT_SECTION_ORDER));
     setAdminSectionLabels({
@@ -13438,6 +13478,8 @@ const AdminPage = () => {
                   <SectionVisibilityToggle
                     name="showFormButton"
                     checked={adminSectionVisibility.showFormButton}
+                    invertName="invertFormButton"
+                    invertChecked={adminSectionVisibility.invertFormButton}
                     onChange={handleSectionVisibilityChange}
                   />
                 </div>
@@ -13521,6 +13563,8 @@ const AdminPage = () => {
                   <SectionVisibilityToggle
                     name="showProgram"
                     checked={adminSectionVisibility.showProgram}
+                    invertName="invertProgram"
+                    invertChecked={adminSectionVisibility.invertProgram}
                     onChange={handleSectionVisibilityChange}
                   />
                 </div>
@@ -13636,6 +13680,8 @@ const AdminPage = () => {
                   <SectionVisibilityToggle
                     name="showText"
                     checked={adminSectionVisibility.showText}
+                    invertName="invertText"
+                    invertChecked={adminSectionVisibility.invertText}
                     onChange={handleSectionVisibilityChange}
                   />
                 </div>
@@ -13719,6 +13765,8 @@ const AdminPage = () => {
                   <SectionVisibilityToggle
                     name="showPlace"
                     checked={adminSectionVisibility.showPlace}
+                    invertName="invertPlace"
+                    invertChecked={adminSectionVisibility.invertPlace}
                     onChange={handleSectionVisibilityChange}
                   />
                 </div>
@@ -13816,6 +13864,8 @@ const AdminPage = () => {
                   <SectionVisibilityToggle
                     name="showFaq"
                     checked={adminSectionVisibility.showFaq}
+                    invertName="invertFaq"
+                    invertChecked={adminSectionVisibility.invertFaq}
                     onChange={handleSectionVisibilityChange}
                   />
                 </div>
@@ -13937,6 +13987,8 @@ const AdminPage = () => {
                   <SectionVisibilityToggle
                     name="showSpeakers"
                     checked={adminSectionVisibility.showSpeakers}
+                    invertName="invertSpeakers"
+                    invertChecked={adminSectionVisibility.invertSpeakers}
                     onChange={handleSectionVisibilityChange}
                   />
                 </div>
@@ -14123,6 +14175,8 @@ const AdminPage = () => {
                   <SectionVisibilityToggle
                     name="showPartners"
                     checked={adminSectionVisibility.showPartners}
+                    invertName="invertPartners"
+                    invertChecked={adminSectionVisibility.invertPartners}
                     onChange={handleSectionVisibilityChange}
                   />
                 </div>
@@ -14279,6 +14333,8 @@ const AdminPage = () => {
                   <SectionVisibilityToggle
                     name="showGallery"
                     checked={adminSectionVisibility.showGallery}
+                    invertName="invertGallery"
+                    invertChecked={adminSectionVisibility.invertGallery}
                     onChange={handleSectionVisibilityChange}
                   />
                 </div>
@@ -15664,6 +15720,8 @@ const AdminPage = () => {
                   <SectionVisibilityToggle
                     name="showSocial"
                     checked={adminSectionVisibility.showSocial}
+                    invertName="invertSocial"
+                    invertChecked={adminSectionVisibility.invertSocial}
                     onChange={handleSectionVisibilityChange}
                   />
                 </div>
@@ -16719,6 +16777,15 @@ function App() {
       showGallery: data.sections?.showGallery === true,
       showFormButton: data.sections?.showFormButton === true,
       showSocial: data.sections?.showSocial === true,
+      invertText: data.sections?.invertText === true,
+      invertProgram: data.sections?.invertProgram === true,
+      invertFaq: data.sections?.invertFaq === true,
+      invertSpeakers: data.sections?.invertSpeakers === true,
+      invertPartners: data.sections?.invertPartners === true,
+      invertGallery: data.sections?.invertGallery === true,
+      invertPlace: data.sections?.invertPlace === true,
+      invertFormButton: data.sections?.invertFormButton === true,
+      invertSocial: data.sections?.invertSocial === true,
       translateDefaultLanguage: normalizeTranslateDefaultLanguage(data.sections?.translateDefaultLanguage)
     });
     setSocial({
@@ -17256,9 +17323,11 @@ function App() {
       {eventLoading ? <p className="muted">Laddar event...</p> : null}
       {!event && eventError ? <p className="admin-error">{eventError}</p> : null}
       {event ? sectionOrder.map((key) => {
+        const sectionClass = (invertKey, extra = "") =>
+          ["section", extra, sectionVisibility[invertKey] ? "section--invert" : ""].filter(Boolean).join(" ");
         if (key === "text" && sectionVisibility.showText && (hero.title || hero.bodyHtml)) {
           return (
-            <div className="section" key="text">
+            <div className={sectionClass("invertText")} key="text">
               {hero.title ? <h2>{hero.title}</h2> : null}
               {hero.bodyHtml ? (
                 <div
@@ -17271,7 +17340,7 @@ function App() {
         }
         if (key === "program" && sectionVisibility.showProgram) {
           return (
-            <div className="section" key="program">
+            <div className={sectionClass("invertProgram")} key="program">
               <h2>{sectionLabels.program.trim() || "Program"}</h2>
               {programItems.length > 0 ? (
                 <div className="program">
@@ -17302,7 +17371,7 @@ function App() {
         }
         if (key === "faq" && sectionVisibility.showFaq) {
           return (
-            <div className="section" key="faq">
+            <div className={sectionClass("invertFaq")} key="faq">
               <h2>{sectionLabels.faq.trim() || "FAQ"}</h2>
               {faqText && faqText.trim() ? (
                 <FaqCollapsible html={faqText} enabled={faqCollapse} />
@@ -17314,7 +17383,7 @@ function App() {
         }
         if (key === "speakers" && sectionVisibility.showSpeakers) {
           return (
-            <div className="section" key="speakers">
+            <div className={sectionClass("invertSpeakers")} key="speakers">
               <h2>{sectionLabels.speakers.trim() || "Personer"}</h2>
               {speakers.length > 0 ? (
                 <div className={`speakers${speakersLayout === "list" ? " speakers--list" : ""}`}>
@@ -17340,7 +17409,7 @@ function App() {
         }
         if (key === "partners" && sectionVisibility.showPartners) {
           return (
-            <div className="section" key="partners">
+            <div className={sectionClass("invertPartners")} key="partners">
               <h2>{sectionLabels.partners.trim() || "Partner"}</h2>
               {partners.length > 0 ? (
                 <div className="partner-grid">
@@ -17372,7 +17441,7 @@ function App() {
         }
         if (key === "gallery" && sectionVisibility.showGallery && galleryImages.length > 0) {
           return (
-            <div className="section section-gallery" key="gallery">
+            <div className={sectionClass("invertGallery", "section-gallery")} key="gallery">
               <h2>{sectionLabels.gallery.trim() || "Galleri"}</h2>
               <EventGallery
                 images={galleryImages}
@@ -17396,7 +17465,7 @@ function App() {
             return null;
           }
           return (
-            <div className="section section-social" key="social">
+            <div className={sectionClass("invertSocial", "section-social")} key="social">
               <h2>{sectionLabels.social.trim() || "Följ oss"}</h2>
               <SocialLinks
                 items={socialItems}
@@ -17409,7 +17478,7 @@ function App() {
         }
         if (key === "place" && sectionVisibility.showPlace) {
           return (
-            <div className="section" key="place">
+            <div className={sectionClass("invertPlace")} key="place">
               <h2>Plats</h2>
               <PlaceCard address={place.address} description={place.description} />
             </div>
@@ -17417,7 +17486,7 @@ function App() {
         }
         if (key === "formButton" && sectionVisibility.showFormButton) {
           return (
-            <div className={`section section-form-button section-form-button--${formButtonWidth}`} key="formButton">
+            <div className={sectionClass("invertFormButton", `section-form-button section-form-button--${formButtonWidth}`)} key="formButton">
               <button
                 type="button"
                 className={`button${formButtonWidth === "wide" ? " full-width" : ""}`}
