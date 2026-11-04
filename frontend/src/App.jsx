@@ -884,15 +884,22 @@ const FORM_FIELD_TYPES = [
   { id: "text", label: "Liten textbox" },
   { id: "textarea", label: "Större textbox" },
   { id: "checkbox", label: "Checkbox" },
+  { id: "checkbox_multi", label: "Checkbox flerval" },
+  { id: "select", label: "Rullgardinsmeny" },
   { id: "paragraph", label: "Informations text" },
   { id: "linebreak", label: "Radbrytning" }
 ];
+
+const isOptionListField = (type) => type === "checkbox_multi" || type === "select";
+const optionListLimit = (type) => (type === "select" ? 50 : 20);
 
 const formFieldTypeLabel = (type) =>
   FORM_FIELD_TYPES.find((item) => item.id === type)?.label || "Liten textbox";
 
 const isCustomFieldFullWidth = (field) =>
-  field?.field_type === "paragraph" || field?.field_type === "linebreak";
+  field?.field_type === "paragraph" ||
+  field?.field_type === "linebreak" ||
+  field?.field_type === "checkbox_multi";
 
 const customOrderId = (key) => {
   const match = /^custom:(\d+)/.exec(String(key || ""));
@@ -1001,6 +1008,108 @@ const customFieldDropPosition = (event, row, dragField) => {
   return relY < 0.5 ? "above" : "below";
 };
 
+function CheckboxChoiceGroup({ label, options, maxChoices, minChoices, value, onChange, disabled }) {
+  const choices = Array.isArray(options) ? options.filter(Boolean) : [];
+  const selected = Array.isArray(value) ? value.filter((item) => choices.includes(item)) : [];
+  const limit = Math.min(
+    Math.max(1, Number(maxChoices) || choices.length || 1),
+    Math.max(choices.length, 1)
+  );
+  const minimum = Math.min(Math.max(0, Number(minChoices) || 0), choices.length);
+  const atLimit = selected.length >= limit;
+  const hint =
+    minimum > 0 && limit < choices.length
+      ? `Välj minst ${minimum} och högst ${limit}.`
+      : minimum > 0
+        ? `Välj minst ${minimum}.`
+        : limit < choices.length
+          ? `Välj högst ${limit}.`
+          : "";
+  return (
+    <div className="choice-group" role="group" aria-label={label}>
+      <div className="field-label choice-group-title">{label}</div>
+      {hint ? <p className="muted choice-group-hint">{hint}</p> : null}
+      {choices.map((option) => {
+        const checked = selected.includes(option);
+        const locked = Boolean(disabled) || (!checked && atLimit);
+        return (
+          <label
+            key={option}
+            className={`field checkbox-field choice-option${locked && !checked ? " is-disabled" : ""}`}
+          >
+            <input
+              type="checkbox"
+              checked={checked}
+              disabled={locked}
+              onChange={() => {
+                if (!checked && atLimit) return;
+                const next = checked
+                  ? selected.filter((item) => item !== option)
+                  : [...selected, option];
+                onChange(next);
+              }}
+            />
+            <span className="field-label">{option}</span>
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
+function ChoiceColumnFilter({ field, rules, open, onToggle, onCycle, onClear, menuRef }) {
+  const options = Array.isArray(field.options) ? field.options.filter(Boolean) : [];
+  if (field.field_type !== "checkbox_multi" || options.length === 0) return null;
+  const activeCount = Object.keys(rules || {}).length;
+  return (
+    <div className="choice-col-filter" ref={open ? menuRef : null}>
+      <button
+        type="button"
+        className={`choice-col-filter-toggle${activeCount ? " is-active" : ""}`}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        aria-label={`Filtrera ${field.label}`}
+        onClick={onToggle}
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+          <path d="M4 5h16l-6 7v6l-4 2v-8L4 5z" strokeLinejoin="round" />
+        </svg>
+        {activeCount ? <span className="choice-col-filter-count">{activeCount}</span> : null}
+      </button>
+      {open ? (
+        <div className="choice-col-filter-menu" role="dialog" aria-label={`Filter för ${field.label}`}>
+          <p className="choice-col-filter-hint">Ett klick kräver valet. Ett till klick utesluter det.</p>
+          {options.map((option) => {
+            const mode = rules?.[option] || "";
+            const modeLabel =
+              mode === "must" ? "måste vara valt" : mode === "exclude" ? "får inte vara valt" : "inget filter";
+            return (
+              <button
+                key={option}
+                type="button"
+                className={`choice-col-filter-option${mode ? ` is-${mode}` : ""}`}
+                aria-label={`${option}, ${modeLabel}`}
+                onClick={() => onCycle(option)}
+              >
+                <span className="choice-col-filter-box" aria-hidden="true">
+                  {mode === "must" ? "✓" : mode === "exclude" ? "–" : ""}
+                </span>
+                <span className="choice-col-filter-label">{option}</span>
+                {mode === "exclude" ? <span className="choice-col-filter-state">Inte</span> : null}
+              </button>
+            );
+          })}
+          {activeCount ? (
+            <button type="button" className="choice-col-filter-clear" onClick={onClear}>
+              Rensa
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function FormFieldTypeIcon({ type }) {
   const common = {
     width: 28,
@@ -1024,6 +1133,26 @@ function FormFieldTypeIcon({ type }) {
       <svg {...common}>
         <rect x="4" y="4" width="16" height="16" rx="3" />
         <path d="M8 12.5l2.5 2.5L16 9" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+  if (type === "checkbox_multi") {
+    return (
+      <svg {...common}>
+        <rect x="3" y="4" width="6" height="6" rx="1.4" />
+        <path d="M4.2 7.1l1.2 1.2L7.6 5.8" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M11 7h10" strokeLinecap="round" />
+        <rect x="3" y="14" width="6" height="6" rx="1.4" />
+        <path d="M11 17h10" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  if (type === "select") {
+    return (
+      <svg {...common}>
+        <rect x="4" y="5" width="16" height="14" rx="2" />
+        <path d="M8 10h8" strokeLinecap="round" />
+        <path d="M15 13.5l2 2 2-2" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
     );
   }
@@ -1078,6 +1207,48 @@ function SectionVisibilityToggle({ name, checked, onChange, invertName, invertCh
         {checked ? "Sektionen visas" : "Sektionen visas inte"}
       </span>
     </div>
+  );
+}
+
+const SECTION_ORDER_ACTIVE_FIELD = {
+  text: "showText",
+  formButton: "showFormButton",
+  program: "showProgram",
+  faq: "showFaq",
+  speakers: "showSpeakers",
+  partners: "showPartners",
+  gallery: "showGallery",
+  social: "showSocial",
+  place: "showPlace"
+};
+
+function SectionOrderStatus({ active }) {
+  return (
+    <span className={`section-order-status ${active ? "is-active" : "is-inactive"}`}>
+      {active ? (
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+          <path
+            d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          />
+          <circle cx="12" cy="12" r="2.4" fill="currentColor" />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+          <path
+            d="M3 3l18 18M10.6 6.2A10.8 10.8 0 0 1 12 6c6.5 0 10 6 10 6a18.4 18.4 0 0 1-4.2 4.6M6.1 6.3C3.8 8 2 12 2 12s3.5 6 10 6c1.3 0 2.5-.3 3.6-.8"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      )}
+      <span>{active ? "Aktiv" : "Inaktiv"}</span>
+    </span>
   );
 }
 
@@ -3297,6 +3468,12 @@ const AdminPage = () => {
   const [testEmail, setTestEmail] = useState("");
   const [bookingsPage, setBookingsPage] = useState(1);
   const [bookingsSearchQuery, setBookingsSearchQuery] = useState("");
+  const [choiceColumnFilters, setChoiceColumnFilters] = useState({});
+  const [openChoiceFilterId, setOpenChoiceFilterId] = useState(null);
+  const choiceFilterMenuRef = useRef(null);
+  const [excelExportOpen, setExcelExportOpen] = useState(false);
+  const [excelSplitChoices, setExcelSplitChoices] = useState(false);
+  const [excelExporting, setExcelExporting] = useState(false);
   const [bookingsRefreshLoading, setBookingsRefreshLoading] = useState(false);
   const [refundModal, setRefundModal] = useState(null);
   const [refundSubmitting, setRefundSubmitting] = useState(false);
@@ -3601,12 +3778,18 @@ const AdminPage = () => {
   const [customFieldForm, setCustomFieldForm] = useState({
     label: "",
     fieldType: "",
-    required: false
+    required: false,
+    options: ["", ""],
+    maxChoices: 1,
+    minChoices: 0
   });
   const [editingCustomFieldId, setEditingCustomFieldId] = useState(null);
   const [editingCustomFieldLabel, setEditingCustomFieldLabel] = useState("");
   const [editingCustomFieldVisible, setEditingCustomFieldVisible] = useState(true);
   const [editingCustomFieldRequired, setEditingCustomFieldRequired] = useState(false);
+  const [editingCustomFieldOptions, setEditingCustomFieldOptions] = useState(["", ""]);
+  const [editingCustomFieldMaxChoices, setEditingCustomFieldMaxChoices] = useState(1);
+  const [editingCustomFieldMinChoices, setEditingCustomFieldMinChoices] = useState(0);
   const [customFieldPendingDelete, setCustomFieldPendingDelete] = useState(null);
   const [customFieldsAdmin, setCustomFieldsAdmin] = useState([]);
   useEffect(() => {
@@ -3617,7 +3800,7 @@ const AdminPage = () => {
       customFieldsAdmin.forEach((field) => {
         const key = String(field.id);
         if (!(key in next)) {
-          next[key] = false;
+          next[key] = field.field_type === "checkbox_multi";
         }
       });
       // Ta bort fält som inte längre finns
@@ -6027,11 +6210,14 @@ const AdminPage = () => {
       setError("Välj ett event först.");
       return;
     }
+    if (excelExporting) return;
     const exportData = async () => {
+      setExcelExporting(true);
+      const split = excelSplitChoices ? "1" : "0";
       const response = await fetch(
-        `${API_BASE}/admin/bookings/export.xlsx?eventId=${selectedEventId}`,
+        `${API_BASE}/admin/bookings/export.xlsx?eventId=${selectedEventId}&splitChoices=${split}`,
         {
-        headers: { Authorization: `Bearer ${token}` }
+          headers: { Authorization: `Bearer ${token}` }
         }
       );
       if (!response.ok) {
@@ -6046,8 +6232,11 @@ const AdminPage = () => {
       link.click();
       link.remove();
       window.URL.revokeObjectURL(url);
+      setExcelExportOpen(false);
     };
-    exportData().catch(() => setError("Kunde inte exportera bokningar."));
+    exportData()
+      .catch(() => setError("Kunde inte exportera bokningar."))
+      .finally(() => setExcelExporting(false));
   };
 
   const handlePriceEdit = (price) => {
@@ -6818,7 +7007,43 @@ const AdminPage = () => {
       if (fieldType === "paragraph") {
         next.required = false;
       }
+      if (isOptionListField(fieldType) && (!Array.isArray(prev.options) || prev.options.length < 2)) {
+        next.options = ["", ""];
+        next.maxChoices = 1;
+        next.minChoices = 0;
+      }
       return next;
+    });
+  };
+
+  const updateChoiceOption = (index, value) => {
+    setCustomFieldForm((prev) => {
+      const options = Array.isArray(prev.options) ? [...prev.options] : [];
+      options[index] = value;
+      return { ...prev, options };
+    });
+  };
+
+  const addChoiceOption = () => {
+    setCustomFieldForm((prev) => {
+      const options = Array.isArray(prev.options) ? [...prev.options] : [];
+      if (options.length >= optionListLimit(prev.fieldType)) return prev;
+      options.push("");
+      return { ...prev, options };
+    });
+  };
+
+  const removeChoiceOption = (index) => {
+    setCustomFieldForm((prev) => {
+      const options = (Array.isArray(prev.options) ? prev.options : []).filter((_, itemIndex) => itemIndex !== index);
+      const nextOptions = options.length >= 2 ? options : prev.options;
+      const minChoices = Math.min(Math.max(0, Number(prev.minChoices) || 0), nextOptions.length);
+      return {
+        ...prev,
+        options: nextOptions,
+        minChoices,
+        maxChoices: Math.min(nextOptions.length, Math.max(minChoices || 1, Number(prev.maxChoices) || 1))
+      };
     });
   };
 
@@ -6840,6 +7065,35 @@ const AdminPage = () => {
       setError("Ange ett namn för fältet.");
       return;
     }
+    if (isOptionListField(customFieldForm.fieldType)) {
+      const options = (customFieldForm.options || []).map((item) => String(item || "").trim());
+      const limit = optionListLimit(customFieldForm.fieldType);
+      if (options.length < 2 || options.length > limit || options.some((item) => !item)) {
+        setError("Ange minst två alternativ och fyll i en beskrivning för varje.");
+        return;
+      }
+      const unique = new Set(options.map((item) => item.toLocaleLowerCase("sv")));
+      if (unique.size !== options.length) {
+        setError("Alternativen måste vara olika.");
+        return;
+      }
+      if (customFieldForm.fieldType === "checkbox_multi") {
+        const maxChoices = Number(customFieldForm.maxChoices);
+        const minChoices = Number(customFieldForm.minChoices);
+        if (!Number.isInteger(minChoices) || minChoices < 0 || minChoices > options.length) {
+          setError("Ange lägst antal som måste kryssas i.");
+          return;
+        }
+        if (!Number.isInteger(maxChoices) || maxChoices < 1 || maxChoices > options.length) {
+          setError("Ange högst antal som får kryssas i.");
+          return;
+        }
+        if (minChoices > maxChoices) {
+          setError("Högst antal måste vara minst lika stort som lägst antal.");
+          return;
+        }
+      }
+    }
     setError("");
     const saveField = async () => {
       const response = await fetch(`${API_BASE}/admin/custom-fields`, {
@@ -6853,18 +7107,30 @@ const AdminPage = () => {
           label,
           fieldType: customFieldForm.fieldType,
           required:
-            customFieldForm.fieldType === "paragraph" || customFieldForm.fieldType === "linebreak"
+            customFieldForm.fieldType === "paragraph" ||
+            customFieldForm.fieldType === "linebreak"
               ? false
-              : customFieldForm.required
+              : customFieldForm.fieldType === "checkbox_multi"
+                ? Number(customFieldForm.minChoices) >= 1
+                : customFieldForm.required,
+          options:
+            isOptionListField(customFieldForm.fieldType)
+              ? customFieldForm.options.map((item) => String(item || "").trim())
+              : undefined,
+          maxChoices:
+            customFieldForm.fieldType === "checkbox_multi" ? Number(customFieldForm.maxChoices) : undefined,
+          minChoices:
+            customFieldForm.fieldType === "checkbox_multi" ? Number(customFieldForm.minChoices) : undefined
         })
       });
       if (!response.ok) {
-        throw new Error("Custom field save failed");
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || "Custom field save failed");
       }
-      setCustomFieldForm({ label: "", fieldType: "", required: false });
+      setCustomFieldForm({ label: "", fieldType: "", required: false, options: ["", ""], maxChoices: 1, minChoices: 0 });
       await loadAdminCustomFields(token, selectedEventId);
     };
-    saveField().catch(() => setError("Kunde inte spara fältet."));
+    saveField().catch((error) => setError(error.message || "Kunde inte spara fältet."));
   };
 
   const BASE_FORM_ITEMS = useMemo(
@@ -7022,6 +7288,15 @@ const AdminPage = () => {
     setEditingCustomFieldRequired(
       field.field_type === "paragraph" || field.field_type === "linebreak" ? false : field.is_required === true
     );
+    const options = Array.isArray(field.options) && field.options.length >= 2 ? [...field.options] : ["", ""];
+    const storedMin = Math.min(Math.max(0, Number(field.min_choices) || 0), options.length);
+    const minChoices =
+      field.field_type === "checkbox_multi" && field.is_required ? Math.max(storedMin, 1) : storedMin;
+    setEditingCustomFieldOptions(options);
+    setEditingCustomFieldMaxChoices(
+      Math.min(options.length, Math.max(minChoices || 1, Number(field.max_choices) || 1))
+    );
+    setEditingCustomFieldMinChoices(minChoices);
     setError("");
   };
 
@@ -7030,6 +7305,9 @@ const AdminPage = () => {
     setEditingCustomFieldLabel("");
     setEditingCustomFieldVisible(true);
     setEditingCustomFieldRequired(false);
+    setEditingCustomFieldOptions(["", ""]);
+    setEditingCustomFieldMaxChoices(1);
+    setEditingCustomFieldMinChoices(0);
   };
 
   const saveCustomFieldLabel = (field) => {
@@ -7044,6 +7322,38 @@ const AdminPage = () => {
     if (!label) {
       setError("Ange ett namn för fältet.");
       return;
+    }
+    let options;
+    let maxChoices;
+    let minChoices;
+    if (isOptionListField(field.field_type)) {
+      options = editingCustomFieldOptions.map((item) => String(item || "").trim());
+      const limit = optionListLimit(field.field_type);
+      if (options.length < 2 || options.length > limit || options.some((item) => !item)) {
+        setError("Ange minst två alternativ och fyll i en beskrivning för varje.");
+        return;
+      }
+      const unique = new Set(options.map((item) => item.toLocaleLowerCase("sv")));
+      if (unique.size !== options.length) {
+        setError("Alternativen måste vara olika.");
+        return;
+      }
+      if (field.field_type === "checkbox_multi") {
+        minChoices = Number(editingCustomFieldMinChoices);
+        maxChoices = Number(editingCustomFieldMaxChoices);
+        if (!Number.isInteger(minChoices) || minChoices < 0 || minChoices > options.length) {
+          setError("Ange lägst antal som måste kryssas i.");
+          return;
+        }
+        if (!Number.isInteger(maxChoices) || maxChoices < 1 || maxChoices > options.length) {
+          setError("Ange högst antal som får kryssas i.");
+          return;
+        }
+        if (minChoices > maxChoices) {
+          setError("Högst antal måste vara minst lika stort som lägst antal.");
+          return;
+        }
+      }
     }
     setError("");
     const save = async () => {
@@ -7060,7 +7370,12 @@ const AdminPage = () => {
           required:
             field.field_type === "paragraph" || field.field_type === "linebreak"
               ? false
-              : editingCustomFieldRequired
+              : field.field_type === "checkbox_multi"
+                ? Number(minChoices) >= 1
+                : editingCustomFieldRequired,
+          options,
+          maxChoices,
+          minChoices
         })
       });
       if (!response.ok) {
@@ -7553,9 +7868,32 @@ const AdminPage = () => {
       .join(" ")
       .toLowerCase();
   };
-  const filteredBookings = normalizedBookingsSearch
-    ? bookings.filter((booking) => bookingSearchHaystack(booking).includes(normalizedBookingsSearch))
-    : bookings;
+  const bookingSelectedChoices = (booking, fieldId) => {
+    const entries = Array.isArray(booking.custom_fields) ? booking.custom_fields : [];
+    const match = entries.find((entry) => String(entry.id) === String(fieldId));
+    if (!match || !Array.isArray(match.value)) return [];
+    return match.value.map((item) => String(item));
+  };
+  const choiceFilterActive = Object.keys(choiceColumnFilters).length > 0;
+  const bookingMatchesChoiceFilters = (booking) => {
+    for (const [fieldId, rules] of Object.entries(choiceColumnFilters)) {
+      const field = listableCustomFieldsAdmin.find((item) => String(item.id) === String(fieldId));
+      if (!field || field.field_type !== "checkbox_multi" || !rules) continue;
+      const selected = new Set(bookingSelectedChoices(booking, field.id));
+      for (const [option, mode] of Object.entries(rules)) {
+        const hasOption = selected.has(option);
+        if (mode === "must" && !hasOption) return false;
+        if (mode === "exclude" && hasOption) return false;
+      }
+    }
+    return true;
+  };
+  const filteredBookings = bookings.filter((booking) => {
+    if (normalizedBookingsSearch && !bookingSearchHaystack(booking).includes(normalizedBookingsSearch)) {
+      return false;
+    }
+    return bookingMatchesChoiceFilters(booking);
+  });
 
   const sortedBookings = [...filteredBookings].sort((a, b) => {
     const { key, dir } = sort;
@@ -7581,11 +7919,31 @@ const AdminPage = () => {
 
   useEffect(() => {
     setBookingsSearchQuery("");
+    setChoiceColumnFilters({});
+    setOpenChoiceFilterId(null);
   }, [selectedEventId]);
 
   useEffect(() => {
+    if (openChoiceFilterId == null) return undefined;
+    const onPointer = (event) => {
+      if (choiceFilterMenuRef.current && !choiceFilterMenuRef.current.contains(event.target)) {
+        setOpenChoiceFilterId(null);
+      }
+    };
+    const onKey = (event) => {
+      if (event.key === "Escape") setOpenChoiceFilterId(null);
+    };
+    document.addEventListener("mousedown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [openChoiceFilterId]);
+
+  useEffect(() => {
     setBookingsPage(1);
-  }, [bookingsSearchQuery, selectedEventId]);
+  }, [bookingsSearchQuery, choiceColumnFilters, selectedEventId]);
 
   useEffect(() => {
     if (bookingsPage !== safeBookingsPage) {
@@ -7625,6 +7983,9 @@ const AdminPage = () => {
     }
     if (field.field_type === "checkbox") {
       return match.value ? "Ja" : "Nej";
+    }
+    if (field.field_type === "checkbox_multi") {
+      return Array.isArray(match.value) ? match.value.join(", ") : "";
     }
     return String(match.value ?? "");
   };
@@ -12463,7 +12824,7 @@ const AdminPage = () => {
                     aria-label="Sök i bokningslistan"
                   />
                 </label>
-                {bookingsSearchQuery.trim() ? (
+                {bookingsSearchQuery.trim() || choiceFilterActive ? (
                   <p className="muted admin-bookings-search-meta">
                     Visar {sortedBookings.length} av {bookings.length} bokningar
                   </p>
@@ -12476,7 +12837,14 @@ const AdminPage = () => {
                 >
                   {bookingsRefreshLoading ? "Uppdaterar…" : "Uppdatera lista"}
                 </button>
-                <button className="button button-outline" type="button" onClick={handleExportBookings}>
+                <button
+                  className="button button-outline"
+                  type="button"
+                  onClick={() => {
+                    setExcelSplitChoices(false);
+                    setExcelExportOpen(true);
+                  }}
+                >
                   Exportera Excel
                 </button>
                 <button
@@ -12652,7 +13020,43 @@ const AdminPage = () => {
                       ) : null}
                       {listableCustomFieldsAdmin.map((field) =>
                         bookingCustomFieldVisibility[String(field.id)] === true ? (
-                          <th key={`custom-header-${field.id}`}>{field.label}</th>
+                          <th key={`custom-header-${field.id}`}>
+                            <div className="choice-col-head">
+                              <span>{field.label}</span>
+                              <ChoiceColumnFilter
+                                field={field}
+                                rules={choiceColumnFilters[String(field.id)]}
+                                open={openChoiceFilterId === String(field.id)}
+                                menuRef={choiceFilterMenuRef}
+                                onToggle={() =>
+                                  setOpenChoiceFilterId((current) =>
+                                    current === String(field.id) ? null : String(field.id)
+                                  )
+                                }
+                                onCycle={(option) => {
+                                  setChoiceColumnFilters((prev) => {
+                                    const fieldKey = String(field.id);
+                                    const fieldRules = { ...(prev[fieldKey] || {}) };
+                                    const current = fieldRules[option];
+                                    if (!current) fieldRules[option] = "must";
+                                    else if (current === "must") fieldRules[option] = "exclude";
+                                    else delete fieldRules[option];
+                                    const next = { ...prev };
+                                    if (Object.keys(fieldRules).length === 0) delete next[fieldKey];
+                                    else next[fieldKey] = fieldRules;
+                                    return next;
+                                  });
+                                }}
+                                onClear={() => {
+                                  setChoiceColumnFilters((prev) => {
+                                    const next = { ...prev };
+                                    delete next[String(field.id)];
+                                    return next;
+                                  });
+                                }}
+                              />
+                            </div>
+                          </th>
                         ) : null
                       )}
                       <th className="admin-booking-void-header" aria-label="Åtgärd">
@@ -12675,7 +13079,7 @@ const AdminPage = () => {
                         >
                           {bookings.length === 0
                             ? "Inga bokningar ännu."
-                            : "Inga bokningar matchar sökningen."}
+                            : "Inga bokningar matchar filtret."}
                         </td>
                       </tr>
                     ) : (
@@ -13353,6 +13757,65 @@ const AdminPage = () => {
                 </button>
               </div>
             ) : null}
+            {excelExportOpen ? (
+              <div className="modal-overlay" onClick={() => { if (!excelExporting) setExcelExportOpen(false); }}>
+                <div
+                  className="modal"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="excel-export-title"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <div className="modal-header">
+                    <h3 id="excel-export-title">Exportera till Excel</h3>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      onClick={() => setExcelExportOpen(false)}
+                      disabled={excelExporting}
+                      aria-label="Stäng"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <div className="modal-body">
+                    {listableCustomFieldsAdmin.some((field) => field.field_type === "checkbox_multi") ? (
+                      <>
+                        <label className="field checkbox-field">
+                          <span className="field-label">Egna kolumner för flervalsalternativen</span>
+                          <input
+                            type="checkbox"
+                            checked={excelSplitChoices}
+                            onChange={(event) => setExcelSplitChoices(event.target.checked)}
+                            disabled={excelExporting}
+                          />
+                        </label>
+                        <p className="muted choice-builder-hint">
+                          {excelSplitChoices
+                            ? "Varje alternativ blir en egen kolumn med Ja eller Nej, så de går att filtrera var för sig."
+                            : "Flervalsalternativen hamnar i samma kolumn, åtskilda med kommatecken."}
+                        </p>
+                      </>
+                    ) : (
+                      <p className="muted">Vill du exportera listan?</p>
+                    )}
+                    <div className="admin-actions excel-export-actions">
+                      <button className="button" type="button" onClick={handleExportBookings} disabled={excelExporting}>
+                        {excelExporting ? "Exporterar…" : "Exportera"}
+                      </button>
+                      <button
+                        className="button button-outline"
+                        type="button"
+                        onClick={() => setExcelExportOpen(false)}
+                        disabled={excelExporting}
+                      >
+                        Avbryt
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
             {bookingColumnModalOpen ? (
               <div className="modal-overlay" onClick={() => setBookingColumnModalOpen(false)}>
                 <div
@@ -13491,6 +13954,12 @@ const AdminPage = () => {
                         </button>
                       </span>
                       <span className="section-order-label">{sectionOrderLabels[key] ?? key}</span>
+                      <SectionOrderStatus
+                        active={
+                          key === "form" ||
+                          adminSectionVisibility[SECTION_ORDER_ACTIVE_FIELD[key]] === true
+                        }
+                      />
                     </li>
                   ))}
                 </ul>
@@ -15139,6 +15608,93 @@ const AdminPage = () => {
                       })}
                     </div>
                   </div>
+                  {isOptionListField(customFieldForm.fieldType) ? (
+                    <div className="choice-builder">
+                      <div className="choice-options">
+                        {customFieldForm.options.map((option, index) => (
+                          <div className="choice-option-row" key={index}>
+                            <label className="field">
+                              <span className="field-label">Alternativ {index + 1}</span>
+                              <input
+                                type="text"
+                                value={option}
+                                maxLength={200}
+                                onChange={(event) => updateChoiceOption(index, event.target.value)}
+                                placeholder="Beskrivning för alternativet"
+                              />
+                            </label>
+                            {customFieldForm.options.length > 2 ? (
+                              <button
+                                type="button"
+                                className="icon-button"
+                                onClick={() => removeChoiceOption(index)}
+                                aria-label={`Ta bort alternativ ${index + 1}`}
+                              >
+                                ✕
+                              </button>
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                      <button
+                        type="button"
+                        className="button button-outline choice-add"
+                        onClick={addChoiceOption}
+                        disabled={customFieldForm.options.length >= optionListLimit(customFieldForm.fieldType)}
+                      >
+                        + Lägg till alternativ
+                      </button>
+                      {customFieldForm.fieldType === "checkbox_multi" ? (
+                      <div className="choice-limits">
+                        <label className="field">
+                          <span className="field-label">Lägst antal som måste kryssas i</span>
+                          <input
+                            type="number"
+                            min={0}
+                            max={customFieldForm.options.length}
+                            value={customFieldForm.minChoices}
+                            onChange={(event) => {
+                              const next = Math.min(
+                                customFieldForm.options.length,
+                                Math.max(0, Number(event.target.value) || 0)
+                              );
+                              setCustomFieldForm((prev) => ({
+                                ...prev,
+                                minChoices: next,
+                                maxChoices: Math.max(Number(prev.maxChoices) || 1, next)
+                              }));
+                            }}
+                          />
+                        </label>
+                        <label className="field">
+                          <span className="field-label">Högst antal som får kryssas i</span>
+                          <input
+                            type="number"
+                            min={Math.max(1, Number(customFieldForm.minChoices) || 0)}
+                            max={customFieldForm.options.length}
+                            value={customFieldForm.maxChoices}
+                            onChange={(event) => {
+                              const next = Math.min(
+                                customFieldForm.options.length,
+                                Math.max(
+                                  Math.max(1, Number(customFieldForm.minChoices) || 0),
+                                  Number(event.target.value) || 1
+                                )
+                              );
+                              setCustomFieldForm((prev) => ({ ...prev, maxChoices: next }));
+                            }}
+                          />
+                        </label>
+                      </div>
+                      ) : null}
+                      <p className="muted choice-builder-hint">
+                        {customFieldForm.fieldType === "select"
+                          ? "Fältnamnet blir etikett på rullgardinsmenyn. Besökaren kan välja ett av alternativen."
+                          : "Fältnamnet blir rubrik över alternativen. Lägst antal 0 betyder att fältet kan lämnas tomt. Lägst 1 eller mer måste kryssas i. När högsta antalet är nått går det inte att kryssa i fler förrän ett val tas bort."}
+                      </p>
+                    </div>
+                  ) : null}
+                  {customFieldForm.fieldType === "checkbox_multi" ? null : (
                   <label className="field checkbox-field">
                     <span className="field-label">Obligatoriskt</span>
                     <input
@@ -15149,6 +15705,7 @@ const AdminPage = () => {
                       disabled={customFieldForm.fieldType === "paragraph" || customFieldForm.fieldType === "linebreak"}
                     />
                   </label>
+                  )}
                   <div className="admin-actions">
                     <button className="button" type="submit">
                       Lägg till
@@ -15204,17 +15761,118 @@ const AdminPage = () => {
                               </td>
                               <td>
                                 {String(editingCustomFieldId) === String(field.id) ? (
-                                  <input
-                                    type="text"
-                                    value={
-                                      field.field_type === "linebreak" ? field.label || "Radbrytning" : editingCustomFieldLabel
-                                    }
-                                    onChange={(event) => setEditingCustomFieldLabel(event.target.value)}
-                                    disabled={field.field_type === "linebreak"}
-                                    aria-label="Fältnamn"
-                                  />
+                                  <div className="choice-edit">
+                                    <input
+                                      type="text"
+                                      value={
+                                        field.field_type === "linebreak" ? field.label || "Radbrytning" : editingCustomFieldLabel
+                                      }
+                                      onChange={(event) => setEditingCustomFieldLabel(event.target.value)}
+                                      disabled={field.field_type === "linebreak"}
+                                      aria-label="Fältnamn"
+                                    />
+                                    {isOptionListField(field.field_type) ? (
+                                      <div className="choice-options">
+                                        {editingCustomFieldOptions.map((option, optionIndex) => (
+                                          <div className="choice-option-row" key={optionIndex}>
+                                            <input
+                                              type="text"
+                                              value={option}
+                                              maxLength={200}
+                                              aria-label={`Alternativ ${optionIndex + 1}`}
+                                              onChange={(event) => {
+                                                const next = [...editingCustomFieldOptions];
+                                                next[optionIndex] = event.target.value;
+                                                setEditingCustomFieldOptions(next);
+                                              }}
+                                            />
+                                            {editingCustomFieldOptions.length > 2 ? (
+                                              <button
+                                                type="button"
+                                                className="icon-button"
+                                                aria-label={`Ta bort alternativ ${optionIndex + 1}`}
+                                                onClick={() => {
+                                                  const next = editingCustomFieldOptions.filter((_, itemIndex) => itemIndex !== optionIndex);
+                                                  const minChoices = Math.min(Math.max(0, editingCustomFieldMinChoices), next.length);
+                                                  const maxChoices = Math.min(
+                                                    next.length,
+                                                    Math.max(minChoices || 1, editingCustomFieldMaxChoices)
+                                                  );
+                                                  setEditingCustomFieldOptions(next);
+                                                  setEditingCustomFieldMinChoices(minChoices);
+                                                  setEditingCustomFieldMaxChoices(maxChoices);
+                                                }}
+                                              >
+                                                ✕
+                                              </button>
+                                            ) : null}
+                                          </div>
+                                        ))}
+                                        <button
+                                          type="button"
+                                          className="button button-outline button-small"
+                                          onClick={() => {
+                                            if (editingCustomFieldOptions.length >= optionListLimit(field.field_type)) return;
+                                            setEditingCustomFieldOptions((prev) => [...prev, ""]);
+                                          }}
+                                        >
+                                          + Lägg till alternativ
+                                        </button>
+                                        {field.field_type === "checkbox_multi" ? (
+                                        <div className="choice-limits">
+                                          <label className="field">
+                                            <span className="field-label">Lägst antal som måste kryssas i</span>
+                                            <input
+                                              type="number"
+                                              min={0}
+                                              max={editingCustomFieldOptions.length}
+                                              value={editingCustomFieldMinChoices}
+                                              onChange={(event) => {
+                                                const next = Math.min(
+                                                  editingCustomFieldOptions.length,
+                                                  Math.max(0, Number(event.target.value) || 0)
+                                                );
+                                                setEditingCustomFieldMinChoices(next);
+                                                setEditingCustomFieldMaxChoices((current) => Math.max(current, next));
+                                              }}
+                                            />
+                                          </label>
+                                          <label className="field">
+                                            <span className="field-label">Högst antal som får kryssas i</span>
+                                            <input
+                                              type="number"
+                                              min={Math.max(1, Number(editingCustomFieldMinChoices) || 0)}
+                                              max={editingCustomFieldOptions.length}
+                                              value={editingCustomFieldMaxChoices}
+                                              onChange={(event) =>
+                                                setEditingCustomFieldMaxChoices(
+                                                  Math.min(
+                                                    editingCustomFieldOptions.length,
+                                                    Math.max(
+                                                      Math.max(1, Number(editingCustomFieldMinChoices) || 0),
+                                                      Number(event.target.value) || 1
+                                                    )
+                                                  )
+                                                )
+                                              }
+                                            />
+                                          </label>
+                                        </div>
+                                        ) : null}
+                                      </div>
+                                    ) : null}
+                                  </div>
                                 ) : (
-                                  field.label
+                                  <>
+                                    {field.label}
+                                    {field.field_type === "checkbox_multi" && Array.isArray(field.options) ? (
+                                      <div className="muted">
+                                        {field.options.length} alternativ · minst {field.min_choices || 0} · högst {field.max_choices || field.options.length}
+                                      </div>
+                                    ) : field.field_type === "select" && Array.isArray(field.options) ? (
+                                      <div className="muted">{field.options.length} alternativ</div>
+                                    ) : null}
+                                  </>
                                 )}
                               </td>
                               <td>{formFieldTypeLabel(field.field_type)}</td>
@@ -15233,7 +15891,13 @@ const AdminPage = () => {
                                 )}
                               </td>
                               <td>
-                                {String(editingCustomFieldId) === String(field.id) ? (
+                                {field.field_type === "checkbox_multi" ? (
+                                  `Minst ${
+                                    field.is_required
+                                      ? Math.max(Number(field.min_choices) || 0, 1)
+                                      : Number(field.min_choices) || 0
+                                  }`
+                                ) : String(editingCustomFieldId) === String(field.id) ? (
                                   <input
                                     type="checkbox"
                                     checked={editingCustomFieldRequired}
@@ -15383,6 +16047,28 @@ const AdminPage = () => {
                                   <label className="field checkbox-field">
                                     <span className="field-label">{field.label}</span>
                                     <input type="checkbox" disabled tabIndex={-1} />
+                                  </label>
+                                ) : field.field_type === "checkbox_multi" ? (
+                                  <CheckboxChoiceGroup
+                                    label={field.label}
+                                    options={field.options}
+                                    maxChoices={field.max_choices}
+                                    minChoices={field.min_choices}
+                                    value={[]}
+                                    disabled
+                                    onChange={() => {}}
+                                  />
+                                ) : field.field_type === "select" ? (
+                                  <label className="field">
+                                    <span className="field-label">{field.label}</span>
+                                    <select disabled tabIndex={-1} defaultValue="">
+                                      <option value="">Välj...</option>
+                                      {(Array.isArray(field.options) ? field.options : []).map((option) => (
+                                        <option key={option} value={option}>
+                                          {option}
+                                        </option>
+                                      ))}
+                                    </select>
                                   </label>
                                 ) : (
                                   <label className="field">
@@ -15926,6 +16612,8 @@ const AdminPage = () => {
                     apiBase={API_BASE}
                     token={token}
                     eventId={selectedEventId}
+                    bookings={bookings}
+                    formFields={customFieldsAdmin}
                     overview={{
                       paidCount,
                       freeCount,
@@ -16886,7 +17574,12 @@ function App() {
       const next = { ...prev };
       fields.forEach((field) => {
         if (!(field.id in next)) {
-          next[field.id] = field.field_type === "checkbox" ? false : "";
+          next[field.id] =
+            field.field_type === "checkbox"
+              ? false
+              : field.field_type === "checkbox_multi"
+                ? []
+                : "";
         }
       });
       return next;
@@ -17026,7 +17719,8 @@ function App() {
       if (f.field_type === "paragraph" || f.field_type === "linebreak") {
         return;
       }
-      emptyCustom[f.id] = f.field_type === "checkbox" ? false : "";
+      emptyCustom[f.id] =
+        f.field_type === "checkbox" ? false : f.field_type === "checkbox_multi" ? [] : "";
     });
     setCustomFieldValues(emptyCustom);
   };
@@ -17038,9 +17732,40 @@ function App() {
       return;
     }
     for (const field of customFields) {
-      if (!field.is_required) continue;
       if (field.is_visible === false) continue;
       const value = customFieldValues[field.id];
+      if (field.field_type === "checkbox_multi") {
+        const picked = Array.isArray(value) ? value : [];
+        const optionCount = Array.isArray(field.options) ? field.options.length : 0;
+        const limit = Math.min(
+          Math.max(1, Number(field.max_choices) || optionCount || 1),
+          Math.max(optionCount, 1)
+        );
+        const minimum = field.is_required
+          ? Math.max(Number(field.min_choices) || 0, 1)
+          : Math.max(0, Number(field.min_choices) || 0);
+        if (picked.length > limit) {
+          setPaymentError(`I "${field.label}" får högst ${limit} alternativ kryssas i.`);
+          return;
+        }
+        if (picked.length < minimum) {
+          setPaymentError(
+            minimum === 1
+              ? `Välj minst ett alternativ under "${field.label}".`
+              : `Välj minst ${minimum} alternativ under "${field.label}".`
+          );
+          return;
+        }
+        continue;
+      }
+      if (field.field_type === "select") {
+        if (field.is_required && !String(value || "").trim()) {
+          setPaymentError(`Välj ett alternativ under "${field.label}".`);
+          return;
+        }
+        continue;
+      }
+      if (!field.is_required) continue;
       if (field.field_type === "checkbox") {
         if (!value) {
           setPaymentError(`Fältet "${field.label}" måste markeras.`);
@@ -17595,6 +18320,40 @@ function App() {
                       }
                       required={field.is_required}
                     />
+                  </label>
+                );
+              }
+              if (field.field_type === "checkbox_multi") {
+                return (
+                  <CheckboxChoiceGroup
+                    label={field.label}
+                    options={field.options}
+                    maxChoices={field.max_choices}
+                    minChoices={field.min_choices}
+                    value={customFieldValues[field.id]}
+                    onChange={(next) => handleCustomFieldChange(field.id, field.field_type, next)}
+                  />
+                );
+              }
+              if (field.field_type === "select") {
+                const options = Array.isArray(field.options) ? field.options : [];
+                return (
+                  <label className="field">
+                    <span className="field-label">{field.label}</span>
+                    <select
+                      value={customFieldValues[field.id] ?? ""}
+                      onChange={(event) =>
+                        handleCustomFieldChange(field.id, field.field_type, event.target.value)
+                      }
+                      required={field.is_required}
+                    >
+                      <option value="">{field.is_required ? "Välj..." : "Inget valt"}</option>
+                      {options.map((option) => (
+                        <option key={option} value={option}>
+                          {option}
+                        </option>
+                      ))}
+                    </select>
                   </label>
                 );
               }

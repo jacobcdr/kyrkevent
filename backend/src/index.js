@@ -1411,10 +1411,110 @@ function parseFormFieldOrder(raw, customFieldIds = []) {
 const normalizeCustomFieldType = (value) => {
   const type = String(value || "").trim().toLowerCase();
   if (type === "checkbox") return "checkbox";
+  if (type === "checkbox_multi" || type === "checkbox-flerval" || type === "flerval") return "checkbox_multi";
+  if (type === "select" || type === "dropdown" || type === "rullgardin" || type === "rullgardinsmeny") return "select";
   if (type === "textarea") return "textarea";
   if (type === "paragraph" || type === "brödtext" || type === "brodtext") return "paragraph";
   if (type === "linebreak" || type === "radbrytning") return "linebreak";
   return "text";
+};
+
+const CUSTOM_FIELD_COLUMNS = "id, label, field_type, is_required, is_visible, choice_options, max_choices, min_choices";
+
+const parseChoiceOptions = (value, optionLimit = 20) => {
+  let list = value;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+    try {
+      list = JSON.parse(trimmed);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(list)) return [];
+  const maxOptions = Math.max(1, Number(optionLimit) || 20);
+  const seen = new Set();
+  const options = [];
+  for (const item of list) {
+    const text = String(item ?? "").trim().slice(0, 200);
+    if (!text) continue;
+    const key = text.toLocaleLowerCase("sv");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    options.push(text);
+    if (options.length >= maxOptions) break;
+  }
+  return options;
+};
+
+const parseMaxChoices = (value, optionCount) => {
+  const parsed = Number(value);
+  const limit = Math.max(1, Number(optionCount) || 1);
+  if (!Number.isInteger(parsed) || parsed < 1) return null;
+  return Math.min(parsed, limit);
+};
+
+const parseMinChoices = (value, optionCount) => {
+  const parsed = Number(value);
+  const limit = Math.max(0, Number(optionCount) || 0);
+  if (!Number.isInteger(parsed) || parsed < 0) return null;
+  return Math.min(parsed, limit);
+};
+
+const formatCustomField = (row) => {
+  if (!row) return row;
+  const optionLimit = row.field_type === "select" ? 50 : 20;
+  const options = parseChoiceOptions(row.choice_options, optionLimit);
+  const maxChoices =
+    row.field_type === "checkbox_multi"
+      ? parseMaxChoices(row.max_choices, options.length) || Math.max(options.length, 1)
+      : null;
+  const minChoices =
+    row.field_type === "checkbox_multi"
+      ? Math.min(parseMinChoices(row.min_choices ?? 0, options.length) ?? 0, maxChoices)
+      : null;
+  return {
+    id: row.id,
+    label: row.label,
+    field_type: row.field_type,
+    is_required: row.is_required,
+    is_visible: row.is_visible,
+    options,
+    max_choices: maxChoices,
+    min_choices: minChoices
+  };
+};
+
+const readChoiceFieldConfig = (body, { required, limits = true, optionLimit = 20 }) => {
+  const requested = Array.isArray(body?.options)
+    ? body.options.map((item) => String(item ?? "").trim().slice(0, 200))
+    : [];
+  const options = parseChoiceOptions(requested, optionLimit);
+  if (required && requested.length > optionLimit) {
+    return { ok: false, error: `Högst ${optionLimit} alternativ.` };
+  }
+  if (required && (requested.length < 2 || requested.some((item) => !item))) {
+    return { ok: false, error: "Ange minst två alternativ och fyll i en beskrivning för varje." };
+  }
+  if (required && options.length !== requested.filter(Boolean).length) {
+    return { ok: false, error: "Alternativen måste vara olika." };
+  }
+  if (!limits) {
+    return { ok: true, options, maxChoices: null, minChoices: null };
+  }
+  const maxChoices = parseMaxChoices(body?.maxChoices, options.length || 1);
+  if (required && maxChoices == null) {
+    return { ok: false, error: "Ange högst antal som får kryssas i." };
+  }
+  const minChoices = parseMinChoices(body?.minChoices ?? 0, options.length || 0);
+  if (required && minChoices == null) {
+    return { ok: false, error: "Ange lägst antal som får kryssas i." };
+  }
+  if (required && minChoices > maxChoices) {
+    return { ok: false, error: "Högst antal måste vara minst lika stort som lägst antal." };
+  }
+  return { ok: true, options, maxChoices, minChoices };
 };
 
 const isCustomFieldVisibleOnForm = (field) => {
@@ -2750,14 +2850,14 @@ app.get("/custom-fields", async (req, res) => {
     }
     const result = await pool.query(
       `
-        SELECT id, label, field_type, is_required, is_visible
+        SELECT ${CUSTOM_FIELD_COLUMNS}
         FROM event_custom_fields
         WHERE event_id = $1
         ORDER BY position ASC, id ASC
       `,
       [eventId]
     );
-    res.json({ ok: true, fields: result.rows });
+    res.json({ ok: true, fields: result.rows.map(formatCustomField) });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to load fields" });
   }
@@ -2854,7 +2954,7 @@ const loadCustomFieldsForEvent = async (eventId) => {
   }
   const result = await pool.query(
     `
-      SELECT id, label, field_type, is_required, is_visible
+      SELECT ${CUSTOM_FIELD_COLUMNS}
       FROM event_custom_fields
       WHERE event_id = $1
       ORDER BY position ASC, id ASC
@@ -2885,6 +2985,30 @@ const sanitizeCustomFields = (customFields, allowedFields) => {
         }
         return { id, value: Boolean(entry?.value) };
       }
+      if (allowed.field_type === "checkbox_multi") {
+        const options = parseChoiceOptions(allowed.choice_options);
+        const maxChoices = parseMaxChoices(allowed.max_choices, options.length) || Math.max(options.length, 1);
+        if (!isCustomFieldVisibleOnForm(allowed)) {
+          return { id, value: [] };
+        }
+        const incoming = Array.isArray(entry?.value) ? entry.value : [];
+        const picked = [];
+        for (const raw of incoming) {
+          const text = String(raw ?? "").trim();
+          if (!options.includes(text) || picked.includes(text)) continue;
+          picked.push(text);
+          if (picked.length >= maxChoices) break;
+        }
+        return { id, value: picked };
+      }
+      if (allowed.field_type === "select") {
+        const options = parseChoiceOptions(allowed.choice_options, 50);
+        if (!isCustomFieldVisibleOnForm(allowed)) {
+          return { id, value: "" };
+        }
+        const text = String(entry?.value ?? "").trim();
+        return { id, value: options.includes(text) ? text : "" };
+      }
       return { id, value: String(entry?.value ?? "").trim() };
     })
     .filter(Boolean);
@@ -2893,10 +3017,36 @@ const sanitizeCustomFields = (customFields, allowedFields) => {
 const validateCustomFields = (customFields, allowedFields) => {
   const values = new Map(customFields.map((entry) => [String(entry.id), entry.value]));
   for (const field of allowedFields) {
-    if (!field.is_required) continue;
     if (field.field_type === "paragraph" || field.field_type === "linebreak") continue;
     if (!isCustomFieldVisibleOnForm(field)) continue;
     const value = values.get(String(field.id));
+    if (field.field_type === "checkbox_multi") {
+      const picked = Array.isArray(value) ? value : [];
+      const options = parseChoiceOptions(field.choice_options);
+      const maxChoices = parseMaxChoices(field.max_choices, options.length) || Math.max(options.length, 1);
+      const minChoices = parseMinChoices(field.min_choices ?? 0, options.length) ?? 0;
+      const minimum = field.is_required ? Math.max(minChoices, 1) : minChoices;
+      if (picked.length > maxChoices) {
+        return { ok: false, error: `I "${field.label}" får högst ${maxChoices} alternativ kryssas i.` };
+      }
+      if (picked.length < minimum) {
+        return {
+          ok: false,
+          error:
+            minimum === 1
+              ? `Välj minst ett alternativ under "${field.label}".`
+              : `Välj minst ${minimum} alternativ under "${field.label}".`
+        };
+      }
+      continue;
+    }
+    if (field.field_type === "select") {
+      if (field.is_required && !String(value || "").trim()) {
+        return { ok: false, error: `Välj ett alternativ under "${field.label}".` };
+      }
+      continue;
+    }
+    if (!field.is_required) continue;
     if (field.field_type === "checkbox") {
       if (value !== true) {
         return { ok: false, error: `Fältet "${field.label}" måste vara markerat.` };
@@ -8422,14 +8572,14 @@ app.get("/admin/custom-fields", requireAdmin, async (req, res) => {
     }
     const result = await pool.query(
       `
-        SELECT id, label, field_type, is_required, is_visible
+        SELECT ${CUSTOM_FIELD_COLUMNS}
         FROM event_custom_fields
         WHERE event_id = $1
         ORDER BY position ASC, id ASC
       `,
       [eventId]
     );
-    res.json({ ok: true, fields: result.rows });
+    res.json({ ok: true, fields: result.rows.map(formatCustomField) });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to load fields" });
   }
@@ -8452,25 +8602,46 @@ app.post("/admin/custom-fields", requireAdmin, async (req, res) => {
     res.status(400).json({ ok: false, error: "Missing label" });
     return;
   }
+  let choiceOptions = "[]";
+  let maxChoices = null;
+  let minChoices = null;
+  if (normalizedType === "checkbox_multi" || normalizedType === "select") {
+    const config = readChoiceFieldConfig(req.body, {
+      required: true,
+      limits: normalizedType === "checkbox_multi",
+      optionLimit: normalizedType === "select" ? 50 : 20
+    });
+    if (!config.ok) {
+      res.status(400).json({ ok: false, error: config.error });
+      return;
+    }
+    choiceOptions = JSON.stringify(config.options);
+    maxChoices = normalizedType === "checkbox_multi" ? config.maxChoices : null;
+    minChoices = normalizedType === "checkbox_multi" ? config.minChoices : 0;
+  }
   try {
     const result = await pool.query(
       `
         WITH next_pos AS (
           SELECT COALESCE(MAX(position), 0) + 1 AS pos FROM event_custom_fields WHERE event_id = $1
         )
-        INSERT INTO event_custom_fields (event_id, label, field_type, is_required, position)
-        SELECT $1, $2, $3, $4, pos FROM next_pos
-        RETURNING id, label, field_type, is_required, is_visible
+        INSERT INTO event_custom_fields (event_id, label, field_type, is_required, position, choice_options, max_choices, min_choices)
+        SELECT $1, $2, $3, $4, pos, $5, $6, $7 FROM next_pos
+        RETURNING ${CUSTOM_FIELD_COLUMNS}
       `,
       [
         parsedEventId,
         normalizedLabel,
         normalizedType,
-        normalizedType === "paragraph" || normalizedType === "linebreak" ? false : required === true
+        normalizedType === "paragraph" || normalizedType === "linebreak" ? false : required === true,
+        choiceOptions,
+        maxChoices,
+        minChoices ?? 0
       ]
     );
-    res.status(201).json({ ok: true, field: result.rows[0] });
+    res.status(201).json({ ok: true, field: formatCustomField(result.rows[0]) });
   } catch (error) {
+    console.error("Failed to create custom field", error);
     res.status(500).json({ ok: false, error: "Failed to create field" });
   }
 });
@@ -8574,7 +8745,7 @@ app.patch("/admin/form-fields/order", requireAdmin, async (req, res) => {
 
 app.patch("/admin/custom-fields/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { visible, label, required } = req.body || {};
+  const { visible, label, required, options, maxChoices, minChoices } = req.body || {};
   const eventId = await ensureEventOwnership(req.body?.eventId ?? req.query.eventId, req.userId, res);
   if (!eventId) {
     return;
@@ -8586,7 +8757,7 @@ app.patch("/admin/custom-fields/:id", requireAdmin, async (req, res) => {
   }
   try {
     const existing = await pool.query(
-      "SELECT id, label, field_type, is_required, is_visible FROM event_custom_fields WHERE id = $1 AND event_id = $2",
+      `SELECT ${CUSTOM_FIELD_COLUMNS} FROM event_custom_fields WHERE id = $1 AND event_id = $2`,
       [fieldId, eventId]
     );
     if (existing.rowCount === 0) {
@@ -8603,7 +8774,41 @@ app.patch("/admin/custom-fields/:id", requireAdmin, async (req, res) => {
     const cannotRequire = current.field_type === "paragraph" || current.field_type === "linebreak";
     const nextRequired =
       required === undefined ? null : cannotRequire ? false : required === true;
-    if (nextLabel === null && visible === undefined && required === undefined) {
+    let nextOptions = null;
+    let nextMax = null;
+    let nextMin = null;
+    if (
+      current.field_type === "checkbox_multi" &&
+      (options !== undefined || maxChoices !== undefined || minChoices !== undefined)
+    ) {
+      const config = readChoiceFieldConfig(
+        {
+          options: options === undefined ? parseChoiceOptions(current.choice_options) : options,
+          maxChoices: maxChoices === undefined ? current.max_choices : maxChoices,
+          minChoices: minChoices === undefined ? current.min_choices ?? 0 : minChoices
+        },
+        { required: true }
+      );
+      if (!config.ok) {
+        res.status(400).json({ ok: false, error: config.error });
+        return;
+      }
+      nextOptions = JSON.stringify(config.options);
+      nextMax = config.maxChoices;
+      nextMin = config.minChoices;
+    }
+    if (current.field_type === "select" && options !== undefined) {
+      const config = readChoiceFieldConfig(
+        { options },
+        { required: true, limits: false, optionLimit: 50 }
+      );
+      if (!config.ok) {
+        res.status(400).json({ ok: false, error: config.error });
+        return;
+      }
+      nextOptions = JSON.stringify(config.options);
+    }
+    if (nextLabel === null && visible === undefined && required === undefined && nextOptions === null) {
       res.status(400).json({ ok: false, error: "Nothing to update" });
       return;
     }
@@ -8612,19 +8817,25 @@ app.patch("/admin/custom-fields/:id", requireAdmin, async (req, res) => {
         UPDATE event_custom_fields
         SET label = COALESCE($3, label),
             is_visible = COALESCE($4, is_visible),
-            is_required = COALESCE($5, is_required)
+            is_required = COALESCE($5, is_required),
+            choice_options = COALESCE($6, choice_options),
+            max_choices = COALESCE($7, max_choices),
+            min_choices = COALESCE($8, min_choices)
         WHERE id = $1 AND event_id = $2
-        RETURNING id, label, field_type, is_required, is_visible
+        RETURNING ${CUSTOM_FIELD_COLUMNS}
       `,
       [
         fieldId,
         eventId,
         nextLabel,
         visible === undefined ? null : visible === true,
-        nextRequired
+        nextRequired,
+        nextOptions,
+        nextMax,
+        nextMin
       ]
     );
-    res.json({ ok: true, field: result.rows[0] });
+    res.json({ ok: true, field: formatCustomField(result.rows[0]) });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to update field" });
   }
@@ -11077,9 +11288,10 @@ app.get("/admin/bookings/export.xlsx", requireAdmin, async (_req, res) => {
     if (!eventId) {
       return;
     }
+    const splitChoices = String(_req.query.splitChoices || "") === "1";
     const customFieldsResult = await pool.query(
       `
-        SELECT id, label, field_type
+        SELECT id, label, field_type, choice_options
         FROM event_custom_fields
         WHERE event_id = $1
         ORDER BY position ASC, id ASC
@@ -11091,6 +11303,51 @@ app.get("/admin/bookings/export.xlsx", requireAdmin, async (_req, res) => {
       "SELECT id, name, email, city, phone, organization, ticket, terms, payment_status, pris, discount_code, custom_fields, created_at, voided_at FROM bookings WHERE event_id = $1 ORDER BY created_at DESC",
       [eventId]
     );
+    const customColumns = [];
+    for (const field of customFields) {
+      if (!splitChoices || field.field_type !== "checkbox_multi") {
+        customColumns.push({ field, option: null, header: field.label });
+        continue;
+      }
+      const defined = parseChoiceOptions(field.choice_options);
+      const seen = new Set(defined.map((item) => item.toLocaleLowerCase("sv")));
+      const extras = [];
+      for (const row of result.rows) {
+        const entries = Array.isArray(row.custom_fields) ? row.custom_fields : [];
+        const match = entries.find((entry) => String(entry.id) === String(field.id));
+        const picked = Array.isArray(match?.value) ? match.value : [];
+        for (const raw of picked) {
+          const text = String(raw ?? "").trim();
+          if (!text) continue;
+          const key = text.toLocaleLowerCase("sv");
+          if (seen.has(key)) continue;
+          seen.add(key);
+          extras.push(text);
+        }
+      }
+      const options = [...defined, ...extras];
+      if (options.length === 0) {
+        customColumns.push({ field, option: null, header: field.label });
+        continue;
+      }
+      for (const option of options) {
+        customColumns.push({ field, option, header: `${field.label}: ${option}` });
+      }
+    }
+    const customCell = (row, column) => {
+      const entries = Array.isArray(row.custom_fields) ? row.custom_fields : [];
+      const match = entries.find((entry) => String(entry.id) === String(column.field.id));
+      if (column.option) {
+        const picked = Array.isArray(match?.value) ? match.value.map((item) => String(item).trim()) : [];
+        return picked.includes(column.option) ? "Ja" : "Nej";
+      }
+      if (!match) return "";
+      if (column.field.field_type === "checkbox") return match.value ? "Ja" : "Nej";
+      if (column.field.field_type === "checkbox_multi") {
+        return Array.isArray(match.value) ? match.value.join(", ") : "";
+      }
+      return String(match.value ?? "");
+    };
     const header = [
       "ID",
       "Namn",
@@ -11103,7 +11360,7 @@ app.get("/admin/bookings/export.xlsx", requireAdmin, async (_req, res) => {
       "Betalning",
       "Pris",
       "Rabattkod",
-      ...customFields.map((field) => field.label),
+      ...customColumns.map((column) => column.header),
       "Skapad"
     ];
     const voidedFlags = result.rows.map((row) => !!row.voided_at);
@@ -11121,22 +11378,20 @@ app.get("/admin/bookings/export.xlsx", requireAdmin, async (_req, res) => {
         row.payment_status || "",
         row.pris || "",
         row.discount_code || "",
-        ...customFields.map((field) => {
-          const entries = Array.isArray(row.custom_fields) ? row.custom_fields : [];
-          const match = entries.find((entry) => String(entry.id) === String(field.id));
-          if (!match) {
-            return "";
-          }
-          if (field.field_type === "checkbox") {
-            return match.value ? "Ja" : "Nej";
-          }
-          return String(match.value ?? "");
-        }),
+        ...customColumns.map((column) => customCell(row, column)),
         row.created_at ? new Date(row.created_at).toLocaleString("sv-SE") : ""
       ])
     ];
     const workbook = xlsx.utils.book_new();
     const worksheet = xlsx.utils.aoa_to_sheet(rows);
+    if (splitChoices) {
+      worksheet["!autofilter"] = {
+        ref: xlsx.utils.encode_range({
+          s: { r: 0, c: 0 },
+          e: { r: Math.max(rows.length - 1, 0), c: Math.max(header.length - 1, 0) }
+        })
+      };
+    }
     applyVoidedExcelRowStyles(worksheet, voidedFlags, header.length);
     xlsx.utils.book_append_sheet(workbook, worksheet, "Bokningar");
     const buffer = xlsx.write(workbook, { bookType: "xlsx", type: "buffer", cellStyles: true });
@@ -11910,7 +12165,10 @@ const ensureBookingsTable = async () => {
   `);
   await pool.query(`
     ALTER TABLE event_custom_fields
-      ADD COLUMN IF NOT EXISTS is_visible BOOLEAN NOT NULL DEFAULT TRUE
+      ADD COLUMN IF NOT EXISTS is_visible BOOLEAN NOT NULL DEFAULT TRUE,
+      ADD COLUMN IF NOT EXISTS choice_options TEXT NOT NULL DEFAULT '[]',
+      ADD COLUMN IF NOT EXISTS max_choices INTEGER,
+      ADD COLUMN IF NOT EXISTS min_choices INTEGER NOT NULL DEFAULT 0
   `);
 
   await pool.query(`

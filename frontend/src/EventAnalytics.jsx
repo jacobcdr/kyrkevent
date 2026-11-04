@@ -327,7 +327,211 @@ function TicketSalesDonut({ ticketSales, checkIn }) {
   );
 }
 
-export function EventAnalytics({ apiBase, token, eventId, overview }) {
+function bookingCustomEntry(booking, fieldId) {
+  const entries = Array.isArray(booking?.custom_fields) ? booking.custom_fields : [];
+  return entries.find((entry) => String(entry.id) === String(fieldId)) || null;
+}
+
+function formChoiceRows(field, activeBookings) {
+  if (field.field_type === "checkbox") {
+    let checked = 0;
+    for (const booking of activeBookings) {
+      if (bookingCustomEntry(booking, field.id)?.value === true) checked += 1;
+    }
+    return [
+      { name: "Ikryssad", count: checked },
+      { name: "Inte ikryssad", count: Math.max(0, activeBookings.length - checked) }
+    ];
+  }
+  if (field.field_type === "select") {
+    const defined = Array.isArray(field.options) ? field.options.filter(Boolean) : [];
+    const counts = new Map(defined.map((option) => [option, 0]));
+    let none = 0;
+    for (const booking of activeBookings) {
+      const text = String(bookingCustomEntry(booking, field.id)?.value ?? "").trim();
+      if (!text) {
+        none += 1;
+        continue;
+      }
+      const existing = [...counts.keys()].find(
+        (option) => option.toLocaleLowerCase("sv") === text.toLocaleLowerCase("sv")
+      );
+      const key = existing || text;
+      if (!counts.has(key)) counts.set(key, 0);
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
+    const rows = [...counts.entries()].map(([name, count]) => ({ name, count }));
+    if (none > 0) rows.push({ name: "Inget valt", count: none });
+    return rows;
+  }
+  const defined = Array.isArray(field.options) ? field.options.filter(Boolean) : [];
+  const counts = new Map(defined.map((option) => [option, 0]));
+  let none = 0;
+  for (const booking of activeBookings) {
+    const raw = bookingCustomEntry(booking, field.id)?.value;
+    const picked = Array.isArray(raw) ? raw.map((item) => String(item || "").trim()).filter(Boolean) : [];
+    if (picked.length === 0) {
+      none += 1;
+      continue;
+    }
+    const seen = new Set();
+    for (const value of picked) {
+      const existing = [...counts.keys()].find(
+        (option) => option.toLocaleLowerCase("sv") === value.toLocaleLowerCase("sv")
+      );
+      const key = existing || value;
+      if (!counts.has(key)) counts.set(key, 0);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
+  }
+  const rows = [...counts.entries()].map(([name, count]) => ({ name, count }));
+  if (none > 0) rows.push({ name: "Inget valt", count: none });
+  return rows;
+}
+
+function FormChoiceStats({ bookings, formFields }) {
+  const fields = (Array.isArray(formFields) ? formFields : []).filter(
+    (field) =>
+      field.field_type === "checkbox" || field.field_type === "checkbox_multi" || field.field_type === "select"
+  );
+  const activeBookings = (Array.isArray(bookings) ? bookings : []).filter((booking) => !booking?.voided_at);
+  const [selectedId, setSelectedId] = useState("");
+  const [activeIndex, setActiveIndex] = useState(0);
+  const selected = fields.find((field) => String(field.id) === String(selectedId)) || fields[0] || null;
+  const total = activeBookings.length;
+  const rows = selected
+    ? formChoiceRows(selected, activeBookings).map((row) => ({
+        ...row,
+        percent: total > 0 ? Math.round((row.count / total) * 100) : 0
+      }))
+    : [];
+  const slices = rows.filter((row) => row.count > 0);
+  const highlighted = slices[activeIndex] || slices[0] || null;
+  const cardTones = ["green", "blue", "teal", "gold", "slate"];
+
+  useEffect(() => {
+    if (!fields.length) {
+      if (selectedId) setSelectedId("");
+      return;
+    }
+    if (!fields.some((field) => String(field.id) === String(selectedId))) {
+      setSelectedId(String(fields[0].id));
+    }
+  }, [formFields, selectedId, fields]);
+
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [selectedId]);
+
+  return (
+    <section className="form-choice-stats">
+      <h2>Formulärsvar</h2>
+      <p className="muted" style={{ marginTop: 0 }}>
+        Välj ett fält i listan. Procenten är andel av anmälningarna. Makulerade anmälningar räknas inte.
+      </p>
+      {fields.length === 0 ? (
+        <p className="muted">Inga kryssrutor, flervalsfält eller rullgardinsmenyer i formuläret.</p>
+      ) : (
+        <>
+          <label className="field form-choice-stat-select">
+            <span className="field-label">Fält</span>
+            <select
+              value={selected ? String(selected.id) : ""}
+              onChange={(event) => setSelectedId(event.target.value)}
+            >
+              {fields.map((field) => (
+                <option key={field.id} value={String(field.id)}>
+                  {field.label || "Fält"} (
+                  {field.field_type === "checkbox_multi"
+                    ? "Flerval"
+                    : field.field_type === "select"
+                      ? "Rullgardin"
+                      : "Kryssruta"}
+                  )
+                </option>
+              ))}
+            </select>
+          </label>
+          {selected ? (
+            <>
+              <p className="muted form-choice-stat-note">
+                {total.toLocaleString("sv-SE")} anmälningar
+                {selected.field_type === "checkbox_multi"
+                  ? ". En person kan räknas i flera alternativ, så procenten kan bli mer än 100 tillsammans."
+                  : "."}
+              </p>
+              {slices.length === 0 ? (
+                <p className="muted">Inga svar ännu.</p>
+              ) : (
+                <div className="ticket-donut form-choice-donut">
+                  <div className="ticket-donut-chart" aria-hidden="true">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart margin={{ top: 4, right: 4, bottom: 4, left: 4 }}>
+                        <Pie
+                          data={slices}
+                          dataKey="count"
+                          nameKey="name"
+                          cx="50%"
+                          cy="50%"
+                          innerRadius="68%"
+                          outerRadius="92%"
+                          paddingAngle={slices.length > 1 ? 3 : 0}
+                          startAngle={90}
+                          endAngle={-270}
+                          stroke="#ffffff"
+                          strokeWidth={3}
+                          cornerRadius={slices.length > 1 ? 4 : 0}
+                          style={{ cursor: "pointer", outline: "none" }}
+                          onMouseEnter={(_, index) => setActiveIndex(index)}
+                        >
+                          {slices.map((row, index) => (
+                            <Cell
+                              key={row.name}
+                              fill={TICKET_DONUT_COLORS[index % TICKET_DONUT_COLORS.length]}
+                              fillOpacity={index === activeIndex ? 1 : 0.88}
+                            />
+                          ))}
+                        </Pie>
+                      </PieChart>
+                    </ResponsiveContainer>
+                    {highlighted ? (
+                      <div className="ticket-donut-center">
+                        <strong>{highlighted.percent}%</strong>
+                        <span>{highlighted.name}</span>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              )}
+              <div className="stats-overview-grid form-choice-stat-grid">
+                {rows.map((row, index) => (
+                  <div
+                    key={row.name}
+                    className={`stats-overview-card stats-overview-card--${cardTones[index % cardTones.length]} form-choice-stat-card${
+                      highlighted && highlighted.name === row.name ? " is-active" : ""
+                    }`}
+                    onMouseEnter={() => {
+                      const sliceIndex = slices.findIndex((slice) => slice.name === row.name);
+                      if (sliceIndex >= 0) setActiveIndex(sliceIndex);
+                    }}
+                  >
+                    <span>{row.name}</span>
+                    <strong>{row.count.toLocaleString("sv-SE")}</strong>
+                    <em className="form-choice-stat-percent">{row.percent}%</em>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : null}
+        </>
+      )}
+    </section>
+  );
+}
+
+export function EventAnalytics({ apiBase, token, eventId, overview, bookings = [], formFields = [] }) {
   const [preset, setPreset] = useState("30d");
   const [fromDate, setFromDate] = useState(addDaysYmd(todayYmd(), -29));
   const [toDate, setToDate] = useState(todayYmd());
@@ -694,6 +898,7 @@ export function EventAnalytics({ apiBase, token, eventId, overview }) {
           </div>
         </>
       ) : null}
+      <FormChoiceStats bookings={bookings} formFields={formFields} />
     </div>
   );
 }
