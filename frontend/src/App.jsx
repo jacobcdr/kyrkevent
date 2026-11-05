@@ -885,12 +885,13 @@ const FORM_FIELD_TYPES = [
   { id: "textarea", label: "Större textbox" },
   { id: "checkbox", label: "Checkbox" },
   { id: "checkbox_multi", label: "Checkbox flerval" },
+  { id: "radio", label: "Radioknappar" },
   { id: "select", label: "Rullgardinsmeny" },
   { id: "paragraph", label: "Informations text" },
   { id: "linebreak", label: "Radbrytning" }
 ];
 
-const isOptionListField = (type) => type === "checkbox_multi" || type === "select";
+const isOptionListField = (type) => type === "checkbox_multi" || type === "select" || type === "radio";
 const optionListLimit = (type) => (type === "select" ? 50 : 20);
 
 const formFieldTypeLabel = (type) =>
@@ -899,7 +900,8 @@ const formFieldTypeLabel = (type) =>
 const isCustomFieldFullWidth = (field) =>
   field?.field_type === "paragraph" ||
   field?.field_type === "linebreak" ||
-  field?.field_type === "checkbox_multi";
+  field?.field_type === "checkbox_multi" ||
+  field?.field_type === "radio";
 
 const customOrderId = (key) => {
   const match = /^custom:(\d+)/.exec(String(key || ""));
@@ -1057,6 +1059,30 @@ function CheckboxChoiceGroup({ label, options, maxChoices, minChoices, value, on
   );
 }
 
+function RadioChoiceGroup({ label, options, name, value, onChange, disabled, required }) {
+  const choices = Array.isArray(options) ? options.filter(Boolean) : [];
+  const selected = choices.includes(value) ? value : "";
+  return (
+    <div className="choice-group" role="radiogroup" aria-label={label} aria-required={required ? true : undefined}>
+      <div className="field-label choice-group-title">{label}</div>
+      {choices.map((option) => (
+        <label key={option} className="field checkbox-field choice-option">
+          <input
+            type="radio"
+            name={name}
+            value={option}
+            checked={selected === option}
+            disabled={disabled}
+            required={Boolean(required)}
+            onChange={() => onChange(option)}
+          />
+          <span className="field-label">{option}</span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
 function ChoiceColumnFilter({ field, rules, open, onToggle, onCycle, onClear, menuRef }) {
   const options = Array.isArray(field.options) ? field.options.filter(Boolean) : [];
   if (field.field_type !== "checkbox_multi" || options.length === 0) return null;
@@ -1144,6 +1170,17 @@ function FormFieldTypeIcon({ type }) {
         <path d="M11 7h10" strokeLinecap="round" />
         <rect x="3" y="14" width="6" height="6" rx="1.4" />
         <path d="M11 17h10" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  if (type === "radio") {
+    return (
+      <svg {...common}>
+        <circle cx="7" cy="7" r="3" />
+        <circle cx="7" cy="7" r="1.2" fill="currentColor" stroke="none" />
+        <path d="M12 7h8" strokeLinecap="round" />
+        <circle cx="7" cy="17" r="3" />
+        <path d="M12 17h8" strokeLinecap="round" />
       </svg>
     );
   }
@@ -3800,7 +3837,7 @@ const AdminPage = () => {
       customFieldsAdmin.forEach((field) => {
         const key = String(field.id);
         if (!(key in next)) {
-          next[key] = field.field_type === "checkbox_multi";
+          next[key] = field.field_type === "checkbox_multi" || field.field_type === "radio";
         }
       });
       // Ta bort fält som inte längre finns
@@ -12232,7 +12269,7 @@ const AdminPage = () => {
                 <strong>Text i bekräftelsemail</strong> – valfri text som läggs till i bekräftelsen, både för vanliga anmälningar och biljetter.
               </li>
               <li>
-                <strong>Bild och video</strong> – bilden eller videon högst upp på sidan.
+                <strong>Bild och video</strong> – vad som visas högst upp på sidan. Vid video används den uppladdade stillbilden som länkförhandsvisning när eventlänken delas.
               </li>
               <li>
                 <strong>Språk</strong> – visa eller dölj Google-översättning, och välj om besökaren ska mötas av svenska eller engelska.
@@ -12265,13 +12302,31 @@ const AdminPage = () => {
                 <strong>Standardfält</strong> – namn och e-post visas alltid. Telefon, ort, organisation och rabattkod kan visas eller döljas.
               </li>
               <li>
-                <strong>Egna fält</strong> – textfält, textrutor och kryssrutor. Ordningen ändras genom att dra fälten i förhandsvisningen.
+                <strong>Liten textbox och större textbox</strong> – korta respektive längre svar. Båda kan göras obligatoriska.
               </li>
               <li>
-                <strong>Obligatoriska fält</strong> – markera vad som måste fyllas i, så går anmälan inte att skicka om något saknas.
+                <strong>Checkbox</strong> – en kryssruta. Kan göras obligatorisk.
               </li>
               <li>
-                <strong>Bokningar och export</strong> – egna fält visas som kolumner i bokningslistan och följer med i Excel-exporten.
+                <strong>Checkbox flerval</strong> – fältnamnet blir rubrik. Alternativen lägger du till med plusknappen (minst två, högst 20).
+                Ange lägst antal som måste kryssas i och högst antal som får kryssas i. 0 som lägst betyder att fältet är valfritt. 1 eller mer
+                betyder att minst så många alternativ måste väljas. När max är nått går det inte att kryssa i fler förrän ett val tas bort.
+                Flervalet tar en egen rad på formuläret.
+              </li>
+              <li>
+                <strong>Rullgardinsmeny</strong> – fältnamnet blir etikett. Besökaren väljer ett av alternativen (upp till 50). Fältet kan göras obligatoriskt.
+              </li>
+              <li>
+                <strong>Radioknappar</strong> – fältnamnet blir rubrik. Alternativen lägger du till med plusknappen (minst två, högst 20).
+                Besökaren kan välja ett alternativ. Fältet kan göras obligatoriskt och tar en egen rad på formuläret.
+              </li>
+              <li>
+                <strong>Informations text och radbrytning</strong> – text som bara visas på formuläret, respektive en tom rad som delar upp fälten.
+                De sparar inget svar och syns inte i bokningslistan.
+              </li>
+              <li>
+                <strong>Ordning</strong> – ändras med pilarna i listan eller genom att dra fälten i förhandsvisningen. De flesta fält kan ligga två i bredd.
+                Informations text, radbrytning, checkbox flerval och radioknappar tar en egen rad.
               </li>
             </ul>
             <h4>Sociala medier</h4>
@@ -12280,7 +12335,7 @@ const AdminPage = () => {
               styrs under Framsida, fliken Sektionsordning.
             </p>
             <h4>Statistik</h4>
-            <p>Besök, anmälningar och intäkter för eventet.</p>
+            <p>Besök, anmälningar och intäkter för eventet. Under Formulärsvar finns diagram för kryssrutor, flerval, rullgardiner och radioknappar.</p>
 
             <h3>4. Publicera och dela din sida</h3>
             <ul>
@@ -12296,7 +12351,24 @@ const AdminPage = () => {
             <h3>5. Bokningar, betalningar och kvitton</h3>
             <ul>
               <li>
-                <strong>Bokningslista</strong> – under Bokningar ser du alla anmälningar, kan filtrera kolumner och exportera till Excel.
+                <strong>Bokningslista</strong> – under Bokningar ser du alla anmälningar.
+                <ul>
+                  <li>
+                    <strong>Kolumner</strong> – textfält, textrutor, kryssrutor, flerval, rullgardiner och radioknappar kan visas som kolumner.
+                    Kryssrutor visas som Ja eller Nej. Flervalsfält visas från start, med de valda alternativen åtskilda med kommatecken.
+                    Radioknappar visas också från start, en kolumn per fältnamn med det alternativ som valdes.
+                    Övriga egna fält är dolda tills du tar fram dem under Visa/dölj kolumner. Informations text och radbrytning syns inte i listan.
+                  </li>
+                  <li>
+                    <strong>Filter i flervalskolumnen</strong> – tratt-ikonen i kolumnrubriken. Första klicket på ett alternativ kräver att det är valt,
+                    andra klicket utesluter det och tredje klicket tar bort filtret. Flera alternativ i samma grupp gäller samtidigt, och filter i flera
+                    kolumner kombineras.
+                  </li>
+                  <li>
+                    <strong>Excel</strong> – när du exporterar kan du kryssa i Egna kolumner för flervalsalternativen. Utan den rutan hamnar valen i en
+                    kolumn med kommatecken. Med rutan ikryssad blir varje alternativ en egen kolumn med Ja eller Nej.
+                  </li>
+                </ul>
               </li>
               <li>
                 <strong>Betalstatus</strong> – betalda, väntande, avbrutna m.m. visas som tydliga statuspiller i listan.
@@ -15228,6 +15300,25 @@ const AdminPage = () => {
               </div>
               <div className="section">
                 <h2>Bild och video</h2>
+                <div className="field-hint hero-image-upload-hint">
+                  <p>
+                    Välj vad som ska visas högst upp på eventsidan. Du kan ha både bild och video uppladdade och
+                    växla med valen nedan.
+                  </p>
+                  <ul>
+                    <li>
+                      <strong>Bild</strong> – stillbilden visas på eventsidan. Samma bild används som{" "}
+                      <strong>länkförhandsvisning</strong> när någon delar eventlänken, till exempel i Messenger,
+                      iMessage, Facebook eller andra forum.
+                    </li>
+                    <li>
+                      <strong>Video</strong> – filmen visas på eventsidan. Ladda också upp en stillbild under valet
+                      Bild. Den bilden blir länkförhandsvisningen i den delade länken, så att mottagaren ser en bild
+                      i stället för en tom länk. Videon spelas inte upp i förhandsvisningen. Utan uppladdad bild
+                      används Kyrkevents logotyp.
+                    </li>
+                  </ul>
+                </div>
                 <fieldset className="gallery-mode-picker">
                   <legend className="field-label">Bakgrund</legend>
                   <div className="gallery-mode-options">
@@ -15255,12 +15346,8 @@ const AdminPage = () => {
                   {heroBackgroundKind === "video" ? (
                     <div className="field-hint hero-image-upload-hint">
                       <p>
-                        Videon visas på eventsidan. När länken delas används den uppladdade bilden i
-                        förhandsvisningen, till exempel i{" "}
-                        <strong>
-                          Messenger och iMessage. Ladda upp bilden under valet Bild. Utan uppladdad bild används
-                          Kyrkevents logotyp.
-                        </strong>
+                        Videon visas på eventsidan. Länkförhandsvisningen hämtas från stillbilden under valet{" "}
+                        <strong>Bild</strong> – byt dit, ladda upp bilden och växla tillbaka till Video.
                       </p>
                       <p>
                         <strong>Rekommenderat:</strong> kort, tyst, liggande video i ungefär <strong>2:1-format</strong>{" "}
@@ -15275,6 +15362,10 @@ const AdminPage = () => {
                     </div>
                   ) : (
                     <div className="field-hint hero-image-upload-hint">
+                      <p>
+                        Bilden visas på eventsidan när <strong>Bild</strong> är valt. Den används också som
+                        länkförhandsvisning när eventlänken delas, även om du senare visar video på sidan.
+                      </p>
                       <p>
                         <strong>Rekommenderat:</strong> liggande bild i ungefär <strong>2:1-format</strong>, t.ex.{" "}
                         <strong>1200×600 px</strong> eller <strong>1600×800 px</strong>. Hela loggans bredd ska synas –
@@ -15669,6 +15760,8 @@ const AdminPage = () => {
                       <p className="muted choice-builder-hint">
                         {customFieldForm.fieldType === "select"
                           ? "Fältnamnet blir etikett på rullgardinsmenyn. Besökaren kan välja ett av alternativen."
+                          : customFieldForm.fieldType === "radio"
+                            ? "Fältnamnet blir rubrik. Besökaren kan välja ett av alternativen."
                           : "Fältnamnet blir rubrik över alternativen. Lägst antal 0 betyder att fältet kan lämnas tomt. Lägst 1 eller mer måste kryssas i. När högsta antalet är nått går det inte att kryssa i fler förrän ett val tas bort."}
                       </p>
                     </div>
@@ -15848,7 +15941,7 @@ const AdminPage = () => {
                                       <div className="muted">
                                         {field.options.length} alternativ · minst {field.min_choices || 0} · högst {field.max_choices || field.options.length}
                                       </div>
-                                    ) : field.field_type === "select" && Array.isArray(field.options) ? (
+                                    ) : (field.field_type === "select" || field.field_type === "radio") && Array.isArray(field.options) ? (
                                       <div className="muted">{field.options.length} alternativ</div>
                                     ) : null}
                                   </>
@@ -16049,6 +16142,15 @@ const AdminPage = () => {
                                       ))}
                                     </select>
                                   </label>
+                                ) : field.field_type === "radio" ? (
+                                  <RadioChoiceGroup
+                                    label={field.label}
+                                    options={field.options}
+                                    name={`preview-radio-${field.id}`}
+                                    value=""
+                                    disabled
+                                    onChange={() => {}}
+                                  />
                                 ) : (
                                   <label className="field">
                                     <span className="field-label">{field.label}</span>
@@ -17754,7 +17856,7 @@ function App() {
         }
         continue;
       }
-      if (field.field_type === "select") {
+      if (field.field_type === "select" || field.field_type === "radio") {
         if (field.is_required && !String(value || "").trim()) {
           setPaymentError(`Välj ett alternativ under "${field.label}".`);
           return;
@@ -18331,8 +18433,20 @@ function App() {
                   />
                 );
               }
-              if (field.field_type === "select") {
+              if (field.field_type === "select" || field.field_type === "radio") {
                 const options = Array.isArray(field.options) ? field.options : [];
+                if (field.field_type === "radio") {
+                  return (
+                    <RadioChoiceGroup
+                      label={field.label}
+                      options={options}
+                      name={`custom-radio-${field.id}`}
+                      value={customFieldValues[field.id] ?? ""}
+                      required={field.is_required}
+                      onChange={(next) => handleCustomFieldChange(field.id, field.field_type, next)}
+                    />
+                  );
+                }
                 return (
                   <label className="field">
                     <span className="field-label">{field.label}</span>

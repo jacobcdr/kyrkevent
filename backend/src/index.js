@@ -1440,6 +1440,7 @@ const normalizeCustomFieldType = (value) => {
   const type = String(value || "").trim().toLowerCase();
   if (type === "checkbox") return "checkbox";
   if (type === "checkbox_multi" || type === "checkbox-flerval" || type === "flerval") return "checkbox_multi";
+  if (type === "radio" || type === "radioknappar" || type === "radiobutton" || type === "radioknapp") return "radio";
   if (type === "select" || type === "dropdown" || type === "rullgardin" || type === "rullgardinsmeny") return "select";
   if (type === "textarea") return "textarea";
   if (type === "paragraph" || type === "brödtext" || type === "brodtext") return "paragraph";
@@ -3029,8 +3030,8 @@ const sanitizeCustomFields = (customFields, allowedFields) => {
         }
         return { id, value: picked };
       }
-      if (allowed.field_type === "select") {
-        const options = parseChoiceOptions(allowed.choice_options, 50);
+      if (allowed.field_type === "select" || allowed.field_type === "radio") {
+        const options = parseChoiceOptions(allowed.choice_options, allowed.field_type === "select" ? 50 : 20);
         if (!isCustomFieldVisibleOnForm(allowed)) {
           return { id, value: "" };
         }
@@ -3068,7 +3069,7 @@ const validateCustomFields = (customFields, allowedFields) => {
       }
       continue;
     }
-    if (field.field_type === "select") {
+    if (field.field_type === "select" || field.field_type === "radio") {
       if (field.is_required && !String(value || "").trim()) {
         return { ok: false, error: `Välj ett alternativ under "${field.label}".` };
       }
@@ -8705,7 +8706,7 @@ app.post("/admin/custom-fields", requireAdmin, async (req, res) => {
   let choiceOptions = "[]";
   let maxChoices = null;
   let minChoices = null;
-  if (normalizedType === "checkbox_multi" || normalizedType === "select") {
+  if (normalizedType === "checkbox_multi" || normalizedType === "select" || normalizedType === "radio") {
     const config = readChoiceFieldConfig(req.body, {
       required: true,
       limits: normalizedType === "checkbox_multi",
@@ -8897,10 +8898,10 @@ app.patch("/admin/custom-fields/:id", requireAdmin, async (req, res) => {
       nextMax = config.maxChoices;
       nextMin = config.minChoices;
     }
-    if (current.field_type === "select" && options !== undefined) {
+    if ((current.field_type === "select" || current.field_type === "radio") && options !== undefined) {
       const config = readChoiceFieldConfig(
         { options },
-        { required: true, limits: false, optionLimit: 50 }
+        { required: true, limits: false, optionLimit: current.field_type === "select" ? 50 : 20 }
       );
       if (!config.ok) {
         res.status(400).json({ ok: false, error: config.error });

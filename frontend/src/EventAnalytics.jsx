@@ -343,7 +343,7 @@ function formChoiceRows(field, activeBookings) {
       { name: "Inte ikryssad", count: Math.max(0, activeBookings.length - checked) }
     ];
   }
-  if (field.field_type === "select") {
+  if (field.field_type === "select" || field.field_type === "radio") {
     const defined = Array.isArray(field.options) ? field.options.filter(Boolean) : [];
     const counts = new Map(defined.map((option) => [option, 0]));
     let none = 0;
@@ -394,7 +394,10 @@ function formChoiceRows(field, activeBookings) {
 function FormChoiceStats({ bookings, formFields }) {
   const fields = (Array.isArray(formFields) ? formFields : []).filter(
     (field) =>
-      field.field_type === "checkbox" || field.field_type === "checkbox_multi" || field.field_type === "select"
+      field.field_type === "checkbox" ||
+      field.field_type === "checkbox_multi" ||
+      field.field_type === "select" ||
+      field.field_type === "radio"
   );
   const activeBookings = (Array.isArray(bookings) ? bookings : []).filter((booking) => !booking?.voided_at);
   const [selectedId, setSelectedId] = useState("");
@@ -432,7 +435,7 @@ function FormChoiceStats({ bookings, formFields }) {
         Välj ett fält i listan. Procenten är andel av anmälningarna. Makulerade anmälningar räknas inte.
       </p>
       {fields.length === 0 ? (
-        <p className="muted">Inga kryssrutor, flervalsfält eller rullgardinsmenyer i formuläret.</p>
+        <p className="muted">Inga kryssrutor, flervalsfält, rullgardinsmenyer eller radioknappar i formuläret.</p>
       ) : (
         <>
           <label className="field form-choice-stat-select">
@@ -448,7 +451,9 @@ function FormChoiceStats({ bookings, formFields }) {
                     ? "Flerval"
                     : field.field_type === "select"
                       ? "Rullgardin"
-                      : "Kryssruta"}
+                      : field.field_type === "radio"
+                        ? "Radioknappar"
+                        : "Kryssruta"}
                   )
                 </option>
               ))}

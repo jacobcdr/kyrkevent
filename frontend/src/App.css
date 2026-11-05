@@ -2514,7 +2514,8 @@ fieldset.field {
   order: 2;
 }
 
-.checkbox-field input[type="checkbox"] {
+.checkbox-field input[type="checkbox"],
+.checkbox-field input[type="radio"] {
   width: 20px;
   height: 20px;
   accent-color: var(--accent);
