@@ -346,6 +346,34 @@ const loginLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false
 });
+const signupLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 8,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: "För många registreringar. Försök igen om en stund." }
+});
+const passwordResetRequestLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: "För många återställningsförsök. Försök igen om en stund." }
+});
+const passwordResetSubmitLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: "För många återställningsförsök. Försök igen om en stund." }
+});
+const verifyEmailLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: "För många verifieringsförsök. Försök igen om en stund." }
+});
 const paymentLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 60,
@@ -4428,6 +4456,63 @@ const LOGIN_CODE_MAX_ATTEMPTS = 5;
 const hashOpaqueToken = (value) =>
   crypto.createHash("sha256").update(String(value || "")).digest("hex");
 
+const STORED_TOKEN_PREFIX = "h1.";
+
+const storedOpaqueToken = (value) => `${STORED_TOKEN_PREFIX}${hashOpaqueToken(value)}`;
+
+const hashLegacyAccountTokens = async () => {
+  const result = await pool.query(
+    `SELECT id, verification_token, reset_password_token
+     FROM admin_users
+     WHERE (verification_token IS NOT NULL AND verification_token NOT LIKE 'h1.%')
+        OR (reset_password_token IS NOT NULL AND reset_password_token NOT LIKE 'h1.%')`
+  );
+  for (const row of result.rows) {
+    const verificationToken =
+      row.verification_token && !String(row.verification_token).startsWith(STORED_TOKEN_PREFIX)
+        ? storedOpaqueToken(row.verification_token)
+        : row.verification_token;
+    const resetToken =
+      row.reset_password_token && !String(row.reset_password_token).startsWith(STORED_TOKEN_PREFIX)
+        ? storedOpaqueToken(row.reset_password_token)
+        : row.reset_password_token;
+    await pool.query(
+      `UPDATE admin_users
+       SET verification_token = $2,
+           reset_password_token = $3
+       WHERE id = $1`,
+      [row.id, verificationToken, resetToken]
+    );
+  }
+};
+
+const RESET_EMAIL_WINDOW_MS = 60 * 60 * 1000;
+const RESET_EMAIL_MAX = 3;
+const resetRequestEmailHits = new Map();
+
+const resetEmailIsLimited = (email) => {
+  const key = String(email || "").trim().toLowerCase();
+  if (!key) return false;
+  const now = Date.now();
+  if (resetRequestEmailHits.size > 5000) {
+    for (const [entryKey, stamps] of resetRequestEmailHits) {
+      const fresh = stamps.filter((stamp) => now - stamp < RESET_EMAIL_WINDOW_MS);
+      if (fresh.length === 0) resetRequestEmailHits.delete(entryKey);
+      else resetRequestEmailHits.set(entryKey, fresh);
+    }
+  }
+  const recent = (resetRequestEmailHits.get(key) || []).filter(
+    (stamp) => now - stamp < RESET_EMAIL_WINDOW_MS
+  );
+  if (recent.length >= RESET_EMAIL_MAX) {
+    resetRequestEmailHits.set(key, recent);
+    return true;
+  }
+  recent.push(now);
+  resetRequestEmailHits.set(key, recent);
+  return false;
+};
+
 const normalizeDeviceToken = (value) => {
   const token = String(value || "").trim().toLowerCase();
   return /^[a-f0-9]{64}$/.test(token) ? token : "";
@@ -4551,16 +4636,16 @@ const requireAdmin = (req, res, next) => {
 
 app.get("/admin/users/exists", async (_req, res) => {
   try {
-    const result = await pool.query("SELECT COUNT(*)::int AS count FROM admin_users");
-    const rawCount = result.rows[0]?.count;
-    const count = Number(rawCount) || 0;
-    res.json({ ok: true, exists: count > 0, count });
+    const result = await pool.query(
+      "SELECT EXISTS (SELECT 1 FROM admin_users) AS has_users"
+    );
+    res.json({ ok: true, exists: result.rows[0]?.has_users === true });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to check users" });
   }
 });
 
-app.post("/admin/users", async (req, res) => {
+app.post("/admin/users", signupLimiter, async (req, res) => {
   if (!JWT_SECRET) {
     res.status(500).json({ ok: false, error: "JWT_SECRET is not set" });
     return;
@@ -4577,75 +4662,95 @@ app.post("/admin/users", async (req, res) => {
     res.status(400).json({ ok: false, error: passwordError });
     return;
   }
-
-  const countResult = await pool.query("SELECT COUNT(*)::int AS count FROM admin_users");
-  const rawCount = countResult.rows[0]?.count;
-  const userCount = Number(rawCount) || 0;
-  const isFirstUser = userCount === 0;
-
-  if (!isFirstUser && !normalizedEmail) {
+  if (!normalizedEmail) {
     res.status(400).json({ ok: false, error: "E-post krävs för att skicka verifieringslänk." });
     return;
   }
 
-  if (normalizedEmail) {
-    const existingEmail = await pool.query(
+  const passwordHash = await bcrypt.hash(String(password), 10);
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  const verificationToken = crypto.randomBytes(32).toString("hex");
+  const client = await pool.connect();
+  let committed = false;
+  let createdUser = null;
+  try {
+    await client.query("BEGIN");
+    await client.query("LOCK TABLE admin_users IN EXCLUSIVE MODE");
+
+    const existingEmail = await client.query(
       "SELECT 1 FROM admin_user_profiles WHERE LOWER(TRIM(email)) = LOWER(TRIM($1)) LIMIT 1",
       [normalizedEmail]
     );
-    if (existingEmail?.rows?.length > 0) {
+    if (existingEmail.rowCount > 0) {
+      await client.query("ROLLBACK");
       res.status(400).json({ ok: false, error: "Den här e-postadressen är redan registrerad." });
       return;
     }
+
+    const result = await client.query(
+      `INSERT INTO admin_users (username, password_hash, email_verified, verification_token, verification_token_expires_at)
+       VALUES ($1, $2, FALSE, $3, $4)
+       RETURNING id, username, created_at`,
+      [normalizedUsername, passwordHash, storedOpaqueToken(verificationToken), expiresAt]
+    );
+    const newUserId = result.rows[0]?.id;
+    if (!newUserId) {
+      throw new Error("Failed to create user");
+    }
+
+    let profileCreated = false;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const profileId = generateShortProfileId();
+      try {
+        await client.query(
+          `INSERT INTO admin_user_profiles (user_id, profile_id, email, subscription_plan)
+           VALUES ($1, $2, $3, 'bas')`,
+          [newUserId, profileId, normalizedEmail]
+        );
+        profileCreated = true;
+        break;
+      } catch (e) {
+        if (e.code === "23505" && attempt < 9) continue;
+        throw e;
+      }
+    }
+    if (!profileCreated) {
+      throw new Error("Failed to create profile");
+    }
+
+    await client.query("COMMIT");
+    committed = true;
+    createdUser = result.rows[0];
+  } catch (error) {
+    if (!committed) {
+      try {
+        await client.query("ROLLBACK");
+      } catch (_) {
+        /* transaktionen är redan avslutad */
+      }
+    }
+    // eslint-disable-next-line no-console
+    console.error("POST /admin/users error:", error);
+    let message = "Failed to create user";
+    if (error?.code === "23505") {
+      message =
+        error?.constraint === "admin_user_profiles_email_lower_unique"
+          ? "Den här e-postadressen är redan registrerad."
+          : "Användarnamnet används redan.";
+    }
+    if (!res.headersSent) {
+      res.status(500).json({ ok: false, error: message });
+    }
+  } finally {
+    client.release();
   }
 
-  try {
-    const passwordHash = await bcrypt.hash(String(password), 10);
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    const verificationToken = isFirstUser ? null : crypto.randomBytes(32).toString("hex");
+  if (!committed || !createdUser) return;
 
-    let result;
-    if (isFirstUser) {
-      result = await pool.query(
-        `INSERT INTO admin_users (username, password_hash, email_verified)
-         VALUES ($1, $2, TRUE)
-         RETURNING id, username, created_at`,
-        [normalizedUsername, passwordHash]
-      );
-    } else {
-      result = await pool.query(
-        `INSERT INTO admin_users (username, password_hash, email_verified, verification_token, verification_token_expires_at)
-         VALUES ($1, $2, FALSE, $3, $4)
-         RETURNING id, username, created_at`,
-        [normalizedUsername, passwordHash, verificationToken, expiresAt]
-      );
-    }
-
-    const newUserId = result.rows[0]?.id;
-    if (newUserId) {
-      if (isFirstUser) {
-        await pool.query("UPDATE events SET user_id = $1 WHERE user_id IS NULL", [newUserId]);
-      }
-      for (let attempt = 0; attempt < 10; attempt++) {
-        const profileId = generateShortProfileId();
-        try {
-          await pool.query(
-            `INSERT INTO admin_user_profiles (user_id, profile_id, email, subscription_plan)
-             VALUES ($1, $2, $3, 'bas')`,
-            [newUserId, profileId, normalizedEmail]
-          );
-          break;
-        } catch (e) {
-          if (e.code === "23505" && attempt < 9) continue;
-          throw e;
-        }
-      }
-    }
-
-    if (!isFirstUser && resend && primaryFrontendUrl && verificationToken && normalizedEmail) {
-      const verifyUrl = `${primaryFrontendUrl.replace(/\/+$/, "")}/verify-email?token=${encodeURIComponent(verificationToken)}`;
-      const subject = "Aktivera ditt konto – Kyrkevent";
-      const html = `
+  if (resend && RESEND_FROM && primaryFrontendUrl) {
+    const verifyUrl = `${primaryFrontendUrl.replace(/\/+$/, "")}/verify-email?token=${encodeURIComponent(verificationToken)}`;
+    const subject = "Aktivera ditt konto – Kyrkevent";
+    const html = `
         <p>Hej!</p>
         <p>Du har skapat ett konto. Klicka på knappen nedan för att aktivera kontot och logga in.</p>
         <p><a href="${verifyUrl}" style="display:inline-block;padding:12px 24px;background:#c95a1a;color:#fff;text-decoration:none;border-radius:8px;font-weight:600;">Aktivera konto</a></p>
@@ -4653,37 +4758,26 @@ app.post("/admin/users", async (req, res) => {
         <p><a href="${verifyUrl}">${verifyUrl}</a></p>
         <p>Länken gäller i 24 timmar.</p>
       `;
-      try {
-        await resend.emails.send({
-          from: RESEND_FROM,
-          to: normalizedEmail,
-          subject,
-          html
-        });
-      } catch (err) {
-        console.error("Failed to send verification email", err);
-      }
+    try {
+      await resend.emails.send({
+        from: RESEND_FROM,
+        to: normalizedEmail,
+        subject,
+        html
+      });
+    } catch (err) {
+      console.error("Failed to send verification email", err);
     }
-
-    res.status(201).json({
-      ok: true,
-      user: result.rows[0],
-      requiresVerification: !isFirstUser
-    });
-  } catch (error) {
-    // eslint-disable-next-line no-console
-    console.error("POST /admin/users error:", error);
-    let message = "Failed to create user";
-    if (error?.code === "23505") {
-      message = error?.constraint === "admin_user_profiles_email_lower_unique"
-        ? "Den här e-postadressen är redan registrerad."
-        : "Användarnamnet används redan.";
-    }
-    res.status(500).json({ ok: false, error: message });
   }
+
+  res.status(201).json({
+    ok: true,
+    user: createdUser,
+    requiresVerification: true
+  });
 });
 
-app.get("/admin/verify-email", async (req, res) => {
+app.get("/admin/verify-email", verifyEmailLimiter, async (req, res) => {
   const token = (req.query.token || "").toString().trim();
   if (!token) {
     return res.status(400).json({ ok: false, error: "Token saknas." });
@@ -4693,7 +4787,7 @@ app.get("/admin/verify-email", async (req, res) => {
       `SELECT id FROM admin_users
        WHERE verification_token = $1
          AND (verification_token_expires_at IS NULL OR verification_token_expires_at > NOW())`,
-      [token]
+      [storedOpaqueToken(token)]
     );
     if (result.rowCount === 0) {
       return res.json({
@@ -4715,10 +4809,16 @@ app.get("/admin/verify-email", async (req, res) => {
   }
 });
 
-app.post("/admin/password-reset-request", async (req, res) => {
+app.post("/admin/password-reset-request", passwordResetRequestLimiter, async (req, res) => {
   const rawEmail = (req.body?.email || "").toString().trim();
   if (!rawEmail) {
     return res.status(400).json({ ok: false, error: "E-postadress saknas." });
+  }
+  if (resetEmailIsLimited(rawEmail)) {
+    return res.status(429).json({
+      ok: false,
+      error: "För många återställningsförsök. Försök igen om en stund."
+    });
   }
   try {
     const email = rawEmail.toLowerCase();
@@ -4748,7 +4848,7 @@ app.post("/admin/password-reset-request", async (req, res) => {
        SET reset_password_token = $1,
            reset_password_expires_at = $2
        WHERE id = $3`,
-      [resetToken, expiresAt, user.id]
+      [storedOpaqueToken(resetToken), expiresAt, user.id]
     );
 
     if (resend && RESEND_FROM && primaryFrontendUrl) {
@@ -4790,7 +4890,7 @@ app.post("/admin/password-reset-request", async (req, res) => {
   }
 });
 
-app.post("/admin/password-reset", async (req, res) => {
+app.post("/admin/password-reset", passwordResetSubmitLimiter, async (req, res) => {
   const token = (req.body?.token || "").toString().trim();
   const newPassword = (req.body?.password || "").toString();
 
@@ -4808,7 +4908,7 @@ app.post("/admin/password-reset", async (req, res) => {
       `SELECT id FROM admin_users
        WHERE reset_password_token = $1
          AND reset_password_expires_at > NOW()`,
-      [token]
+      [storedOpaqueToken(token)]
     );
 
     if (result.rowCount === 0) {
@@ -11872,6 +11972,15 @@ const ensureBookingsTable = async () => {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  const emailVerifiedColumn = await pool.query(
+    `
+      SELECT 1
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'admin_users'
+        AND column_name = 'email_verified'
+    `
+  );
   await pool.query(`
     ALTER TABLE admin_users
       ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT FALSE,
@@ -11880,6 +11989,11 @@ const ensureBookingsTable = async () => {
       ADD COLUMN IF NOT EXISTS reset_password_token TEXT,
       ADD COLUMN IF NOT EXISTS reset_password_expires_at TIMESTAMPTZ
   `);
+  if (emailVerifiedColumn.rowCount === 0) {
+    await pool.query(
+      "UPDATE admin_users SET email_verified = TRUE WHERE verification_token IS NULL"
+    );
+  }
   const migration = await pool.connect();
   try {
     await migration.query("BEGIN");
@@ -11935,9 +12049,7 @@ const ensureBookingsTable = async () => {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
-  await pool.query(
-    "UPDATE admin_users SET email_verified = TRUE WHERE verification_token IS NULL"
-  );
+  await hashLegacyAccountTokens();
   await pool.query(`
     CREATE TABLE IF NOT EXISTS admin_user_profiles (
       user_id INTEGER PRIMARY KEY,

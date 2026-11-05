@@ -4239,7 +4239,7 @@ const AdminPage = () => {
       throw new Error("Users check failed");
     }
     const data = await response.json();
-    setUsersExist(Boolean(data.exists));
+    setUsersExist(data.exists !== false);
   };
 
   const loadAdminSectionVisibility = async (authToken, eventId) => {
@@ -5210,25 +5210,21 @@ const AdminPage = () => {
 
   useEffect(() => {
     loadUsersExist()
-      .catch(() => setUsersExist(false))
+      .catch(() => setUsersExist(true))
       .finally(() => setUsersExistLoaded(true));
   }, []);
 
   useEffect(() => {
-    if (!token) {
-      const viewParam = new URLSearchParams(window.location.search).get("view");
-      if (viewParam === "signup") {
-        setAuthView("signup");
-      } else if (viewParam === "login") {
-        setAuthView("login");
-      } else if (viewParam === "forgot") {
-        setAuthView("forgot");
-      } else if (usersExistLoaded) {
-        setAuthView(usersExist ? "login" : "signup");
-      } else {
-        setAuthView("login");
-      }
-    }
+    if (token || !usersExistLoaded) return;
+    const viewParam = new URLSearchParams(window.location.search).get("view");
+    setAuthView((current) => {
+      if (current === "device-code") return current;
+      if (current === "forgot" && viewParam !== "login" && viewParam !== "signup") return current;
+      if (viewParam === "forgot") return "forgot";
+      if (viewParam === "signup") return "signup";
+      if (!viewParam && !usersExist) return "signup";
+      return "login";
+    });
   }, [token, usersExist, usersExistLoaded]);
 
   useEffect(() => {
@@ -5510,25 +5506,8 @@ const AdminPage = () => {
         })
       });
       if (!response.ok) {
-        if (response.status === 401) {
-          setUsersExist(true);
-          setAuthView("login");
-          let msg = "Det finns redan användare. Logga in med ditt användarnamn och lösenord.";
-          try {
-            const errBody = await response.clone().json();
-            if (typeof errBody.userCount === "number" && errBody.userCount >= 0) {
-              msg = `Servern rapporterar ${errBody.userCount} användare i databasen. Logga in, eller rensa tabellen admin_users (t.ex. DELETE FROM admin_users;) om du vill börja om.`;
-            }
-          } catch (_) {}
-          setError(msg);
-        } else {
-          try {
-            const errBody = await response.json();
-            setError(errBody.error || "Kunde inte skapa användaren.");
-          } catch (_) {
-            setError("Kunde inte skapa användaren.");
-          }
-        }
+        const errBody = await response.json().catch(() => ({}));
+        setError(errBody.error || "Kunde inte skapa användaren.");
         return;
       }
       const data = await response.json();
@@ -16684,7 +16663,7 @@ function VerifyEmailPage() {
       });
   }, []);
   return (
-    <div className="page admin-auth">
+    <div className="admin-auth">
       <div className="admin-auth-card">
         <a href="/admin" className="admin-auth-back">
           ← Tillbaka till inloggning
@@ -16779,7 +16758,7 @@ function ResetPasswordPage() {
   };
 
   return (
-    <div className="page admin-auth">
+    <div className="admin-auth">
       <div className="admin-auth-card">
         <a href="/admin" className="admin-auth-back">
           ← Tillbaka till inloggning
@@ -17165,7 +17144,16 @@ function App() {
   ]);
 
   useEffect(() => {
-    if (isAdminRoute || isPaymentStatusRoute) {
+    const themeKeys = Object.keys(THEMES.default);
+    const isPublicEvent =
+      !isAdminRoute &&
+      !isPaymentStatusRoute &&
+      !isLandingRoute &&
+      !isVerifyEmailRoute &&
+      !isResetPasswordRoute &&
+      !isCheckInRoute;
+    if (!isPublicEvent) {
+      themeKeys.forEach((key) => document.documentElement.style.removeProperty(key));
       return;
     }
     const themeName = event?.theme || "default";
@@ -17173,7 +17161,15 @@ function App() {
     Object.entries(theme).forEach(([key, value]) => {
       document.documentElement.style.setProperty(key, value);
     });
-  }, [event, isAdminRoute, isPaymentStatusRoute]);
+  }, [
+    event,
+    isAdminRoute,
+    isPaymentStatusRoute,
+    isLandingRoute,
+    isVerifyEmailRoute,
+    isResetPasswordRoute,
+    isCheckInRoute
+  ]);
 
   useEffect(() => {
     const isPublicEvent =
