@@ -4540,6 +4540,18 @@ const issueAdminJwt = (user) =>
     expiresIn: "1h"
   });
 
+const recordAdminLogin = async (userId) => {
+  await pool.query(
+    `
+      UPDATE admin_users
+      SET previous_login_at = COALESCE(last_login_at, NOW()),
+          last_login_at = NOW()
+      WHERE id = $1
+    `,
+    [userId]
+  );
+};
+
 const loadProfileEmail = async (userId) => {
   const result = await pool.query(
     "SELECT email FROM admin_user_profiles WHERE user_id = $1",
@@ -5022,6 +5034,7 @@ app.post("/admin/login", loginLimiter, async (req, res) => {
           `,
           [trusted.rows[0].id, expiresAt, userAgent.slice(0, 240)]
         );
+        await recordAdminLogin(user.id);
         res.json({ ok: true, token: issueAdminJwt(user) });
         return;
       }
@@ -5031,6 +5044,7 @@ app.post("/admin/login", loginLimiter, async (req, res) => {
     const challenge = await createDeviceLoginChallenge(user, tokenToTrust, userAgent);
     if (challenge.skipped) {
       await rememberTrustedDevice(user.id, tokenToTrust, userAgent);
+      await recordAdminLogin(user.id);
       res.json({ ok: true, token: issueAdminJwt(user), deviceToken: tokenToTrust });
       return;
     }
@@ -5093,6 +5107,7 @@ app.post("/admin/login/verify-device", loginLimiter, async (req, res) => {
     }
     await pool.query("DELETE FROM admin_login_challenges WHERE id = $1", [challengeId]);
     await rememberTrustedDevice(challenge.user_id, normalizedDeviceToken, req.get("user-agent") || "");
+    await recordAdminLogin(challenge.user_id);
     res.json({
       ok: true,
       token: issueAdminJwt({ id: challenge.user_id, username: challenge.username })
@@ -5502,12 +5517,67 @@ app.put("/admin/profile/password", requireAdmin, async (req, res) => {
 app.get("/admin/events", requireAdmin, async (_req, res) => {
   try {
     const result = await pool.query(
-      "SELECT id, slug, name, theme, event_start_date, event_end_date, registration_deadline, max_participants, confirmation_note, COALESCE(vat_rate_percent, 25) AS vat_rate_percent, created_at FROM events WHERE user_id = $1 ORDER BY created_at DESC, id DESC",
+      `
+        SELECT e.id, e.slug, e.name, e.theme, e.event_start_date, e.event_end_date, e.registration_deadline,
+               e.max_participants, e.confirmation_note, COALESCE(e.vat_rate_percent, 25) AS vat_rate_percent, e.created_at,
+               (
+                 SELECT COUNT(*)::int
+                 FROM bookings b
+                 WHERE b.event_id = e.id
+                   AND b.voided_at IS NULL
+                   AND u.previous_login_at IS NOT NULL
+                   AND b.created_at > u.previous_login_at
+                   AND (s.seen_login_at IS NULL OR b.created_at > s.seen_login_at)
+               ) AS new_booking_count
+        FROM events e
+        JOIN admin_users u ON u.id = e.user_id
+        LEFT JOIN admin_event_booking_seen s ON s.user_id = e.user_id AND s.event_id = e.id
+        WHERE e.user_id = $1
+        ORDER BY e.created_at DESC, e.id DESC
+      `,
       [_req.userId]
     );
-    res.json({ ok: true, events: (result.rows || []).map(formatEventDates) });
+    res.json({
+      ok: true,
+      events: (result.rows || []).map((row) => {
+        const event = formatEventDates(row);
+        const count = Number(event.new_booking_count) || 0;
+        delete event.new_booking_count;
+        return { ...event, newBookingCount: count };
+      })
+    });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to load events" });
+  }
+});
+
+app.post("/admin/events/:id/seen-bookings", requireAdmin, async (req, res) => {
+  const eventId = normalizeEventId(req.params.id);
+  if (!eventId) {
+    res.status(400).json({ ok: false, error: "Missing event" });
+    return;
+  }
+  try {
+    const owned = await pool.query(
+      "SELECT id FROM events WHERE id = $1 AND user_id = $2",
+      [eventId, req.userId]
+    );
+    if (owned.rowCount === 0) {
+      res.status(404).json({ ok: false, error: "Event not found" });
+      return;
+    }
+    await pool.query(
+      `
+        INSERT INTO admin_event_booking_seen (user_id, event_id, seen_login_at)
+        VALUES ($1, $2, NOW())
+        ON CONFLICT (user_id, event_id)
+        DO UPDATE SET seen_login_at = NOW()
+      `,
+      [req.userId, eventId]
+    );
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Kunde inte markera anmälningarna som sedda" });
   }
 });
 
@@ -12834,13 +12904,21 @@ const ensureBookingsTable = async () => {
     );
     await migration.query(`
       ALTER TABLE admin_users
-        ADD COLUMN IF NOT EXISTS is_superadmin BOOLEAN NOT NULL DEFAULT FALSE
+        ADD COLUMN IF NOT EXISTS is_superadmin BOOLEAN NOT NULL DEFAULT FALSE,
+        ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS previous_login_at TIMESTAMPTZ
     `);
     if (superAdminColumn.rowCount === 0) {
       await migration.query(
         "UPDATE admin_users SET is_superadmin = TRUE WHERE LOWER(username) = 'admin'"
       );
     }
+    await migration.query(`
+      UPDATE admin_users
+      SET last_login_at = COALESCE(last_login_at, NOW()),
+          previous_login_at = COALESCE(previous_login_at, NOW())
+      WHERE last_login_at IS NULL OR previous_login_at IS NULL
+    `);
     await migration.query("COMMIT");
   } catch (error) {
     await migration.query("ROLLBACK");
@@ -12946,6 +13024,14 @@ const ensureBookingsTable = async () => {
       bas_credit_used BOOLEAN NOT NULL DEFAULT FALSE,
       max_participants INTEGER,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS admin_event_booking_seen (
+      user_id INTEGER NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+      event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+      seen_login_at TIMESTAMPTZ NOT NULL,
+      PRIMARY KEY (user_id, event_id)
     )
   `);
   await pool.query(`

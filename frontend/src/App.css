@@ -1688,6 +1688,10 @@ body.public-event-body {
   box-shadow: 0 12px 28px rgba(51, 65, 85, 0.12);
 }
 
+.admin-event-card:has(.admin-event-new-bookings:hover) {
+  z-index: 5;
+}
+
 .admin-event-card.is-active {
   border-color: var(--brand-bas);
   box-shadow: 0 0 0 3px rgba(125, 211, 247, 0.45);
@@ -1714,6 +1718,118 @@ body.public-event-body {
   right: 0.5rem;
   border-radius: 10px;
   padding: 0.3rem 0.45rem;
+}
+
+.admin-event-new-bookings {
+  position: absolute;
+  top: 0.35rem;
+  left: 0.35rem;
+  width: 2.15rem;
+  height: 2.15rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 3;
+}
+
+.admin-event-new-bookings-icon {
+  width: 1.7rem;
+  height: 1.7rem;
+  overflow: visible;
+}
+
+.admin-event-bell {
+  transform-origin: 16px 4.6px;
+  transform-box: view-box;
+  animation: admin-event-bell-ring 2.4s ease-in-out infinite;
+}
+
+.admin-event-bell-wave {
+  opacity: 0;
+  transform-origin: 16px 15px;
+  transform-box: view-box;
+  animation: admin-event-bell-wave 2.4s ease-out infinite;
+}
+
+.admin-event-bell-wave-2 {
+  animation-delay: 0.12s;
+}
+
+.admin-event-new-bookings-count {
+  position: absolute;
+  top: -0.12rem;
+  right: -0.22rem;
+  min-width: 1.05rem;
+  height: 1.05rem;
+  padding: 0 0.22rem;
+  border-radius: 999px;
+  background: #e11d48;
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1.05rem;
+  text-align: center;
+  box-shadow: 0 0 0 2px #fff;
+  transform-origin: center;
+  animation: admin-event-badge-pulse 1.35s ease-in-out infinite;
+}
+
+.admin-event-new-bookings-toast {
+  position: absolute;
+  left: calc(100% + 0.35rem);
+  top: 50%;
+  z-index: 4;
+  padding: 0.35rem 0.6rem;
+  border-radius: 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16);
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%) translateX(-4px);
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+.admin-event-new-bookings:hover .admin-event-new-bookings-toast,
+.admin-event-new-bookings:focus-within .admin-event-new-bookings-toast {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
+}
+
+@keyframes admin-event-bell-ring {
+  0%, 58%, 100% { transform: rotate(0deg); }
+  66% { transform: rotate(18deg); }
+  74% { transform: rotate(-16deg); }
+  82% { transform: rotate(10deg); }
+  90% { transform: rotate(-6deg); }
+}
+
+@keyframes admin-event-bell-wave {
+  0%, 60% { opacity: 0; transform: scale(0.7); }
+  72% { opacity: 1; transform: scale(1); }
+  92%, 100% { opacity: 0; transform: scale(1.15); }
+}
+
+@keyframes admin-event-badge-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.16); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-event-bell,
+  .admin-event-bell-wave,
+  .admin-event-new-bookings-count {
+    animation: none;
+  }
+
+  .admin-event-bell-wave {
+    opacity: 0;
+  }
 }
 
 .partner-logo {

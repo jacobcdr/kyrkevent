@@ -3675,6 +3675,7 @@ const AdminPage = () => {
   const [eventConfirmationNoteInput, setEventConfirmationNoteInput] = useState("");
   const [eventDeleteConfirm, setEventDeleteConfirm] = useState(null);
   const [eventDeleteLoading, setEventDeleteLoading] = useState(false);
+  const [eventDeleteBlockedMessage, setEventDeleteBlockedMessage] = useState("");
   const [systemStatus, setSystemStatus] = useState(null);
   const [systemStatusLoading, setSystemStatusLoading] = useState(false);
   const [homeVisitorRange, setHomeVisitorRange] = useState(() => visitorRangeForDays(7));
@@ -4321,9 +4322,33 @@ const AdminPage = () => {
     setEvents(data.events || []);
   };
 
+  const dismissEventNewBookings = (eventId) => {
+    setEvents((prev) =>
+      prev.map((ev) => (String(ev.id) === String(eventId) ? { ...ev, newBookingCount: 0 } : ev))
+    );
+    if (!token) return;
+    fetch(`${API_BASE}/admin/events/${eventId}/seen-bookings`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` }
+    }).catch(() => {});
+  };
+
+  const openOwnEvent = (item) => {
+    if (Number(item?.newBookingCount) > 0) {
+      dismissEventNewBookings(item.id);
+    }
+    setSelectedEventId(String(item.id));
+  };
+
   const applySavedEvent = (eventRow) => {
     if (!eventRow?.id) return;
-    setEvents((prev) => prev.map((ev) => (String(ev.id) === String(eventRow.id) ? eventRow : ev)));
+    setEvents((prev) =>
+      prev.map((ev) =>
+        String(ev.id) === String(eventRow.id)
+          ? { ...eventRow, newBookingCount: eventRow.newBookingCount ?? ev.newBookingCount ?? 0 }
+          : ev
+      )
+    );
     setAssistedEvent((prev) =>
       prev && String(prev.id) === String(eventRow.id) ? { ...prev, ...eventRow } : prev
     );
@@ -5804,7 +5829,13 @@ const AdminPage = () => {
       });
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
-        throw new Error(data.error || "Kunde inte ta bort eventet.");
+        const message = data.error || "Kunde inte ta bort eventet.";
+        if (message.includes("betalda anmälningar")) {
+          setEventDeleteConfirm(null);
+          setEventDeleteBlockedMessage(message);
+          return;
+        }
+        throw new Error(message);
       }
       if (String(selectedEventId) === String(eventDeleteConfirm.id)) {
         setSelectedEventId("");
@@ -8850,6 +8881,26 @@ const AdminPage = () => {
               </button>
               <button type="button" className="button button-danger" onClick={confirmEventDelete} disabled={eventDeleteLoading}>
                 {eventDeleteLoading ? "Tar bort…" : "Ta bort"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {eventDeleteBlockedMessage ? (
+        <div className="toaster-overlay" onClick={() => setEventDeleteBlockedMessage("")} aria-hidden="false">
+          <div
+            className="toaster toaster-confirm"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-labelledby="toaster-event-delete-blocked-title"
+            aria-modal="true"
+          >
+            <h3 id="toaster-event-delete-blocked-title" className="toaster-title">Eventet kan inte tas bort</h3>
+            <p className="toaster-message">{eventDeleteBlockedMessage}</p>
+            <div className="toaster-actions">
+              <button type="button" className="button" onClick={() => setEventDeleteBlockedMessage("")}>
+                OK
               </button>
             </div>
           </div>
@@ -12983,14 +13034,56 @@ const AdminPage = () => {
                           role="button"
                           tabIndex={0}
                           className={`partner-card admin-event-card ${isActive ? "is-active" : ""}`}
-                          onClick={() => setSelectedEventId(String(item.id))}
+                          onClick={() => openOwnEvent(item)}
                           onKeyDown={(event) => {
                             if (event.key === "Enter" || event.key === " ") {
                               event.preventDefault();
-                              setSelectedEventId(String(item.id));
+                              openOwnEvent(item);
                             }
                           }}
                         >
+                          {Number(item.newBookingCount) > 0 ? (
+                            <span className="admin-event-new-bookings">
+                              <svg className="admin-event-new-bookings-icon" viewBox="0 0 32 32" aria-hidden="true">
+                                <path
+                                  className="admin-event-bell-wave admin-event-bell-wave-1"
+                                  d="M24.2 9.2c1.5 1.7 2.3 3.8 2.3 6"
+                                  fill="none"
+                                  stroke="#7dd3f7"
+                                  strokeWidth="1.6"
+                                  strokeLinecap="round"
+                                />
+                                <path
+                                  className="admin-event-bell-wave admin-event-bell-wave-2"
+                                  d="M26.8 6.6c2.3 2.6 3.5 5.6 3.5 8.8"
+                                  fill="none"
+                                  stroke="#7dd3f7"
+                                  strokeWidth="1.6"
+                                  strokeLinecap="round"
+                                />
+                                <g className="admin-event-bell">
+                                  <path
+                                    fill="#556678"
+                                    d="M16 3.4a1.35 1.35 0 0 1 1.35 1.35v.55A6.7 6.7 0 0 1 22.9 12v3.1l1.7 2.9a1.15 1.15 0 0 1-1 1.75H8.4a1.15 1.15 0 0 1-1-1.75l1.7-2.9V12a6.7 6.7 0 0 1 5.55-6.7v-.55A1.35 1.35 0 0 1 16 3.4z"
+                                  />
+                                  <circle cx="16" cy="22.7" r="2.05" fill="#7dd3f7" />
+                                </g>
+                              </svg>
+                              <span className="admin-event-new-bookings-count">
+                                {item.newBookingCount > 99 ? "99+" : item.newBookingCount}
+                              </span>
+                              <span className="admin-event-new-bookings-toast" role="tooltip">
+                                {item.newBookingCount === 1
+                                  ? "1 ny anmälan"
+                                  : `${item.newBookingCount} nya anmälningar`}
+                              </span>
+                              <span className="sr-only">
+                                {item.newBookingCount === 1
+                                  ? "1 ny anmälan sedan senaste inloggningen"
+                                  : `${item.newBookingCount} nya anmälningar sedan senaste inloggningen`}
+                              </span>
+                            </span>
+                          ) : null}
                           <button
                             type="button"
                             className="icon-button admin-event-delete"
