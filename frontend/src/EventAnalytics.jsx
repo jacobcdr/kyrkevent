@@ -391,7 +391,38 @@ function formChoiceRows(field, activeBookings) {
   return rows;
 }
 
-function FormChoiceStats({ bookings, formFields }) {
+function FormChoiceStats({ bookings, formFields, apiBase, token, eventId }) {
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState("");
+
+  const downloadFormStats = async () => {
+    if (!token || !eventId || exporting) return;
+    setExportError("");
+    setExporting(true);
+    try {
+      const response = await fetch(`${apiBase}/admin/events/${eventId}/form-stats.pdf`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!response.ok) {
+        throw new Error("Kunde inte skapa PDF.");
+      }
+      const blob = await response.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const disposition = response.headers.get("Content-Disposition") || "";
+      const filename = disposition.match(/filename="([^"]+)"/)?.[1] || "formularsvar.pdf";
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(blobUrl);
+    } catch (err) {
+      setExportError(err?.message || "Kunde inte skapa PDF.");
+    } finally {
+      setExporting(false);
+    }
+  };
   const fields = (Array.isArray(formFields) ? formFields : []).filter(
     (field) =>
       field.field_type === "checkbox" ||
@@ -430,10 +461,23 @@ function FormChoiceStats({ bookings, formFields }) {
 
   return (
     <section className="form-choice-stats">
-      <h2>Formulärsvar</h2>
-      <p className="muted" style={{ marginTop: 0 }}>
-        Välj ett fält i listan. Procenten är andel av anmälningarna. Makulerade anmälningar räknas inte.
-      </p>
+      <div className="form-choice-stats-head">
+        <div>
+          <h2>Formulärsvar</h2>
+          <p className="muted" style={{ marginTop: 0 }}>
+            Välj ett fält i listan. Procenten är andel av anmälningarna. Makulerade anmälningar räknas inte. PDF-filen samlar alla extra fält.
+          </p>
+        </div>
+        <button
+          type="button"
+          className="button form-choice-stats-export"
+          onClick={downloadFormStats}
+          disabled={!token || !eventId || exporting}
+        >
+          {exporting ? "Skapar PDF…" : "Exportera PDF"}
+        </button>
+      </div>
+      {exportError ? <p className="admin-error">{exportError}</p> : null}
       {fields.length === 0 ? (
         <p className="muted">Inga kryssrutor, flervalsfält, rullgardinsmenyer eller radioknappar i formuläret.</p>
       ) : (
@@ -903,7 +947,13 @@ export function EventAnalytics({ apiBase, token, eventId, overview, bookings = [
           </div>
         </>
       ) : null}
-      <FormChoiceStats bookings={bookings} formFields={formFields} />
+      <FormChoiceStats
+        bookings={bookings}
+        formFields={formFields}
+        apiBase={apiBase}
+        token={token}
+        eventId={eventId}
+      />
     </div>
   );
 }

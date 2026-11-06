@@ -427,6 +427,12 @@ const siteViewLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false
 });
+const eventViewLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false
+});
 const demoTokenLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 30,
@@ -1143,6 +1149,9 @@ const normalizeEventVatRatePercent = (value) => {
   return ALLOWED_EVENT_VAT_RATES.includes(n) ? n : 25;
 };
 
+const eventVisibleToUserCondition = (eventAlias, userParam) =>
+  `(${eventAlias}.user_id = ${userParam} OR EXISTS (SELECT 1 FROM admin_users au WHERE au.id = ${userParam} AND au.is_superadmin = TRUE))`;
+
 const ensureEventOwnership = async (eventId, userId, res) => {
   const resolvedEventId = normalizeEventId(eventId);
   if (!resolvedEventId) {
@@ -1150,7 +1159,7 @@ const ensureEventOwnership = async (eventId, userId, res) => {
     return null;
   }
   const result = await pool.query(
-    "SELECT id FROM events WHERE id = $1 AND user_id = $2",
+    `SELECT e.id FROM events e WHERE e.id = $1 AND ${eventVisibleToUserCondition("e", "$2")}`,
     [resolvedEventId, userId]
   );
   if (result.rowCount === 0) {
@@ -2645,7 +2654,7 @@ app.post("/site/view", siteViewLimiter, async (req, res) => {
   }
 });
 
-app.post("/events/:slug/view", async (req, res) => {
+app.post("/events/:slug/view", eventViewLimiter, async (req, res) => {
   const { slug } = req.params;
   const referrerBody = typeof req.body?.referrer === "string" ? req.body.referrer : "";
   if (!slug) {
@@ -5646,7 +5655,7 @@ async function buildBookingRefundContext(bookingId, userId) {
     `
       SELECT b.id, b.event_id, b.name, b.email, b.pris, b.payment_status, b.refunded_at, b.refund_amount
       FROM bookings b
-      INNER JOIN events e ON e.id = b.event_id AND e.user_id = $2
+      INNER JOIN events e ON e.id = b.event_id AND ${eventVisibleToUserCondition("e", "$2")}
       WHERE b.id = $1
     `,
     [bookingId, userId]
@@ -7015,6 +7024,41 @@ app.get("/admin/organizations", requireAdmin, requireSuperAdmin, async (_req, re
   }
 });
 
+app.get("/admin/organizations/:userId/events", requireAdmin, requireSuperAdmin, async (req, res) => {
+  const userId = Number.parseInt(req.params.userId, 10);
+  if (!Number.isInteger(userId) || userId < 1) {
+    res.status(400).json({ ok: false, error: "Ogiltig organisation" });
+    return;
+  }
+  try {
+    const profile = await pool.query(
+      `SELECT organization, COALESCE(vat_exempt, false) AS vat_exempt
+       FROM admin_user_profiles
+       WHERE user_id = $1`,
+      [userId]
+    );
+    if (profile.rowCount === 0) {
+      res.status(404).json({ ok: false, error: "Organisationen hittades inte" });
+      return;
+    }
+    const result = await pool.query(
+      `SELECT id, slug, name, theme, event_start_date, event_end_date, registration_deadline, max_participants, confirmation_note, COALESCE(vat_rate_percent, 25) AS vat_rate_percent, created_at
+       FROM events
+       WHERE user_id = $1
+       ORDER BY created_at DESC, id DESC`,
+      [userId]
+    );
+    res.json({
+      ok: true,
+      organization: profile.rows[0].organization || "",
+      vatExempt: profile.rows[0].vat_exempt === true,
+      events: (result.rows || []).map(formatEventDates)
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Kunde inte ladda organisationens event" });
+  }
+});
+
 app.get("/admin/profiles/:profileId", requireAdmin, requireSuperAdmin, async (req, res) => {
   const profileId = (req.params.profileId || "").toString().trim();
   if (!profileId) {
@@ -7324,8 +7368,8 @@ app.post("/admin/events/:eventId/anonymize-bookings", requireAdmin, async (req, 
   if (!ownership) return;
   try {
     const eventRow = await pool.query(
-      "SELECT event_end_date, event_start_date FROM events WHERE id = $1 AND user_id = $2",
-      [eventId, req.userId]
+      "SELECT event_end_date, event_start_date, user_id FROM events WHERE id = $1",
+      [eventId]
     );
     if (!eventRow.rows[0]) {
       return res.status(404).json({ ok: false, error: "Eventet hittades inte." });
@@ -7343,7 +7387,7 @@ app.post("/admin/events/:eventId/anonymize-bookings", requireAdmin, async (req, 
     }
     const paidContaining = await pool.query(
       "SELECT 1 FROM payout_requests WHERE user_id = $2 AND status = $3 AND $1 = ANY(event_ids) LIMIT 1",
-      [eventId, req.userId, "betald"]
+      [eventId, eventRow.rows[0].user_id, "betald"]
     );
     if (paidContaining.rowCount === 0) {
       return res.status(400).json({ ok: false, error: "Eventet måste ha utbetald status för att anonymisera bokningar." });
@@ -9060,6 +9104,14 @@ app.delete("/admin/events/:id", requireAdmin, async (req, res) => {
   if (!eventId) {
     return;
   }
+  const ownerRow = await pool.query("SELECT user_id FROM events WHERE id = $1", [eventId]);
+  if (Number(ownerRow.rows[0]?.user_id) !== Number(req.userId)) {
+    res.status(403).json({
+      ok: false,
+      error: "Endast organisationen som äger eventet kan ta bort det."
+    });
+    return;
+  }
   const paidCount = await pool.query(
     "SELECT COUNT(*)::int AS count FROM bookings WHERE event_id = $1 AND payment_status = $2",
     [eventId, "paid"]
@@ -9175,9 +9227,10 @@ app.put("/admin/events/:id", requireAdmin, async (req, res) => {
     confirmationNote === undefined ? null : String(confirmationNote || "").trim();
   let vatRatePercentValue = null;
   if (vatRatePercentBody !== undefined) {
+    const ownerForVat = await pool.query("SELECT user_id FROM events WHERE id = $1", [eventId]);
     const profileVat = await pool.query(
       "SELECT COALESCE(vat_exempt, false) AS vat_exempt FROM admin_user_profiles WHERE user_id = $1",
-      [req.userId]
+      [ownerForVat.rows[0]?.user_id || req.userId]
     );
     if (profileVat.rows[0]?.vat_exempt !== true) {
       vatRatePercentValue = normalizeEventVatRatePercent(vatRatePercentBody);
@@ -9307,10 +9360,15 @@ app.get("/admin/prices", requireAdmin, async (req, res) => {
   }
 });
 
-const requireSubscriptionForPrices = async (req, res) => {
+const requireSubscriptionForPrices = async (req, res, eventId) => {
+  let userId = req.userId;
+  if (eventId && (await userIsSuperAdmin(req.userId))) {
+    const owner = await pool.query("SELECT user_id FROM events WHERE id = $1", [eventId]);
+    if (owner.rows[0]?.user_id) userId = owner.rows[0].user_id;
+  }
   const profileRow = await pool.query(
     "SELECT subscription_plan FROM admin_user_profiles WHERE user_id = $1",
-    [req.userId]
+    [userId]
   );
   const plan = normalizeSubscriptionPlan(profileRow.rows[0]?.subscription_plan);
   if (plan !== "bas" && plan !== "premium") {
@@ -9329,7 +9387,7 @@ app.post("/admin/prices", requireAdmin, async (req, res) => {
   if (!parsedEventId) {
     return;
   }
-  if (!(await requireSubscriptionForPrices(req, res))) {
+  if (!(await requireSubscriptionForPrices(req, res, parsedEventId))) {
     return;
   }
   if (!name || amount === undefined || amount === null || amount === "") {
@@ -9384,7 +9442,7 @@ app.put("/admin/prices/:id", requireAdmin, async (req, res) => {
   if (!parsedEventId) {
     return;
   }
-  if (!(await requireSubscriptionForPrices(req, res))) {
+  if (!(await requireSubscriptionForPrices(req, res, parsedEventId))) {
     return;
   }
   if (!name || amount === undefined || amount === null || amount === "") {
@@ -9439,7 +9497,7 @@ app.delete("/admin/prices/:id", requireAdmin, async (req, res) => {
   if (!eventId) {
     return;
   }
-  if (!(await requireSubscriptionForPrices(req, res))) {
+  if (!(await requireSubscriptionForPrices(req, res, eventId))) {
     return;
   }
   try {
@@ -10748,7 +10806,7 @@ const buildBookingReceiptContext = async (bookingId, userId) => {
              b.created_at, b.order_number, b.refund_amount, b.refunded_at, b.voided_at,
              e.name AS event_name, e.confirmation_note
       FROM bookings b
-      INNER JOIN events e ON e.id = b.event_id AND e.user_id = $2
+      INNER JOIN events e ON e.id = b.event_id AND ${eventVisibleToUserCondition("e", "$2")}
       WHERE b.id = $1
     `,
     [bookingId, userId]
@@ -11126,7 +11184,7 @@ app.post("/admin/bookings/:bookingId/void", requireAdmin, async (req, res) => {
       `
         SELECT b.id
         FROM bookings b
-        INNER JOIN events e ON e.id = b.event_id AND e.user_id = $2
+        INNER JOIN events e ON e.id = b.event_id AND ${eventVisibleToUserCondition("e", "$2")}
         WHERE b.id = $1
         FOR UPDATE
       `,
@@ -11369,6 +11427,443 @@ app.get("/admin/bookings/export", requireAdmin, async (req, res) => {
   }
 });
 
+const FORM_STATS_TYPE_LABELS = {
+  checkbox: "Kryssruta",
+  checkbox_multi: "Flerval",
+  select: "Rullgardin",
+  radio: "Radioknappar",
+  text: "Text",
+  textarea: "Text"
+};
+
+const FORM_STATS_DONUT_COLORS = [
+  "#2ecc71",
+  "#f1c40f",
+  "#c17f4a",
+  "#ee8b8b",
+  "#5b8def",
+  "#9b59b6",
+  "#1abc9c",
+  "#e67e22",
+  "#34495e",
+  "#7f8c8d"
+];
+
+const FORM_STATS_CHOICE_TYPES = new Set(["checkbox", "checkbox_multi", "select", "radio"]);
+const FORM_STATS_FOOTER_RESERVE = 62;
+const FORM_STATS_LOGO_PATH = path.resolve(__dirname, "..", "..", "frontend", "public", "kyrkevent2.png");
+const FORM_STATS_ARC_KAPPA = 4 * ((Math.sqrt(2) - 1) / 3);
+
+const formStatsEntry = (booking, fieldId) => {
+  const entries = Array.isArray(booking?.custom_fields) ? booking.custom_fields : [];
+  return entries.find((entry) => String(entry?.id) === String(fieldId)) || null;
+};
+
+const formStatsMatchKey = (counts, value) => {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const existing = [...counts.keys()].find(
+    (option) => option.toLocaleLowerCase("sv") === text.toLocaleLowerCase("sv")
+  );
+  return existing || text;
+};
+
+const formStatsRowsForField = (field, bookings) => {
+  const total = bookings.length;
+  const withPercent = (rows) =>
+    rows.map((row) => ({
+      ...row,
+      percent: total > 0 ? Math.round((row.count / total) * 100) : 0
+    }));
+
+  if (field.field_type === "checkbox") {
+    let checked = 0;
+    for (const booking of bookings) {
+      if (formStatsEntry(booking, field.id)?.value === true) checked += 1;
+    }
+    return {
+      note: "",
+      rows: withPercent([
+        { name: "Ikryssad", count: checked },
+        { name: "Inte ikryssad", count: Math.max(0, total - checked) }
+      ])
+    };
+  }
+
+  if (field.field_type === "select" || field.field_type === "radio") {
+    const defined = parseChoiceOptions(field.choice_options, field.field_type === "select" ? 50 : 20);
+    const counts = new Map(defined.map((option) => [option, 0]));
+    let none = 0;
+    for (const booking of bookings) {
+      const key = formStatsMatchKey(counts, formStatsEntry(booking, field.id)?.value);
+      if (!key) {
+        none += 1;
+        continue;
+      }
+      if (!counts.has(key)) counts.set(key, 0);
+      counts.set(key, counts.get(key) + 1);
+    }
+    const rows = [...counts.entries()].map(([name, count]) => ({ name, count }));
+    if (none > 0) rows.push({ name: "Inget valt", count: none });
+    return { note: "", rows: withPercent(rows) };
+  }
+
+  if (field.field_type === "checkbox_multi") {
+    const defined = parseChoiceOptions(field.choice_options);
+    const counts = new Map(defined.map((option) => [option, 0]));
+    let none = 0;
+    for (const booking of bookings) {
+      const raw = formStatsEntry(booking, field.id)?.value;
+      const picked = Array.isArray(raw) ? raw.map((item) => String(item || "").trim()).filter(Boolean) : [];
+      if (picked.length === 0) {
+        none += 1;
+        continue;
+      }
+      const seen = new Set();
+      for (const value of picked) {
+        const key = formStatsMatchKey(counts, value);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        if (!counts.has(key)) counts.set(key, 0);
+        counts.set(key, counts.get(key) + 1);
+      }
+    }
+    const rows = [...counts.entries()].map(([name, count]) => ({ name, count }));
+    if (none > 0) rows.push({ name: "Inget valt", count: none });
+    return {
+      note: "En person kan räknas i flera alternativ, så andelarna kan bli mer än 100 % tillsammans.",
+      rows: withPercent(rows)
+    };
+  }
+
+  const counts = new Map();
+  let none = 0;
+  for (const booking of bookings) {
+    const raw = formStatsEntry(booking, field.id)?.value;
+    const text = Array.isArray(raw)
+      ? raw.map((item) => String(item || "").trim()).filter(Boolean).join(", ")
+      : String(raw ?? "").trim();
+    if (!text) {
+      none += 1;
+      continue;
+    }
+    const key = formStatsMatchKey(counts, text);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  const rows = [...counts.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, "sv"));
+  if (none > 0) rows.push({ name: "Inget svar", count: none });
+  return { note: "", rows: withPercent(rows) };
+};
+
+const formStatsPdfFilename = (name) => {
+  const base = String(name || "event")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  return `formularsvar-${base || "event"}.pdf`;
+};
+
+const appendFormStatsArc = (doc, x, y, radius, startAngle, endAngle) => {
+  const twoPi = Math.PI * 2;
+  const halfPi = Math.PI / 2;
+  let deltaAng = endAngle - startAngle;
+  if (Math.abs(deltaAng) > twoPi) deltaAng = Math.sign(deltaAng || 1) * twoPi;
+  const numSegs = Math.max(1, Math.ceil(Math.abs(deltaAng) / halfPi));
+  const segAng = deltaAng / numSegs;
+  const handleLen = (segAng / halfPi) * FORM_STATS_ARC_KAPPA * radius;
+  let curAng = startAngle;
+  let deltaX = -Math.sin(curAng) * handleLen;
+  let deltaY = Math.cos(curAng) * handleLen;
+  let ax = x + Math.cos(curAng) * radius;
+  let ay = y + Math.sin(curAng) * radius;
+  doc.lineTo(ax, ay);
+  for (let index = 0; index < numSegs; index += 1) {
+    const cp1x = ax + deltaX;
+    const cp1y = ay + deltaY;
+    curAng += segAng;
+    ax = x + Math.cos(curAng) * radius;
+    ay = y + Math.sin(curAng) * radius;
+    deltaX = -Math.sin(curAng) * handleLen;
+    deltaY = Math.cos(curAng) * handleLen;
+    doc.bezierCurveTo(cp1x, cp1y, ax - deltaX, ay - deltaY, ax, ay);
+  }
+};
+
+const drawFormStatsDonut = (doc, cx, cy, slices) => {
+  const outer = 48;
+  const inner = 31;
+  const total = slices.reduce((sum, row) => sum + row.count, 0);
+  if (total <= 0) return;
+  const gap = slices.length > 1 ? 0.05 : 0;
+  let angle = -Math.PI / 2;
+  slices.forEach((slice, index) => {
+    const sweep = (slice.count / total) * Math.PI * 2;
+    const pad = Math.min(gap, sweep * 0.28);
+    const start = angle + pad / 2;
+    const end = angle + sweep - pad / 2;
+    angle += sweep;
+    if (end - start < 0.02) return;
+    doc.save();
+    doc.fillColor(FORM_STATS_DONUT_COLORS[index % FORM_STATS_DONUT_COLORS.length]);
+    doc.moveTo(cx + Math.cos(start) * outer, cy + Math.sin(start) * outer);
+    appendFormStatsArc(doc, cx, cy, outer, start, end);
+    doc.lineTo(cx + Math.cos(end) * inner, cy + Math.sin(end) * inner);
+    appendFormStatsArc(doc, cx, cy, inner, end, start);
+    doc.closePath();
+    doc.fill();
+    doc.restore();
+  });
+};
+
+function writeFormStatsPdf(doc, { eventName, fields, bookings }) {
+  const margin = 48;
+  const pageWidth = doc.page.width - margin * 2;
+  const labelWidth = pageWidth - 150;
+  const countWidth = 70;
+  const contentBottom = () => doc.page.height - FORM_STATS_FOOTER_RESERVE;
+  const generated = new Date().toLocaleString("sv-SE", { dateStyle: "long", timeStyle: "short" });
+  const answerFields = fields.filter(
+    (field) => field.field_type !== "paragraph" && field.field_type !== "linebreak"
+  );
+
+  const drawHeader = () => {
+    doc.save();
+    doc.rect(0, 0, doc.page.width, 78).fill("#66788d");
+    doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(20).text("Formulärsvar", margin, 24, {
+      width: pageWidth,
+      lineBreak: false
+    });
+    doc.font("Helvetica").fontSize(11).text(eventName || "Event", margin, 48, {
+      width: pageWidth,
+      lineBreak: false
+    });
+    doc.restore();
+    doc.y = 96;
+    doc.fillColor("#64748b").font("Helvetica").fontSize(10);
+    doc.text(`${bookings.length.toLocaleString("sv-SE")} anmälningar. Makulerade räknas inte.`, margin, doc.y, {
+      width: pageWidth
+    });
+    doc.text(`Extra fält. Skapad ${generated}.`, margin, doc.y + 2, { width: pageWidth });
+    doc.moveDown(1.2);
+    doc.fillColor("#1e293b");
+  };
+
+  const ensureSpace = (height, onNewPage) => {
+    if (doc.y + height <= contentBottom()) return;
+    doc.addPage();
+    drawHeader();
+    if (onNewPage) onNewPage();
+  };
+
+  drawHeader();
+
+  if (answerFields.length === 0) {
+    doc.font("Helvetica").fontSize(12).fillColor("#334155");
+    doc.text("Formuläret har inga extra fält som samlar svar.", margin, doc.y, { width: pageWidth });
+    return;
+  }
+
+  answerFields.forEach((field, index) => {
+    const stats = formStatsRowsForField(field, bookings);
+    const typeLabel = FORM_STATS_TYPE_LABELS[field.field_type] || "Text";
+    ensureSpace(88);
+    if (index > 0) doc.moveDown(0.6);
+    doc.font("Helvetica-Bold").fontSize(14).fillColor("#1e293b");
+    doc.text(String(field.label || "Fält"), margin, doc.y, { width: pageWidth });
+    doc.font("Helvetica").fontSize(10).fillColor("#64748b");
+    doc.text(typeLabel, margin, doc.y + 1, { width: pageWidth });
+    if (stats.note) {
+      doc.text(stats.note, margin, doc.y + 1, { width: pageWidth });
+    }
+    doc.moveDown(0.4);
+
+    const slices = stats.rows.filter((row) => row.count > 0);
+    const drewChart = FORM_STATS_CHOICE_TYPES.has(field.field_type) && slices.length > 0;
+    if (drewChart) {
+      const chartSize = 118;
+      ensureSpace(chartSize + 12);
+      const chartTop = doc.y;
+      const cx = margin + chartSize / 2;
+      const cy = chartTop + chartSize / 2;
+      drawFormStatsDonut(doc, cx, cy, slices);
+      const lead = slices.reduce((best, row) => (row.count > best.count ? row : best), slices[0]);
+      const centerName = String(lead.name || "");
+      const shortName = centerName.length > 16 ? `${centerName.slice(0, 15)}…` : centerName;
+      doc.fillColor("#1e293b").font("Helvetica-Bold").fontSize(11);
+      doc.text(`${lead.percent} %`, cx - 30, cy - 12, { width: 60, align: "center", lineBreak: false });
+      doc.fillColor("#64748b").font("Helvetica").fontSize(7);
+      doc.text(shortName, cx - 34, cy + 3, { width: 68, align: "center", lineBreak: false });
+
+      const legendX = margin + chartSize + 16;
+      const legendWidth = pageWidth - chartSize - 16;
+      const nameWidth = Math.max(80, legendWidth - 96);
+      let legendY = chartTop;
+      stats.rows.forEach((row) => {
+        doc.font("Helvetica").fontSize(9);
+        const nameHeight = doc.heightOfString(String(row.name || ""), { width: nameWidth });
+        const rowHeight = Math.max(16, nameHeight + 2);
+        if (legendY + rowHeight > contentBottom()) {
+          doc.addPage();
+          drawHeader();
+          legendY = doc.y;
+        }
+        const sliceIndex = slices.findIndex((slice) => slice.name === row.name);
+        const swatch = sliceIndex >= 0 ? FORM_STATS_DONUT_COLORS[sliceIndex % FORM_STATS_DONUT_COLORS.length] : "#e2e8f0";
+        doc.save();
+        doc.roundedRect(legendX, legendY + 2, 8, 8, 2).fill(swatch);
+        doc.restore();
+        doc.fillColor("#334155").font("Helvetica-Bold").fontSize(9);
+        doc.text(row.count.toLocaleString("sv-SE"), legendX + 14, legendY, {
+          width: 28,
+          align: "right",
+          lineBreak: false
+        });
+        doc.fillColor("#1e293b").font("Helvetica").fontSize(9);
+        doc.text(String(row.name || ""), legendX + 48, legendY, { width: nameWidth });
+        const nameBottom = doc.y;
+        doc.fillColor("#64748b").font("Helvetica").fontSize(9);
+        doc.text(`${row.percent} %`, legendX + legendWidth - 42, legendY, {
+          width: 42,
+          align: "right",
+          lineBreak: false
+        });
+        legendY = Math.max(nameBottom, legendY + rowHeight) + 4;
+      });
+      doc.y = Math.max(chartTop + chartSize + 8, legendY + 6);
+    }
+
+    if (drewChart) return;
+
+    const drawTableHeader = () => {
+      const top = doc.y;
+      doc.save();
+      doc.rect(margin, top, pageWidth, 22).fill("#f1f5f9");
+      doc.restore();
+      doc.font("Helvetica-Bold").fontSize(9).fillColor("#475569");
+      doc.text("Svar", margin + 8, top + 6, { width: labelWidth - 8 });
+      doc.text("Antal", margin + labelWidth, top + 6, { width: countWidth, align: "right" });
+      doc.text("Andel", margin + labelWidth + countWidth, top + 6, { width: 72, align: "right" });
+      doc.y = top + 22;
+    };
+
+    ensureSpace(44);
+    drawTableHeader();
+
+    stats.rows.forEach((row, rowIndex) => {
+      doc.font("Helvetica").fontSize(10);
+      const nameHeight = doc.heightOfString(row.name, { width: labelWidth - 16 });
+      const rowHeight = Math.max(22, nameHeight + 10);
+      ensureSpace(rowHeight + 8, drawTableHeader);
+      const top = doc.y;
+      if (rowIndex % 2 === 1) {
+        doc.save();
+        doc.rect(margin, top, pageWidth, rowHeight).fill("#f8fafc");
+        doc.restore();
+      }
+      doc.fillColor("#1e293b").font("Helvetica").fontSize(10);
+      doc.text(row.name, margin + 8, top + 5, { width: labelWidth - 16 });
+      doc.text(row.count.toLocaleString("sv-SE"), margin + labelWidth, top + 5, {
+        width: countWidth,
+        align: "right"
+      });
+      doc.text(`${row.percent} %`, margin + labelWidth + countWidth, top + 5, {
+        width: 72,
+        align: "right"
+      });
+      doc.y = top + rowHeight;
+      doc.save();
+      doc.moveTo(margin, doc.y).lineTo(margin + pageWidth, doc.y).strokeColor("#e2e8f0").lineWidth(0.5).stroke();
+      doc.restore();
+    });
+  });
+}
+
+function drawFormStatsFooter(doc) {
+  if (!fs.existsSync(FORM_STATS_LOGO_PATH)) return;
+  const range = doc.bufferedPageRange();
+  const logoWidth = 96;
+  for (let index = range.start; index < range.start + range.count; index += 1) {
+    doc.switchToPage(index);
+    const x = (doc.page.width - logoWidth) / 2;
+    const y = doc.page.height - 50;
+    doc.image(FORM_STATS_LOGO_PATH, x, y, { width: logoWidth });
+  }
+}
+
+function createFormStatsPdfBuffer(data) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({
+      size: "A4",
+      bufferPages: true,
+      margins: { top: 48, left: 48, right: 48, bottom: FORM_STATS_FOOTER_RESERVE }
+    });
+    const chunks = [];
+    doc.on("data", (chunk) => chunks.push(chunk));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+    try {
+      writeFormStatsPdf(doc, data);
+      drawFormStatsFooter(doc);
+      doc.end();
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+app.get("/admin/events/:id/form-stats.pdf", requireAdmin, async (req, res) => {
+  const eventId = await ensureEventOwnership(req.params.id, req.userId, res);
+  if (!eventId) return;
+  try {
+    const eventResult = await pool.query("SELECT name FROM events WHERE id = $1", [eventId]);
+    const fieldsResult = await pool.query(
+      `
+        SELECT id, label, field_type, choice_options
+        FROM event_custom_fields
+        WHERE event_id = $1
+        ORDER BY position ASC, id ASC
+      `,
+      [eventId]
+    );
+    const bookingsResult = await pool.query(
+      "SELECT custom_fields, voided_at FROM bookings WHERE event_id = $1",
+      [eventId]
+    );
+    const bookings = bookingsResult.rows
+      .filter((row) => !row.voided_at)
+      .map((row) => {
+        let customFields = row.custom_fields;
+        if (typeof customFields === "string") {
+          try {
+            customFields = JSON.parse(customFields);
+          } catch {
+            customFields = [];
+          }
+        }
+        return { ...row, custom_fields: customFields };
+      });
+    const pdf = await createFormStatsPdfBuffer({
+      eventName: eventResult.rows[0]?.name || "Event",
+      fields: fieldsResult.rows,
+      bookings
+    });
+    const filename = formStatsPdfFilename(eventResult.rows[0]?.name);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send(pdf);
+  } catch (error) {
+    console.error("GET /admin/events/:id/form-stats.pdf error:", error);
+    if (!res.headersSent) {
+      res.status(500).json({ ok: false, error: "Kunde inte skapa PDF." });
+    }
+  }
+});
+
 app.get("/admin/events/:id/participant-count", requireAdmin, async (req, res) => {
   const { id } = req.params;
   const eventId = await ensureEventOwnership(id, req.userId, res);
@@ -11507,6 +12002,336 @@ app.get("/admin/bookings/export.xlsx", requireAdmin, async (_req, res) => {
     res.send(buffer);
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to export bookings" });
+  }
+});
+
+const BOOKINGS_PDF_FIELDS = [
+  { key: "name", label: "Namn", weight: 1.25 },
+  { key: "ticket", label: "Biljett", weight: 1.15 },
+  { key: "email", label: "E-post", weight: 1.55 },
+  { key: "phone", label: "Telefonnummer", weight: 1.15 },
+  { key: "city", label: "Ort", weight: 1 },
+  { key: "organization", label: "Organisation", weight: 1.2 },
+  { key: "terms", label: "Villkor", weight: 0.75 },
+  { key: "payment_status", label: "Betalning", weight: 1.05 },
+  { key: "pris", label: "Pris", weight: 0.9 },
+  { key: "discount_code", label: "Rabattkod", weight: 0.95 },
+  { key: "order_number", label: "Ordernummer", weight: 1.05 },
+  { key: "checked_in", label: "Incheckad", weight: 0.85 },
+  { key: "created_at", label: "Skapad", weight: 1.2 }
+];
+const BOOKINGS_PDF_DEFAULT_KEYS = ["name", "ticket", "email", "phone", "city"];
+const BOOKINGS_PDF_MAX_FIELDS = 8;
+
+const bookingsPdfText = (value) => {
+  const text = String(value ?? "").trim();
+  return text || "–";
+};
+
+const bookingsPdfPrice = (value) => {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "–";
+  if (!/\d/.test(raw)) return raw;
+  const amount = parsePrisToNumber(raw);
+  return `${amount.toLocaleString("sv-SE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} SEK`;
+};
+
+const bookingsPdfPayment = (row) => {
+  const refunded = parsePrisToNumber(row.refund_amount);
+  const ticket = parsePrisToNumber(row.pris);
+  let label;
+  if (refunded > 0.001 && ticket > 0.001 && refunded < ticket - 0.001) label = "Delåterbetald";
+  else if (refunded > 0.001) label = "Återbetald";
+  else {
+    const status = String(row.payment_status || "").toLowerCase();
+    const labels = {
+      paid: "Betald",
+      refunded: "Återbetald",
+      pending: "Väntar",
+      open: "Öppen",
+      canceled: "Avbruten",
+      cancelled: "Avbruten",
+      expired: "Utgången",
+      failed: "Misslyckad",
+      manual: "Gratis/manuell"
+    };
+    label = labels[status] || bookingsPdfText(row.payment_status);
+  }
+  if (row.voided_at && label !== "–") return `${label}, makulerad`;
+  if (row.voided_at) return "Makulerad";
+  return label;
+};
+
+const bookingsPdfCustomValue = (row, field) => {
+  let entries = row.custom_fields;
+  if (typeof entries === "string") {
+    try {
+      entries = JSON.parse(entries);
+    } catch {
+      entries = [];
+    }
+  }
+  if (!Array.isArray(entries)) return "–";
+  const match = entries.find((entry) => String(entry?.id) === String(field.id));
+  if (!match) return "–";
+  if (field.field_type === "checkbox") return match.value ? "Ja" : "Nej";
+  if (field.field_type === "checkbox_multi") {
+    const picked = Array.isArray(match.value) ? match.value.map((item) => String(item || "").trim()).filter(Boolean) : [];
+    return picked.length ? picked.join(", ") : "–";
+  }
+  return bookingsPdfText(match.value);
+};
+
+const bookingsListPdfFilename = (name) => {
+  const eventName = String(name || "Event")
+    .replace(/[\\/:*?"<>|]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[. ]+$/g, "")
+    .slice(0, 120);
+  return `Bokningar ${eventName || "Event"}.pdf`;
+};
+
+function writeBookingsListPdf(doc, { eventName, bookings, columns }) {
+  const margin = 40;
+  const pageWidth = doc.page.width - margin * 2;
+  const contentBottom = () => doc.page.height - FORM_STATS_FOOTER_RESERVE;
+  const generated = new Date().toLocaleString("sv-SE", { dateStyle: "long", timeStyle: "short" });
+  const weightSum = columns.reduce((sum, column) => sum + (column.weight || 1), 0) || 1;
+  let usedWidth = 0;
+  columns.forEach((column, index) => {
+    if (index === columns.length - 1) {
+      column.width = Math.max(48, pageWidth - usedWidth);
+      return;
+    }
+    column.width = Math.max(48, Math.floor((pageWidth * (column.weight || 1)) / weightSum));
+    usedWidth += column.width;
+  });
+  const activeCount = bookings.filter((booking) => !booking.voided_at).length;
+  const voidedCount = bookings.length - activeCount;
+
+  const cellValue = (booking, key) => {
+    const value = String(booking[key] ?? "").trim();
+    if (key === "name" && booking.voided_at) {
+      return value ? `${value} (makulerad)` : "Makulerad";
+    }
+    return value || "–";
+  };
+
+  const drawHeader = () => {
+    doc.save();
+    doc.rect(0, 0, doc.page.width, 78).fill("#66788d");
+    doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(20).text("Bokningar", margin, 24, {
+      width: pageWidth,
+      lineBreak: false
+    });
+    doc.font("Helvetica").fontSize(11).text(eventName || "Event", margin, 48, {
+      width: pageWidth,
+      lineBreak: false
+    });
+    doc.restore();
+    doc.y = 96;
+    doc.fillColor("#64748b").font("Helvetica").fontSize(10);
+    const activeLabel = activeCount === 1 ? "anmälan" : "anmälningar";
+    const voidedLabel =
+      voidedCount === 1
+        ? "1 makulerad visas nedtonad"
+        : `${voidedCount.toLocaleString("sv-SE")} makulerade visas nedtonade`;
+    const summary = `${activeCount.toLocaleString("sv-SE")} ${activeLabel}${
+      voidedCount > 0 ? `. ${voidedLabel}.` : "."
+    }`;
+    doc.text(summary, margin, doc.y, { width: pageWidth });
+    doc.text(`Sorterad på namn. Skapad ${generated}.`, margin, doc.y + 2, { width: pageWidth });
+    doc.moveDown(0.8);
+    doc.fillColor("#1e293b");
+  };
+
+  const drawColumnHeader = () => {
+    doc.font("Helvetica-Bold").fontSize(9);
+    const textHeight = Math.max(
+      ...columns.map((column) => doc.heightOfString(column.label, { width: column.width - 12 }))
+    );
+    const headerHeight = Math.max(22, textHeight + 10);
+    const top = doc.y;
+    doc.save();
+    doc.rect(margin, top, pageWidth, headerHeight).fill("#f1f5f9");
+    doc.restore();
+    doc.font("Helvetica-Bold").fontSize(9).fillColor("#475569");
+    let x = margin;
+    columns.forEach((column) => {
+      doc.text(column.label, x + 6, top + 5, { width: column.width - 12 });
+      x += column.width;
+    });
+    doc.y = top + headerHeight;
+  };
+
+  const ensureSpace = (height, onNewPage) => {
+    if (doc.y + height <= contentBottom()) return;
+    doc.addPage();
+    drawHeader();
+    if (onNewPage) onNewPage();
+  };
+
+  drawHeader();
+
+  if (bookings.length === 0) {
+    doc.font("Helvetica").fontSize(12).fillColor("#334155");
+    doc.text("Inga bokningar ännu.", margin, doc.y, { width: pageWidth });
+    return;
+  }
+
+  drawColumnHeader();
+
+  bookings.forEach((booking, rowIndex) => {
+    const values = columns.map((column) => cellValue(booking, column.key));
+    doc.font("Helvetica").fontSize(9);
+    const textHeight = Math.max(
+      ...columns.map((column, index) => doc.heightOfString(values[index], { width: column.width - 12 }))
+    );
+    const rowHeight = Math.max(22, textHeight + 10);
+    ensureSpace(rowHeight + 6, drawColumnHeader);
+    const top = doc.y;
+    const voided = !!booking.voided_at;
+    if (voided || rowIndex % 2 === 1) {
+      doc.save();
+      doc.rect(margin, top, pageWidth, rowHeight).fill(voided ? "#f1f5f9" : "#f8fafc");
+      doc.restore();
+    }
+    doc.fillColor(voided ? "#94a3b8" : "#1e293b").font("Helvetica").fontSize(9);
+    let x = margin;
+    columns.forEach((column, index) => {
+      doc.text(values[index], x + 6, top + 5, { width: column.width - 12 });
+      x += column.width;
+    });
+    doc.y = top + rowHeight;
+    doc.save();
+    doc.moveTo(margin, doc.y).lineTo(margin + pageWidth, doc.y).strokeColor("#e2e8f0").lineWidth(0.5).stroke();
+    doc.restore();
+  });
+}
+
+function createBookingsListPdfBuffer(data) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({
+      size: "A4",
+      layout: "landscape",
+      bufferPages: true,
+      margins: { top: 40, left: 40, right: 40, bottom: FORM_STATS_FOOTER_RESERVE }
+    });
+    const chunks = [];
+    doc.on("data", (chunk) => chunks.push(chunk));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+    try {
+      writeBookingsListPdf(doc, data);
+      drawFormStatsFooter(doc);
+      doc.end();
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+app.get("/admin/bookings/export.pdf", requireAdmin, async (req, res) => {
+  const eventId = await ensureEventOwnership(req.query.eventId, req.userId, res);
+  if (!eventId) return;
+  try {
+    const eventResult = await pool.query("SELECT name FROM events WHERE id = $1", [eventId]);
+    const fieldsResult = await pool.query(
+      `
+        SELECT id, label, field_type
+        FROM event_custom_fields
+        WHERE event_id = $1 AND field_type NOT IN ('paragraph', 'linebreak')
+        ORDER BY position ASC, id ASC
+      `,
+      [eventId]
+    );
+    const customById = new Map(fieldsResult.rows.map((field) => [String(field.id), field]));
+    const requested = String(req.query.fields || "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    const source = requested.length > 0 ? requested : BOOKINGS_PDF_DEFAULT_KEYS;
+    const seen = new Set();
+    const columns = [];
+    for (const key of source) {
+      if (columns.length >= BOOKINGS_PDF_MAX_FIELDS || seen.has(key)) continue;
+      const standard = BOOKINGS_PDF_FIELDS.find((field) => field.key === key);
+      if (standard) {
+        seen.add(key);
+        columns.push({ ...standard });
+        continue;
+      }
+      const customMatch = key.match(/^custom:(\d+)$/);
+      const customField = customMatch ? customById.get(customMatch[1]) : null;
+      if (!customField) continue;
+      seen.add(key);
+      columns.push({
+        key,
+        label: String(customField.label || "Fält").slice(0, 80),
+        weight: 1.15
+      });
+    }
+    if (columns.length === 0) {
+      BOOKINGS_PDF_DEFAULT_KEYS.forEach((key) => {
+        const field = BOOKINGS_PDF_FIELDS.find((item) => item.key === key);
+        if (field) columns.push({ ...field });
+      });
+    }
+    const bookingsResult = await pool.query(
+      `
+        SELECT name, email, city, phone, organization, ticket, terms, payment_status, pris,
+               discount_code, order_number, checked_in_at, created_at, custom_fields, voided_at, refund_amount
+        FROM bookings
+        WHERE event_id = $1
+      `,
+      [eventId]
+    );
+    const bookings = bookingsResult.rows
+      .map((row) => {
+        const record = {
+          name: row.name,
+          ticket: bookingsPdfText(row.ticket),
+          email: bookingsPdfText(row.email),
+          phone: bookingsPdfText(row.phone),
+          city: bookingsPdfText(row.city),
+          organization: bookingsPdfText(row.organization),
+          terms: row.terms ? "Ja" : "Nej",
+          payment_status: bookingsPdfPayment(row),
+          pris: bookingsPdfPrice(row.pris),
+          discount_code: bookingsPdfText(row.discount_code),
+          order_number: bookingsPdfText(row.order_number),
+          checked_in: row.checked_in_at ? "Ja" : "Nej",
+          created_at: row.created_at ? new Date(row.created_at).toLocaleString("sv-SE") : "–",
+          voided_at: row.voided_at
+        };
+        for (const field of fieldsResult.rows) {
+          record[`custom:${field.id}`] = bookingsPdfCustomValue(row, field);
+        }
+        return record;
+      })
+      .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "sv", { sensitivity: "base" }));
+    const pdf = await createBookingsListPdfBuffer({
+      eventName: eventResult.rows[0]?.name || "Event",
+      bookings,
+      columns
+    });
+    const filename = bookingsListPdfFilename(eventResult.rows[0]?.name);
+    const asciiFilename = filename
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^\x20-\x7E]/g, "");
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${asciiFilename}"; filename*=UTF-8''${encodeURIComponent(filename)}`
+    );
+    res.send(pdf);
+  } catch (error) {
+    console.error("GET /admin/bookings/export.pdf error:", error);
+    if (!res.headersSent) {
+      res.status(500).json({ ok: false, error: "Kunde inte skapa PDF." });
+    }
   }
 });
 

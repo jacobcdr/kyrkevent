@@ -1681,6 +1681,13 @@ function eventListFromOneYearAgo(now = new Date()) {
   return formatLocalDateInput(date);
 }
 
+function organizationOptionLabel(row) {
+  const name = String(row?.organization || "").trim();
+  const person = [row?.firstName, row?.lastName].filter(Boolean).join(" ").trim();
+  if (name && person) return `${name} (${person})`;
+  return name || person || String(row?.username || "").trim() || "Namnlös organisation";
+}
+
 function eventMatchesDateFilter(item, filterFrom, filterTo) {
   const start = String(item?.event_start_date || "").slice(0, 10);
   const end = String(item?.event_end_date || "").slice(0, 10);
@@ -1707,6 +1714,24 @@ const BOOKING_COLUMN_OPTIONS = [
   { key: "checked_in", label: "Incheckad" },
   { key: "created_at", label: "Skapad" }
 ];
+
+const BOOKINGS_PDF_FIELD_OPTIONS = [
+  { key: "name", label: "Namn" },
+  { key: "ticket", label: "Biljett" },
+  { key: "email", label: "E-post" },
+  { key: "phone", label: "Telefonnummer" },
+  { key: "city", label: "Ort" },
+  { key: "organization", label: "Organisation" },
+  { key: "terms", label: "Villkor" },
+  { key: "payment_status", label: "Betalning" },
+  { key: "pris", label: "Pris" },
+  { key: "discount_code", label: "Rabattkod" },
+  { key: "order_number", label: "Ordernummer" },
+  { key: "checked_in", label: "Incheckad" },
+  { key: "created_at", label: "Skapad" }
+];
+const BOOKINGS_PDF_DEFAULT_FIELDS = ["name", "ticket", "email", "phone", "city"];
+const BOOKINGS_PDF_FIELD_LIMIT = 8;
 
 const DEFAULT_BOOKING_COLUMN_VISIBILITY = Object.fromEntries(
   BOOKING_COLUMN_OPTIONS.map((col) => [
@@ -3433,6 +3458,13 @@ const AdminPage = () => {
   const [deviceCodeLoading, setDeviceCodeLoading] = useState(false);
   const [events, setEvents] = useState([]);
   const [selectedEventId, setSelectedEventId] = useState("");
+  const [assistOrgUserId, setAssistOrgUserId] = useState("");
+  const [assistEvents, setAssistEvents] = useState([]);
+  const [assistEventsLoading, setAssistEventsLoading] = useState(false);
+  const [assistEventsError, setAssistEventsError] = useState("");
+  const [assistedEvent, setAssistedEvent] = useState(null);
+  const [assistOrgLabel, setAssistOrgLabel] = useState("");
+  const [assistOwnerVatExempt, setAssistOwnerVatExempt] = useState(false);
   const [eventForm, setEventForm] = useState({
     name: "",
     dateType: "single",
@@ -3511,6 +3543,9 @@ const AdminPage = () => {
   const [excelExportOpen, setExcelExportOpen] = useState(false);
   const [excelSplitChoices, setExcelSplitChoices] = useState(false);
   const [excelExporting, setExcelExporting] = useState(false);
+  const [bookingsPdfExporting, setBookingsPdfExporting] = useState(false);
+  const [bookingsPdfModalOpen, setBookingsPdfModalOpen] = useState(false);
+  const [bookingsPdfFields, setBookingsPdfFields] = useState(BOOKINGS_PDF_DEFAULT_FIELDS);
   const [bookingsRefreshLoading, setBookingsRefreshLoading] = useState(false);
   const [refundModal, setRefundModal] = useState(null);
   const [refundSubmitting, setRefundSubmitting] = useState(false);
@@ -3557,7 +3592,21 @@ const AdminPage = () => {
     }
   }, [token]);
   const [isAdminUser, setIsAdminUser] = useState(false);
-  const selectedEvent = events.find((item) => String(item.id) === String(selectedEventId));
+  const adminUserId = useMemo(() => {
+    if (!token) return null;
+    try {
+      const payload = JSON.parse(atob(token.split(".")[1] || ""));
+      const id = Number(payload.userId);
+      return Number.isFinite(id) ? id : null;
+    } catch {
+      return null;
+    }
+  }, [token]);
+  const ownSelectedEvent = events.find((item) => String(item.id) === String(selectedEventId)) || null;
+  const selectedEvent =
+    ownSelectedEvent ||
+    (assistedEvent && String(assistedEvent.id) === String(selectedEventId) ? assistedEvent : null);
+  const isAssistingOrganizationEvent = Boolean(selectedEvent && !ownSelectedEvent);
   const [bookingColumnVisibility, setBookingColumnVisibility] = useState(() => ({
     ...DEFAULT_BOOKING_COLUMN_VISIBILITY
   }));
@@ -3864,7 +3913,9 @@ const AdminPage = () => {
     bgNumber: "",
     vatExempt: false
   });
-  const profileShowsVatRate = profileForm.vatExempt !== true;
+  const profileShowsVatRate = isAssistingOrganizationEvent
+    ? assistOwnerVatExempt !== true
+    : profileForm.vatExempt !== true;
   const [activeSubscriptionPlan, setActiveSubscriptionPlan] = useState("bas");
   const [showPremiumConfirm, setShowPremiumConfirm] = useState(false);
   const [showPremiumAvslutaInfo, setShowPremiumAvslutaInfo] = useState(false);
@@ -4270,6 +4321,17 @@ const AdminPage = () => {
     setEvents(data.events || []);
   };
 
+  const applySavedEvent = (eventRow) => {
+    if (!eventRow?.id) return;
+    setEvents((prev) => prev.map((ev) => (String(ev.id) === String(eventRow.id) ? eventRow : ev)));
+    setAssistedEvent((prev) =>
+      prev && String(prev.id) === String(eventRow.id) ? { ...prev, ...eventRow } : prev
+    );
+    setAssistEvents((prev) =>
+      prev.map((ev) => (String(ev.id) === String(eventRow.id) ? { ...ev, ...eventRow } : ev))
+    );
+  };
+
   const loadUsersExist = async () => {
     const response = await fetch(`${API_BASE}/admin/users/exists`);
     if (!response.ok) {
@@ -4423,6 +4485,12 @@ const AdminPage = () => {
       setDiscounts([]);
       setEvents([]);
       setSelectedEventId("");
+      setAssistOrgUserId("");
+      setAssistEvents([]);
+      setAssistEventsError("");
+      setAssistedEvent(null);
+      setAssistOrgLabel("");
+      setAssistOwnerVatExempt(false);
       setAdminSection("home");
       setAdminMenuOpen(false);
       return;
@@ -4876,6 +4944,40 @@ const AdminPage = () => {
     }
   };
 
+  const loadOrganizationEvents = async (userId) => {
+    if (!token || !userId) {
+      setAssistEvents([]);
+      setAssistOrgLabel("");
+      setAssistOwnerVatExempt(false);
+      setAssistEventsError("");
+      return;
+    }
+    setAssistEventsLoading(true);
+    setAssistEventsError("");
+    try {
+      const response = await fetch(`${API_BASE}/admin/organizations/${encodeURIComponent(userId)}/events`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await response.json().catch(() => ({}));
+      if (response.status === 401) {
+        clearAuth();
+        setError("Sessionen har gått ut. Logga in igen.");
+        return;
+      }
+      if (!response.ok || data.ok === false) {
+        throw new Error(data.error || "Kunde inte ladda organisationens event.");
+      }
+      setAssistEvents(data.events || []);
+      setAssistOrgLabel((current) => String(data.organization || "").trim() || current);
+      setAssistOwnerVatExempt(data.vatExempt === true);
+    } catch (err) {
+      setAssistEvents([]);
+      setAssistEventsError(err.message || "Kunde inte ladda organisationens event.");
+    } finally {
+      setAssistEventsLoading(false);
+    }
+  };
+
   const loadAdminEventLinks = async () => {
     if (!token || !isAdminUser) return;
     setAdminEventLinksLoading(true);
@@ -5197,6 +5299,12 @@ const AdminPage = () => {
   };
 
   useEffect(() => {
+    if (token && isAdminUser) {
+      loadAdminOrganizations();
+    }
+  }, [token, isAdminUser]);
+
+  useEffect(() => {
     if (token && isAdminUser && adminSection === "admin") {
       loadAdminPayments();
       loadAdminPayoutRequests();
@@ -5499,6 +5607,12 @@ const AdminPage = () => {
     setBookings([]);
     setEvents([]);
     setSelectedEventId("");
+    setAssistOrgUserId("");
+    setAssistEvents([]);
+    setAssistEventsError("");
+    setAssistedEvent(null);
+    setAssistOrgLabel("");
+    setAssistOwnerVatExempt(false);
     setAdminSection("home");
     setAdminMenuOpen(false);
     localStorage.removeItem("adminToken");
@@ -6253,6 +6367,57 @@ const AdminPage = () => {
     exportData()
       .catch(() => setError("Kunde inte exportera bokningar."))
       .finally(() => setExcelExporting(false));
+  };
+
+  const handleExportBookingsPdf = () => {
+    if (!token) {
+      setError("Logga in för att exportera bokningar.");
+      return;
+    }
+    if (!selectedEventId) {
+      setError("Välj ett event först.");
+      return;
+    }
+    if (bookingsPdfExporting) return;
+    const selectedKeys = [
+      ...BOOKINGS_PDF_FIELD_OPTIONS.map((field) => field.key),
+      ...listableCustomFieldsAdmin.map((field) => `custom:${field.id}`)
+    ].filter((key) => bookingsPdfFields.includes(key));
+    if (selectedKeys.length === 0 || selectedKeys.length > BOOKINGS_PDF_FIELD_LIMIT) {
+      setError("Välj mellan 1 och 8 fält.");
+      return;
+    }
+    const exportData = async () => {
+      setBookingsPdfExporting(true);
+      const params = new URLSearchParams({
+        eventId: String(selectedEventId),
+        fields: selectedKeys.join(",")
+      });
+      const response = await fetch(`${API_BASE}/admin/bookings/export.pdf?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!response.ok) {
+        throw new Error("Export failed");
+      }
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const disposition = response.headers.get("Content-Disposition") || "";
+      const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+      const filename = encodedName
+        ? decodeURIComponent(encodedName)
+        : disposition.match(/filename="([^"]+)"/)?.[1] || "Bokningar.pdf";
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      setBookingsPdfModalOpen(false);
+    };
+    exportData()
+      .catch(() => setError("Kunde inte exportera bokningar."))
+      .finally(() => setBookingsPdfExporting(false));
   };
 
   const handlePriceEdit = (price) => {
@@ -10825,6 +10990,28 @@ const AdminPage = () => {
                 ) : (
                   <p className="muted">Kunde inte hämta systemstatus.</p>
                 )}
+                <section className="admin-status-testmail">
+                  <h3 className="admin-subsection-title">Testmail</h3>
+                  <p className="muted">Skicka ett provkvitto för att kontrollera att utskicken fungerar.</p>
+                  <form className="admin-form" onSubmit={handleTestEmail}>
+                    <label className="field">
+                      <span className="field-label">E-post</span>
+                      <input
+                        name="testEmail"
+                        type="email"
+                        value={testEmail}
+                        onChange={(event) => setTestEmail(event.target.value)}
+                        placeholder="namn@example.com"
+                        required
+                      />
+                    </label>
+                    <div className="admin-actions">
+                      <button className="button button-outline" type="submit" disabled={loading}>
+                        {loading ? "Skickar…" : "Skicka testmail"}
+                      </button>
+                    </div>
+                  </form>
+                </section>
               </div>
             ) : null}
 
@@ -12550,6 +12737,22 @@ const AdminPage = () => {
           </div>
         ) : null}
 
+        {token &&
+        isAssistingOrganizationEvent &&
+        selectedEvent &&
+        (adminSection === "bookings" || adminSection === "frontpage" || adminSection === "settings") ? (
+          <div className="admin-assist-banner" role="status">
+            Du redigerar <strong>{selectedEvent.name}</strong>
+            {assistOrgLabel ? (
+              <>
+                {" "}
+                för <strong>{assistOrgLabel}</strong>
+              </>
+            ) : null}
+            . Ändringarna sparas på organisationens event.
+          </div>
+        ) : null}
+
         {token && selectedEventId && (adminSection === "bookings" || adminSection === "frontpage" || adminSection === "settings") ? (
           <nav className="admin-event-tabs" role="tablist" aria-label="Event">
             {[
@@ -12817,6 +13020,77 @@ const AdminPage = () => {
                 ) : (
                   <p className="muted">Inga event skapade ännu.</p>
                 )}
+                {isAdminUser ? (
+                  <div className="admin-org-events">
+                    <h2>Organisationers event</h2>
+                    <p className="muted">
+                      Välj en organisation för att öppna och redigera dess event. Funktionen finns bara för kontot admin.
+                    </p>
+                    <label className="field admin-org-events-select">
+                      <span className="field-label">Organisation</span>
+                      <select
+                        value={assistOrgUserId}
+                        onChange={(event) => {
+                          const nextUserId = event.target.value;
+                          setAssistOrgUserId(nextUserId);
+                          const row = adminOrganizations.find((item) => String(item.userId) === nextUserId);
+                          setAssistOrgLabel(row ? organizationOptionLabel(row) : "");
+                          loadOrganizationEvents(nextUserId);
+                        }}
+                        aria-label="Välj organisation"
+                      >
+                        <option value="">Välj organisation</option>
+                        {adminOrganizations
+                          .filter((row) => row.userId != null && Number(row.userId) !== Number(adminUserId))
+                          .map((row) => (
+                            <option key={row.profileId || row.userId} value={String(row.userId)}>
+                              {organizationOptionLabel(row)}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+                    {adminOrganizationsLoading && adminOrganizations.length === 0 ? (
+                      <p className="muted">Laddar organisationer…</p>
+                    ) : null}
+                    {assistEventsError ? <p className="admin-error">{assistEventsError}</p> : null}
+                    {assistOrgUserId && assistEventsLoading ? <p className="muted">Laddar event…</p> : null}
+                    {assistOrgUserId && !assistEventsLoading && !assistEventsError && assistEvents.length === 0 ? (
+                      <p className="muted">Organisationen har inga event.</p>
+                    ) : null}
+                    {assistEvents.length > 0 ? (
+                      <div className="partner-grid admin-event-grid">
+                        {assistEvents.map((item) => {
+                          const dateLabel = formatAdminEventDateLabel(item.event_start_date, item.event_end_date);
+                          return (
+                            <div
+                              key={item.id}
+                              role="button"
+                              tabIndex={0}
+                              className="partner-card admin-event-card"
+                              onClick={() => {
+                                setAssistedEvent(item);
+                                setSelectedEventId(String(item.id));
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter" || event.key === " ") {
+                                  event.preventDefault();
+                                  setAssistedEvent(item);
+                                  setSelectedEventId(String(item.id));
+                                }
+                              }}
+                            >
+                              <div className="admin-event-icon" aria-hidden="true">
+                                📅
+                              </div>
+                              <div className="partner-name admin-event-name">{item.name}</div>
+                              {dateLabel && dateLabel !== "–" ? <div className="admin-event-date">{dateLabel}</div> : null}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
           ) : null}
           </div>
@@ -12897,6 +13171,17 @@ const AdminPage = () => {
                   }}
                 >
                   Exportera Excel
+                </button>
+                <button
+                  className="button button-outline"
+                  type="button"
+                  onClick={() => {
+                    setBookingsPdfFields(BOOKINGS_PDF_DEFAULT_FIELDS);
+                    setBookingsPdfModalOpen(true);
+                  }}
+                  disabled={bookingsPdfExporting}
+                >
+                  {bookingsPdfExporting ? "Skapar PDF…" : "Exportera PDF"}
                 </button>
                 <button
                   className="button button-outline"
@@ -13859,6 +14144,115 @@ const AdminPage = () => {
                         type="button"
                         onClick={() => setExcelExportOpen(false)}
                         disabled={excelExporting}
+                      >
+                        Avbryt
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+            {bookingsPdfModalOpen ? (
+              <div
+                className="modal-overlay"
+                onClick={() => {
+                  if (!bookingsPdfExporting) setBookingsPdfModalOpen(false);
+                }}
+              >
+                <div
+                  className="modal bookings-pdf-modal"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="bookings-pdf-title"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <div className="modal-header">
+                    <h3 id="bookings-pdf-title">Exportera PDF</h3>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      onClick={() => setBookingsPdfModalOpen(false)}
+                      disabled={bookingsPdfExporting}
+                      aria-label="Stäng"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <div className="modal-body">
+                    <p className="muted">
+                      {bookingsPdfFields.length} av {BOOKINGS_PDF_FIELD_LIMIT} fält valda.
+                      {bookingsPdfFields.length >= BOOKINGS_PDF_FIELD_LIMIT
+                        ? " Övriga fält är avstängda."
+                        : ""}
+                    </p>
+                    <div className="bookings-pdf-fields">
+                      {BOOKINGS_PDF_FIELD_OPTIONS.map((field) => {
+                        const checked = bookingsPdfFields.includes(field.key);
+                        const disabled =
+                          bookingsPdfExporting || (!checked && bookingsPdfFields.length >= BOOKINGS_PDF_FIELD_LIMIT);
+                        return (
+                          <label
+                            key={field.key}
+                            className={`field checkbox-field${disabled && !checked ? " is-disabled" : ""}`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={disabled}
+                              onChange={() => {
+                                setBookingsPdfFields((prev) => {
+                                  if (prev.includes(field.key)) return prev.filter((key) => key !== field.key);
+                                  if (prev.length >= BOOKINGS_PDF_FIELD_LIMIT) return prev;
+                                  return [...prev, field.key];
+                                });
+                              }}
+                            />
+                            <span className="field-label">{field.label}</span>
+                          </label>
+                        );
+                      })}
+                      {listableCustomFieldsAdmin.length > 0 ? <h4>Extra fält</h4> : null}
+                      {listableCustomFieldsAdmin.map((field) => {
+                        const key = `custom:${field.id}`;
+                        const checked = bookingsPdfFields.includes(key);
+                        const disabled =
+                          bookingsPdfExporting || (!checked && bookingsPdfFields.length >= BOOKINGS_PDF_FIELD_LIMIT);
+                        return (
+                          <label
+                            key={key}
+                            className={`field checkbox-field${disabled && !checked ? " is-disabled" : ""}`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={disabled}
+                              onChange={() => {
+                                setBookingsPdfFields((prev) => {
+                                  if (prev.includes(key)) return prev.filter((item) => item !== key);
+                                  if (prev.length >= BOOKINGS_PDF_FIELD_LIMIT) return prev;
+                                  return [...prev, key];
+                                });
+                              }}
+                            />
+                            <span className="field-label">{field.label || "Fält"}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                    <div className="admin-actions excel-export-actions">
+                      <button
+                        className="button"
+                        type="button"
+                        onClick={handleExportBookingsPdf}
+                        disabled={bookingsPdfExporting || bookingsPdfFields.length === 0}
+                      >
+                        {bookingsPdfExporting ? "Skapar PDF…" : "Exportera"}
+                      </button>
+                      <button
+                        className="button button-outline"
+                        type="button"
+                        onClick={() => setBookingsPdfModalOpen(false)}
+                        disabled={bookingsPdfExporting}
                       >
                         Avbryt
                       </button>
@@ -15169,11 +15563,7 @@ const AdminPage = () => {
                           }
                           const data = await response.json();
                           if (data?.event) {
-                            setEvents((prev) =>
-                              prev.map((ev) =>
-                                String(ev.id) === String(data.event.id) ? data.event : ev
-                              )
-                            );
+                            applySavedEvent(data.event);
                           }
                         } catch (err) {
                           setStatusMessage(err?.message || "Kunde inte spara senaste anmälningsdag.");
@@ -15228,9 +15618,7 @@ const AdminPage = () => {
                         }
                         const data = await response.json();
                         if (data?.event) {
-                          setEvents((prev) =>
-                            prev.map((ev) => (String(ev.id) === String(data.event.id) ? data.event : ev))
-                          );
+                          applySavedEvent(data.event);
                         }
                         setStatusMessage("Momssats sparad.");
                       } catch (err) {
@@ -15284,11 +15672,7 @@ const AdminPage = () => {
                       }
                       const data = await response.json();
                       if (data?.event) {
-                        setEvents((prev) =>
-                          prev.map((ev) =>
-                            String(ev.id) === String(data.event.id) ? data.event : ev
-                          )
-                        );
+                        applySavedEvent(data.event);
                       }
                     } catch (err) {
                       setStatusMessage(err?.message || "Kunde inte spara texten för bekräftelsemail.");
@@ -15592,11 +15976,7 @@ const AdminPage = () => {
                       if (!response.ok) throw new Error("Event theme update failed");
                       const data = await response.json();
                       if (data?.event) {
-                        setEvents((prev) =>
-                          prev.map((ev) =>
-                            String(ev.id) === String(data.event.id) ? data.event : ev
-                          )
-                        );
+                        applySavedEvent(data.event);
                       }
                     } catch {
                       setStatusMessage("Kunde inte uppdatera temat.");
@@ -16709,26 +17089,6 @@ const AdminPage = () => {
             </div>
           ) : null}
 
-          {token && selectedEventId && adminSection === "bookings" ? (
-            <form className="admin-form" onSubmit={handleTestEmail}>
-              <label className="field">
-                <span className="field-label">Testmail</span>
-                <input
-                  name="testEmail"
-                  type="email"
-                  value={testEmail}
-                  onChange={(event) => setTestEmail(event.target.value)}
-                  placeholder="namn@example.com"
-                  required
-                />
-              </label>
-              <div className="admin-actions">
-                <button className="button button-outline" type="submit" disabled={loading}>
-                  Skicka testmail
-                </button>
-              </div>
-            </form>
-          ) : null}
         </div>
       </div>
   );
