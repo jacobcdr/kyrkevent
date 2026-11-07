@@ -51,6 +51,7 @@ import {
   buildPayoutClearingSie,
   buildPayoutSie,
   encodeSiePc8,
+  parseSieVoucherDate,
   SIE_ACCOUNTS,
   stockholmYmd
 } from "./sieExport.js";
@@ -194,6 +195,43 @@ const saveTicketPriceCapToDb = async (maxAmount) => {
   cachedTicketPriceCap = maxAmount;
   return cachedTicketPriceCap;
 };
+const PLATFORM_SETTINGS_PAYOUT_FEE_KEY = "payout_fee_amount";
+const PAYOUT_FEE_DEFAULT = 45;
+const parsePayoutFeeAmount = (value, fallback = null) => {
+  if (value === undefined || value === null || String(value).trim() === "") return fallback;
+  const parsed = Number(String(value).trim().replace(/\s/g, "").replace(",", "."));
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1000000) return fallback;
+  return Math.round(parsed * 100) / 100;
+};
+let cachedPayoutFeeAmount = parsePayoutFeeAmount(process.env.PAYOUT_FEE_AMOUNT, PAYOUT_FEE_DEFAULT);
+const getPayoutFeeAmount = () => cachedPayoutFeeAmount;
+const loadPayoutFeeFromDb = async () => {
+  try {
+    const result = await pool.query(
+      "SELECT value FROM platform_settings WHERE key = $1",
+      [PLATFORM_SETTINGS_PAYOUT_FEE_KEY]
+    );
+    const stored = parsePayoutFeeAmount(result.rows[0]?.value, null);
+    if (stored != null) cachedPayoutFeeAmount = stored;
+  } catch {
+    // Behåll senast kända avgift om inställningen inte kan läsas.
+  }
+  return cachedPayoutFeeAmount;
+};
+const savePayoutFeeToDb = async (amount) => {
+  await pool.query(
+    `
+      INSERT INTO platform_settings (key, value, updated_at)
+      VALUES ($1, $2::jsonb, NOW())
+      ON CONFLICT (key) DO UPDATE SET
+        value = EXCLUDED.value,
+        updated_at = NOW()
+    `,
+    [PLATFORM_SETTINGS_PAYOUT_FEE_KEY, JSON.stringify(amount)]
+  );
+  cachedPayoutFeeAmount = amount;
+  return cachedPayoutFeeAmount;
+};
 const ticketPriceCapViolation = async (amount, { eventId, priceId } = {}) => {
   const cap = getTicketPriceCap();
   if (cap == null) return null;
@@ -230,12 +268,6 @@ const ORDER_NUMBER_QR_CONTENT_ID = "order-number-qr";
 const BOLAGSAPI_KEY = process.env.BOLAGSAPI_KEY || "";
 const PAYOUT_EMAIL = process.env.PAYOUT_EMAIL || "";
 const PAYOUT_DAYS_AFTER_EVENT = Math.max(0, parseInt(process.env.PAYOUT_DAYS_AFTER_EVENT || "1", 10) || 0);
-const parseAmountEnv = (value, fallback) => {
-  if (value === undefined || value === null || String(value).trim() === "") return fallback;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? Math.max(0, parsed) : fallback;
-};
-const PAYOUT_FEE_AMOUNT = parseAmountEnv(process.env.PAYOUT_FEE_AMOUNT, 45);
 const PAYOUT_FEE_VAT_RATE_PERCENT = 25;
 const PARTIAL_PAYOUT_MAX_PERCENT = Math.min(
   100,
@@ -5915,7 +5947,7 @@ app.get("/admin/payout-summary", requireAdmin, async (req, res) => {
       events: eventsWithRevenue,
       grandTotal,
       payoutDaysAfterEvent: PAYOUT_DAYS_AFTER_EVENT,
-      payoutFeeAmount: PAYOUT_FEE_AMOUNT,
+      payoutFeeAmount: getPayoutFeeAmount(),
       payoutFeeVatRatePercent: PAYOUT_FEE_VAT_RATE_PERCENT,
       payoutFeeAmountInclVat: getStandardPayoutFeeBreakdown().feeInclVat
     });
@@ -5925,7 +5957,7 @@ app.get("/admin/payout-summary", requireAdmin, async (req, res) => {
 });
 
 function getStandardPayoutFeeBreakdown() {
-  const feeExclVat = roundMoney(PAYOUT_FEE_AMOUNT);
+  const feeExclVat = roundMoney(getPayoutFeeAmount());
   const feeVat = roundMoney((feeExclVat * PAYOUT_FEE_VAT_RATE_PERCENT) / 100);
   const feeInclVat = roundMoney(feeExclVat + feeVat);
   return { feeExclVat, feeVat, feeInclVat };
@@ -6453,6 +6485,32 @@ app.put("/admin/platform-settings/premium-price", requireAdmin, requireSuperAdmi
     res.json({ ok: true, priceYear: saved });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Kunde inte spara Premium-priset." });
+  }
+});
+
+app.get("/admin/platform-settings/payout-fee", requireAdmin, requireSuperAdmin, async (_req, res) => {
+  res.json({
+    ok: true,
+    amountExclVat: getPayoutFeeAmount(),
+    vatRatePercent: PAYOUT_FEE_VAT_RATE_PERCENT
+  });
+});
+
+app.put("/admin/platform-settings/payout-fee", requireAdmin, requireSuperAdmin, async (req, res) => {
+  const amountExclVat = parsePayoutFeeAmount(req.body?.amountExclVat, null);
+  if (amountExclVat == null) {
+    res.status(400).json({ ok: false, error: "Ange en utbetalningsavgift i kronor, 0 eller högre." });
+    return;
+  }
+  try {
+    const saved = await savePayoutFeeToDb(amountExclVat);
+    res.json({
+      ok: true,
+      amountExclVat: saved,
+      vatRatePercent: PAYOUT_FEE_VAT_RATE_PERCENT
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Kunde inte spara utbetalningsavgiften." });
   }
 });
 
@@ -8378,6 +8436,10 @@ app.get("/admin/payout-requests/:id/fortnox.sie", requireAdmin, requireSuperAdmi
     if (step !== "1" && step !== "2") {
       return res.status(400).json({ ok: false, error: "Ogiltig SIE-fil." });
     }
+    const voucherDate = parseSieVoucherDate(req.query.date);
+    if (voucherDate == null) {
+      return res.status(400).json({ ok: false, error: "Ogiltigt verifikationsdatum." });
+    }
     const eventIds = Array.isArray(row.event_ids) ? row.event_ids : [];
     const organizerCents = Math.round((Number(row.amount) || 0) * 100);
     const payoutFeeCents = Math.round((Number(row.payout_fee) || 0) * 100);
@@ -8387,7 +8449,7 @@ app.get("/admin/payout-requests/:id/fortnox.sie", requireAdmin, requireSuperAdmi
     const header = {
       companyName: RECEIPT_SELLER,
       orgNumber: RECEIPT_SELLER_ORG_NUMBER,
-      voucherDate: today.ymd,
+      voucherDate: voucherDate || today.ymd,
       voucherText,
       series: SIE_VOUCHER_SERIES,
       fiscalYearStartMonth: SIE_FISCAL_YEAR_START_MONTH,
@@ -10535,6 +10597,31 @@ app.get("/admin/visitor-stats", requireAdmin, requireSuperAdmin, async (req, res
     });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Kunde inte hämta besöksstatistik." });
+  }
+});
+
+app.get("/admin/login-activity", requireAdmin, requireSuperAdmin, async (_req, res) => {
+  try {
+    const result = await pool.query(
+      `
+        SELECT u.username,
+               COALESCE(NULLIF(TRIM(p.organization), ''), '') AS organization,
+               u.last_login_at
+        FROM admin_users u
+        LEFT JOIN admin_user_profiles p ON p.user_id = u.id
+        ORDER BY u.last_login_at DESC NULLS LAST, LOWER(u.username) ASC
+      `
+    );
+    res.json({
+      ok: true,
+      rows: (result.rows || []).map((row) => ({
+        username: row.username || "",
+        organization: row.organization || "",
+        lastLoginAt: row.last_login_at ? row.last_login_at.toISOString() : null
+      }))
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Kunde inte hämta inloggningar." });
   }
 });
 
@@ -13634,6 +13721,14 @@ const ensureBookingsTable = async () => {
     `,
     [PLATFORM_SETTINGS_PREMIUM_PRICE_KEY, JSON.stringify(cachedPremiumPriceYear)]
   );
+  await pool.query(
+    `
+      INSERT INTO platform_settings (key, value)
+      VALUES ($1, $2::jsonb)
+      ON CONFLICT (key) DO NOTHING
+    `,
+    [PLATFORM_SETTINGS_PAYOUT_FEE_KEY, JSON.stringify(cachedPayoutFeeAmount)]
+  );
 
   await pool.query(`
     ALTER TABLE admin_user_profiles
@@ -13679,6 +13774,7 @@ waitForDatabase(pool)
   .then(() => loadServiceFeeTiersFromDb())
   .then(() => loadPremiumPriceFromDb())
   .then(() => loadTicketPriceCapFromDb())
+  .then(() => loadPayoutFeeFromDb())
   .then(() => {
     startHealthMonitor(pool);
     startActivityLogRetention();

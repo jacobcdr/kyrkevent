@@ -38,6 +38,26 @@ const HERO_IMAGE_PORTRAIT_ERROR =
 const HERO_IMAGE_TOO_WIDE_ERROR =
   "Eventbilden är för låg i förhållande till bredden. Höjden måste vara minst 35 % av bredden (t.ex. minst 420 px på en 1200 px bred bild).";
 
+function stockholmDateInputValue(date = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Stockholm",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(date);
+}
+
+/** Räkenskapsår som börjar 1 november, samma regel som i SIE-exporten. */
+function sieFiscalPeriodLabel(isoDate) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(isoDate || ""));
+  if (!match) return "";
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const startYear = month > 11 || (month === 11 && day >= 1) ? year : year - 1;
+  return `${startYear}-11-01 – ${startYear + 1}-10-31`;
+}
+
 function getHeroImageDimensionError({ width, height }) {
   if (height > width) {
     return HERO_IMAGE_PORTRAIT_ERROR;
@@ -3687,6 +3707,9 @@ const AdminPage = () => {
   const [visitorStats, setVisitorStats] = useState(null);
   const [visitorStatsLoading, setVisitorStatsLoading] = useState(false);
   const [visitorStatsError, setVisitorStatsError] = useState("");
+  const [loginActivity, setLoginActivity] = useState([]);
+  const [loginActivityLoading, setLoginActivityLoading] = useState(false);
+  const [loginActivityError, setLoginActivityError] = useState("");
   useEffect(() => {
     document.title = SITE_TITLE;
   }, []);
@@ -3708,6 +3731,29 @@ const AdminPage = () => {
       setSystemStatus(null);
     } finally {
       setSystemStatusLoading(false);
+    }
+  };
+
+  const loadLoginActivity = async (authToken) => {
+    if (!authToken) return;
+    setLoginActivityLoading(true);
+    setLoginActivityError("");
+    try {
+      const response = await fetch(`${API_BASE}/admin/login-activity`, {
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data?.ok) {
+        setLoginActivity(Array.isArray(data.rows) ? data.rows : []);
+      } else {
+        setLoginActivity([]);
+        setLoginActivityError(data.error || "Kunde inte hämta inloggningar.");
+      }
+    } catch {
+      setLoginActivity([]);
+      setLoginActivityError("Kunde inte hämta inloggningar.");
+    } finally {
+      setLoginActivityLoading(false);
     }
   };
 
@@ -3797,6 +3843,7 @@ const AdminPage = () => {
     }
     loadSystemStatus(token);
     loadVisitorStats(token);
+    loadLoginActivity(token);
     return undefined;
   }, [token, isAdminUser, adminSection, adminPanelTab]);
   useEffect(() => {
@@ -3971,6 +4018,8 @@ const AdminPage = () => {
   const [adminPayoutRequestsPageSize, setAdminPayoutRequestsPageSize] = useState(10);
   const [adminPayoutRequestsPage, setAdminPayoutRequestsPage] = useState(1);
   const [adminSieMessage, setAdminSieMessage] = useState("");
+  const [adminSieExport, setAdminSieExport] = useState(null);
+  const [adminSieExporting, setAdminSieExporting] = useState(false);
   const [adminSubscriptionPayments, setAdminSubscriptionPayments] = useState([]);
   const [adminSubscriptionPaymentsLoading, setAdminSubscriptionPaymentsLoading] = useState(false);
   const [adminSubscriptionPaymentsPageSize, setAdminSubscriptionPaymentsPageSize] = useState(10);
@@ -3983,6 +4032,9 @@ const AdminPage = () => {
   const [ticketPriceCapInput, setTicketPriceCapInput] = useState("");
   const [ticketPriceCapSaving, setTicketPriceCapSaving] = useState(false);
   const [ticketPriceCapMessage, setTicketPriceCapMessage] = useState("");
+  const [payoutFeeInput, setPayoutFeeInput] = useState("");
+  const [payoutFeeSaving, setPayoutFeeSaving] = useState(false);
+  const [payoutFeeMessage, setPayoutFeeMessage] = useState("");
   const [adminPayoutAnonymizeInProgressId, setAdminPayoutAnonymizeInProgressId] = useState(null);
   const [adminPartialCandidates, setAdminPartialCandidates] = useState([]);
   const [adminPartialCandidatesLoading, setAdminPartialCandidatesLoading] = useState(false);
@@ -4620,10 +4672,22 @@ const AdminPage = () => {
     }
   };
 
-  const downloadPayoutSie = async (payoutRequestId, step) => {
+  const openAdminSieExport = (payoutRequestId, step) => {
+    setAdminSieMessage("");
+    setAdminSieExport({
+      payoutRequestId,
+      step,
+      date: stockholmDateInputValue(),
+      error: ""
+    });
+  };
+
+  const downloadPayoutSie = async (payoutRequestId, step, voucherDate) => {
     if (!token || payoutRequestId == null) return;
+    const params = new URLSearchParams({ step: String(step) });
+    if (voucherDate) params.set("date", voucherDate);
     const response = await fetch(
-      `${API_BASE}/admin/payout-requests/${payoutRequestId}/fortnox.sie?step=${step}`,
+      `${API_BASE}/admin/payout-requests/${payoutRequestId}/fortnox.sie?${params}`,
       { headers: { Authorization: `Bearer ${token}` } }
     );
     if (!response.ok) {
@@ -4875,6 +4939,57 @@ const AdminPage = () => {
       setTicketPriceCapInput(cap == null ? "" : String(cap));
     } catch {
       // Taket kan fyllas i manuellt om det inte går att hämta.
+    }
+  };
+
+  const loadPayoutFee = async () => {
+    if (!token) return;
+    try {
+      const response = await fetch(`${API_BASE}/admin/platform-settings/payout-fee`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) return;
+      const amount = Number(data.amountExclVat);
+      if (!Number.isFinite(amount) || amount < 0) return;
+      setPayoutFeeInput(String(amount));
+    } catch {
+      // Avgiften kan fyllas i manuellt om den inte går att hämta.
+    }
+  };
+
+  const handleSavePayoutFee = async (event) => {
+    event.preventDefault();
+    if (!token || payoutFeeSaving) return;
+    const normalized = String(payoutFeeInput).trim().replace(/\s/g, "").replace(",", ".");
+    const amount = Number(normalized);
+    if (!Number.isFinite(amount) || amount < 0) {
+      setPayoutFeeMessage("Ange en utbetalningsavgift i kronor, 0 eller högre.");
+      return;
+    }
+    setPayoutFeeSaving(true);
+    setPayoutFeeMessage("");
+    try {
+      const response = await fetch(`${API_BASE}/admin/platform-settings/payout-fee`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ amountExclVat: Math.round(amount * 100) / 100 })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error || "Kunde inte spara utbetalningsavgiften.");
+      }
+      const saved = Number(data.amountExclVat);
+      setPayoutFeeInput(String(saved));
+      setPayoutFeeMessage("Utbetalningsavgiften sparades.");
+      loadPayoutSummary(token).catch(() => {});
+    } catch (err) {
+      setPayoutFeeMessage(err.message || "Kunde inte spara utbetalningsavgiften.");
+    } finally {
+      setPayoutFeeSaving(false);
     }
   };
 
@@ -5336,6 +5451,7 @@ const AdminPage = () => {
       loadAdminSubscriptionPayments();
       loadPremiumPrice();
       loadTicketPriceCap();
+      loadPayoutFee();
       loadAdminPartialCandidates();
       loadAdminOrganizations();
       loadAdminEventLinks();
@@ -9141,6 +9257,94 @@ const AdminPage = () => {
                 </div>
               </div>
             ) : null}
+            {adminSieExport
+              ? createPortal(
+                  <div
+                    className="modal-overlay"
+                    style={{ zIndex: 10000 }}
+                    onClick={() => {
+                      if (!adminSieExporting) setAdminSieExport(null);
+                    }}
+                    role="presentation"
+                  >
+                    <form
+                      className="modal"
+                      style={{ width: "min(420px, 100% - 2rem)" }}
+                      onClick={(event) => event.stopPropagation()}
+                      onSubmit={async (event) => {
+                        event.preventDefault();
+                        const { payoutRequestId, step, date } = adminSieExport;
+                        if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ""))) {
+                          setAdminSieExport((prev) =>
+                            prev ? { ...prev, error: "Ange ett giltigt datum." } : prev
+                          );
+                          return;
+                        }
+                        setAdminSieExporting(true);
+                        setAdminSieExport((prev) => (prev ? { ...prev, error: "" } : prev));
+                        try {
+                          await downloadPayoutSie(payoutRequestId, step, date);
+                          setAdminSieExport(null);
+                        } catch (err) {
+                          setAdminSieExport((prev) =>
+                            prev
+                              ? { ...prev, error: err.message || `Kunde inte ladda ner SIE ${step}.` }
+                              : prev
+                          );
+                        } finally {
+                          setAdminSieExporting(false);
+                        }
+                      }}
+                      role="dialog"
+                      aria-modal="true"
+                      aria-labelledby="admin-sie-date-title"
+                    >
+                      <div className="modal-header">
+                        <h3 id="admin-sie-date-title">SIE {adminSieExport.step}</h3>
+                      </div>
+                      <div className="modal-body">
+                        <label className="field">
+                          <span className="field-label">Verifikationsdatum</span>
+                          <input
+                            type="date"
+                            value={adminSieExport.date}
+                            required
+                            autoFocus
+                            disabled={adminSieExporting}
+                            onChange={(event) => {
+                              const date = event.target.value;
+                              setAdminSieExport((prev) => (prev ? { ...prev, date, error: "" } : prev));
+                            }}
+                          />
+                        </label>
+                        <p className="muted" style={{ marginBottom: 0 }}>
+                          Datumet skrivs på verifikationen. Räkenskapsperioden i filen blir{" "}
+                          {sieFiscalPeriodLabel(adminSieExport.date) || "–"}.
+                        </p>
+                        {adminSieExport.error ? (
+                          <p className="admin-error" style={{ marginBottom: 0 }}>
+                            {adminSieExport.error}
+                          </p>
+                        ) : null}
+                      </div>
+                      <div className="modal-footer">
+                        <button
+                          type="button"
+                          className="button button-outline"
+                          disabled={adminSieExporting}
+                          onClick={() => setAdminSieExport(null)}
+                        >
+                          Avbryt
+                        </button>
+                        <button type="submit" className="button" disabled={adminSieExporting}>
+                          {adminSieExporting ? "Skapar fil..." : "Ladda ner"}
+                        </button>
+                      </div>
+                    </form>
+                  </div>,
+                  document.body
+                )
+              : null}
             {adminOrgProfileModal != null ? (
               <div
                 className="modal-overlay"
@@ -9341,7 +9545,10 @@ const AdminPage = () => {
                   aria-selected={adminPanelTab === "status"}
                   onClick={() => {
                     setAdminPanelTab("status");
-                    if (token) loadSystemStatus(token).catch(() => {});
+                    if (token) {
+                      loadSystemStatus(token).catch(() => {});
+                      loadLoginActivity(token).catch(() => {});
+                    }
                   }}
                 >
                   Övervakning
@@ -9365,6 +9572,7 @@ const AdminPage = () => {
                     if (token) {
                       loadServiceFeeTierSettings(token).catch(() => {});
                       loadTicketPriceCap();
+                      loadPayoutFee();
                     }
                   }}
                 >
@@ -10157,28 +10365,14 @@ const AdminPage = () => {
                                   <button
                                     type="button"
                                     className="button button-outline"
-                                    onClick={async () => {
-                                      setAdminSieMessage("");
-                                      try {
-                                        await downloadPayoutSie(r.id, 1);
-                                      } catch (err) {
-                                        setAdminSieMessage(err.message || "Kunde inte ladda ner SIE 1.");
-                                      }
-                                    }}
+                                    onClick={() => openAdminSieExport(r.id, 1)}
                                   >
                                     SIE 1
                                   </button>
                                   <button
                                     type="button"
                                     className="button button-outline"
-                                    onClick={async () => {
-                                      setAdminSieMessage("");
-                                      try {
-                                        await downloadPayoutSie(r.id, 2);
-                                      } catch (err) {
-                                        setAdminSieMessage(err.message || "Kunde inte ladda ner SIE 2.");
-                                      }
-                                    }}
+                                    onClick={() => openAdminSieExport(r.id, 2)}
                                   >
                                     SIE 2
                                   </button>
@@ -10215,28 +10409,14 @@ const AdminPage = () => {
                                   <button
                                     type="button"
                                     className="button button-outline"
-                                    onClick={async () => {
-                                      setAdminSieMessage("");
-                                      try {
-                                        await downloadPayoutSie(r.id, 1);
-                                      } catch (err) {
-                                        setAdminSieMessage(err.message || "Kunde inte ladda ner SIE 1.");
-                                      }
-                                    }}
+                                    onClick={() => openAdminSieExport(r.id, 1)}
                                   >
                                     SIE 1
                                   </button>
                                   <button
                                     type="button"
                                     className="button button-outline"
-                                    onClick={async () => {
-                                      setAdminSieMessage("");
-                                      try {
-                                        await downloadPayoutSie(r.id, 2);
-                                      } catch (err) {
-                                        setAdminSieMessage(err.message || "Kunde inte ladda ner SIE 2.");
-                                      }
-                                    }}
+                                    onClick={() => openAdminSieExport(r.id, 2)}
                                   >
                                     SIE 2
                                   </button>
@@ -10572,7 +10752,10 @@ const AdminPage = () => {
                     type="button"
                     className="button button-outline button-small"
                     disabled={systemStatusLoading || !token}
-                    onClick={() => loadSystemStatus(token)}
+                    onClick={() => {
+                      loadSystemStatus(token);
+                      loadLoginActivity(token);
+                    }}
                   >
                     {systemStatusLoading ? "Uppdaterar…" : "Uppdatera"}
                   </button>
@@ -11041,6 +11224,47 @@ const AdminPage = () => {
                 ) : (
                   <p className="muted">Kunde inte hämta systemstatus.</p>
                 )}
+                <section className="admin-status-logins">
+                  <h3 className="admin-subsection-title">Senaste inloggningar</h3>
+                  <p className="muted">Användare sorterade efter när de senast loggade in.</p>
+                  {loginActivityError ? <p className="admin-error">{loginActivityError}</p> : null}
+                  {loginActivityLoading && loginActivity.length === 0 ? (
+                    <p className="muted">Laddar inloggningar…</p>
+                  ) : loginActivity.length === 0 ? (
+                    <p className="muted">Inga användare.</p>
+                  ) : (
+                    <div className="table-wrap">
+                      <table className="table admin-login-activity-table">
+                        <thead>
+                          <tr>
+                            <th>Användarnamn</th>
+                            <th>Organisation</th>
+                            <th>Senast inloggad</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {loginActivity.map((row) => (
+                            <tr key={row.username}>
+                              <td>{row.username || "–"}</td>
+                              <td>{row.organization || "–"}</td>
+                              <td>
+                                {row.lastLoginAt
+                                  ? new Date(row.lastLoginAt).toLocaleString("sv-SE", {
+                                      year: "numeric",
+                                      month: "short",
+                                      day: "numeric",
+                                      hour: "2-digit",
+                                      minute: "2-digit"
+                                    })
+                                  : "–"}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </section>
                 <section className="admin-status-testmail">
                   <h3 className="admin-subsection-title">Testmail</h3>
                   <p className="muted">Skicka ett provkvitto för att kontrollera att utskicken fungerar.</p>
@@ -11107,6 +11331,35 @@ const AdminPage = () => {
                   {ticketPriceCapMessage ? (
                     <p className={ticketPriceCapMessage.includes("sparades") || ticketPriceCapMessage.includes("togs bort") ? "admin-info-text" : "admin-error admin-error-inline"}>
                       {ticketPriceCapMessage}
+                    </p>
+                  ) : null}
+                </form>
+                <h3 className="admin-subsection-title admin-subsection-title-spaced">Utbetalningsavgift</h3>
+                <p className="muted">
+                  Avgiften dras vid slututbetalning efter avslutat event. Beloppet är exklusive moms. 25 % moms läggs på vid utbetalningen.
+                </p>
+                <form className="admin-premium-price-form" onSubmit={handleSavePayoutFee}>
+                  <label className="field">
+                    <span className="field-label">Utbetalningsavgift exkl. moms (kr)</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      inputMode="decimal"
+                      value={payoutFeeInput}
+                      onChange={(e) => {
+                        setPayoutFeeInput(e.target.value);
+                        setPayoutFeeMessage("");
+                      }}
+                      required
+                    />
+                  </label>
+                  <button type="submit" className="button" disabled={payoutFeeSaving}>
+                    {payoutFeeSaving ? "Sparar…" : "Spara"}
+                  </button>
+                  {payoutFeeMessage ? (
+                    <p className={payoutFeeMessage.includes("sparades") ? "admin-info-text" : "admin-error admin-error-inline"}>
+                      {payoutFeeMessage}
                     </p>
                   ) : null}
                 </form>

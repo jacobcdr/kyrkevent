@@ -133,6 +133,23 @@ export const stockholmYmd = (date = new Date()) => {
   return { year, ymd: `${year}${month}${day}` };
 };
 
+/** Tom sträng om inget datum skickats. null om datumet är ogiltigt. Annars YYYYMMDD. */
+export const parseSieVoucherDate = (value) => {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw) || /^(\d{4})(\d{2})(\d{2})$/.exec(raw);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (year < 2000 || year > 2100 || month < 1 || month > 12) return null;
+  const probe = new Date(Date.UTC(year, month - 1, day));
+  if (probe.getUTCFullYear() !== year || probe.getUTCMonth() !== month - 1 || probe.getUTCDate() !== day) {
+    return null;
+  }
+  return `${match[1]}${match[2]}${match[3]}`;
+};
+
 const sieQuote = (value, maxLen = 200) => {
   const cleaned = String(value ?? "")
     .replace(/[\u0000-\u001f]/g, " ")

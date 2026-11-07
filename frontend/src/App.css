@@ -6659,6 +6659,14 @@ button.admin-booking-void-button:hover {
   margin-bottom: 0.65rem;
 }
 
+.admin-status-logins {
+  margin-top: 1.75rem;
+}
+
+.admin-status-logins .admin-subsection-title {
+  margin-top: 0;
+}
+
 .admin-status-testmail {
   margin-top: 1.75rem;
   padding-top: 0.25rem;
