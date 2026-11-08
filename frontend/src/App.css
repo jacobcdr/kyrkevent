@@ -3461,6 +3461,16 @@ fieldset.field {
   animation: admin-events-plan-update-flash 2.8s ease-in-out infinite;
 }
 
+@keyframes admin-events-plan-update-flash {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
 .subscription-plan-status {
   width: 100%;
   display: flex;
@@ -3588,6 +3598,7 @@ fieldset.field {
   justify-content: space-between;
   gap: 1rem;
   margin-bottom: 0.5rem;
+  flex-wrap: wrap;
 }
 
 .admin-events-top-row .admin-info-text {
@@ -3597,6 +3608,184 @@ fieldset.field {
 
 .admin-events-plan-wrap {
   flex-shrink: 0;
+  display: flex;
+  align-items: stretch;
+  gap: 0.75rem;
+}
+
+.admin-events-message-card {
+  justify-content: center;
+}
+
+@media (max-width: 720px) {
+  .admin-events-top-row {
+    flex-wrap: nowrap;
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+
+  .admin-events-plan-wrap {
+    flex-direction: column;
+    flex-shrink: 0;
+    width: auto;
+  }
+
+  .admin-events-plan-wrap > .admin-events-plan-card:not(.admin-events-message-card) {
+    order: 1;
+  }
+
+  .admin-events-message-card {
+    order: 2;
+  }
+}
+
+.admin-events-message-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 3.4rem;
+  height: 3.4rem;
+  margin: 0.15rem 0;
+  border: none;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: var(--accent, #9a3412);
+  cursor: pointer;
+}
+
+.admin-events-message-button:disabled {
+  cursor: default;
+  color: #94a3b8;
+  background: #f1f5f9;
+}
+
+.admin-events-message-button:not(:disabled):hover {
+  background: #fff7ed;
+}
+
+.admin-events-message-button.is-unread {
+  color: #15803d;
+  background: #f0fdf4;
+  animation: admin-events-message-pulse 1.6s ease-in-out infinite;
+}
+
+.admin-events-message-button.is-unread:not(:disabled):hover {
+  background: #dcfce7;
+}
+
+@keyframes admin-events-message-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.45);
+  }
+  50% {
+    transform: scale(1.08);
+    box-shadow: 0 0 0 8px rgba(22, 163, 74, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-events-message-button.is-unread {
+    animation: none;
+  }
+}
+
+.admin-events-message-badge {
+  position: absolute;
+  top: -0.2rem;
+  right: -0.2rem;
+  min-width: 1.2rem;
+  height: 1.2rem;
+  padding: 0 0.28rem;
+  border-radius: 999px;
+  background: #16a34a;
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.2rem;
+  text-align: center;
+  box-shadow: 0 0 0 2px var(--card, #fff);
+}
+
+.admin-communication-form {
+  max-width: 40rem;
+}
+
+.admin-communication-form textarea {
+  width: 100%;
+  min-height: 7rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font: inherit;
+  resize: vertical;
+  background: var(--card);
+}
+
+.admin-communication-table .admin-communication-body {
+  white-space: pre-wrap;
+  max-width: 36rem;
+}
+
+.admin-communication-history-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+}
+
+.admin-communication-table tr.is-editing td {
+  background: #f0fdf4;
+}
+
+.admin-communication-readers {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.admin-communication-readers li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.9rem;
+  align-items: baseline;
+}
+
+.admin-communication-reader-name {
+  font-weight: 600;
+}
+
+.admin-message-item + .admin-message-item {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.admin-message-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.35rem;
+}
+
+.admin-message-item-head .admin-message-item-date {
+  margin: 0;
+}
+
+.admin-message-item-date {
+  margin: 0 0 0.35rem;
+  font-size: 0.85rem;
+}
+
+.admin-message-item-body {
+  margin: 0;
+  white-space: pre-wrap;
 }
 
 .admin-events-plan-card {
@@ -3639,20 +3828,26 @@ fieldset.field {
   font-weight: 600;
   line-height: 1.3;
   cursor: pointer;
-  animation: admin-events-plan-update-flash 2.8s ease-in-out infinite;
+  animation: admin-events-plan-update-pulse 1.6s ease-in-out infinite;
 }
 
 .admin-events-plan-update-link:hover {
   color: var(--accent-dark);
 }
 
-@keyframes admin-events-plan-update-flash {
+@keyframes admin-events-plan-update-pulse {
   0%,
   100% {
-    opacity: 1;
+    color: var(--accent);
   }
   50% {
-    opacity: 0.55;
+    color: #16a34a;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-events-plan-update-link {
+    animation: none;
   }
 }
 
@@ -5226,6 +5421,27 @@ select.goog-te-combo {
   margin: 0;
   font-weight: 600;
   color: var(--text);
+}
+
+.premium-confirm-modal .modal-footer:has(.premium-confirm-buy) {
+  display: block;
+}
+
+.premium-confirm-buy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  width: 100%;
+}
+
+.premium-confirm-buy .field input {
+  width: 100%;
+}
+
+.premium-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
 }
 
 .subscription-plan-credits {
@@ -7028,6 +7244,26 @@ button.admin-booking-void-button:hover {
 .admin-premium-price-form .muted {
   flex: 1 1 16rem;
   margin: 0 0 0.45rem;
+}
+
+.admin-premium-discount-list {
+  list-style: none;
+  margin: 0 0 1.5rem;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+  max-width: 36rem;
+}
+
+.admin-premium-discount-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
 }
 
 .ticket-checkin {

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Html5Qrcode } from "html5-qrcode";
 import {
@@ -1406,6 +1406,167 @@ function normalizeSubscriptionPlan(plan) {
   const key = String(plan || "bas").trim().toLowerCase();
   if (key === "premium") return "premium";
   return "bas";
+}
+
+const MESSAGE_BADGE_MS = 24 * 60 * 60 * 1000;
+
+function formatMessageAudience(audience) {
+  if (audience === "premium") return "Premium";
+  if (audience === "bas") return "Bas";
+  if (audience === "upcoming") return "Kommande event";
+  if (audience === "inactive_4m") return "Inte inloggade på 4 månader";
+  return "Samtliga";
+}
+
+function formatMessageDate(value) {
+  if (!value) return "–";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "–";
+  return date.toLocaleString("sv-SE", { dateStyle: "short", timeStyle: "short" });
+}
+
+function formatMessageDay(value) {
+  if (!value) return "–";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "–";
+  return date.toLocaleDateString("sv-SE");
+}
+
+function organizerMessageShowsBadge(message, now = Date.now()) {
+  if (!message?.openedAt) return true;
+  const opened = new Date(message.openedAt).getTime();
+  if (!Number.isFinite(opened)) return true;
+  return now - opened < MESSAGE_BADGE_MS;
+}
+
+function MessageEnvelopeIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true" focusable="false">
+      <path fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" d="M3.5 6.5h17v11h-17z" />
+      <path fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" d="M3.8 7l8.2 6.2L20.2 7" />
+    </svg>
+  );
+}
+
+function AdminCommunicationTable({
+  rows,
+  emptyText,
+  onRemove,
+  onDelete,
+  onEdit,
+  onToggleReaders,
+  removingId,
+  editingId,
+  readersId,
+  readers,
+  readersLoading,
+  readersError
+}) {
+  if (rows.length === 0) return <p className="muted">{emptyText}</p>;
+  return (
+    <div className="table-wrap">
+      <table className="table admin-communication-table">
+        <thead>
+          <tr>
+            <th>Datum</th>
+            <th>Mottagare</th>
+            <th>Meddelande</th>
+            <th>Öppnade</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <Fragment key={row.id}>
+            <tr className={editingId === row.id ? "is-editing" : undefined}>
+              <td>{formatMessageDate(row.createdAt)}</td>
+              <td>{formatMessageAudience(row.audience)}</td>
+              <td className="admin-communication-body">{row.body}</td>
+              <td>
+                {(row.openedCount ?? 0) > 0 ? (
+                  <button
+                    type="button"
+                    className="button button-outline button-small"
+                    onClick={() => onToggleReaders?.(row.id)}
+                  >
+                    {readersId === row.id ? "Dölj" : row.openedCount}
+                  </button>
+                ) : (
+                  0
+                )}
+              </td>
+              <td>
+                {row.active ? (
+                  <div className="admin-communication-history-actions">
+                    <button
+                      type="button"
+                      className="button button-outline button-small"
+                      disabled={removingId === row.id}
+                      onClick={() => onEdit?.(row)}
+                    >
+                      Redigera
+                    </button>
+                    <button
+                      type="button"
+                      className="button button-outline button-small"
+                      disabled={removingId === row.id}
+                      onClick={() => onRemove(row.id)}
+                    >
+                      {removingId === row.id ? "Tar bort..." : "Ta bort"}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="admin-communication-history-actions">
+                    <span className="muted">Borttaget {formatMessageDate(row.removedAt)}</span>
+                    {onDelete ? (
+                      <button
+                        type="button"
+                        className="button button-outline button-small"
+                        disabled={removingId === row.id}
+                        onClick={() => onDelete(row.id)}
+                      >
+                        {removingId === row.id ? "Raderar..." : "Radera"}
+                      </button>
+                    ) : null}
+                  </div>
+                )}
+              </td>
+            </tr>
+            {readersId === row.id ? (
+              <tr className="admin-communication-readers-row">
+                <td colSpan={5}>
+                  {readersLoading ? (
+                    <p className="muted">Laddar...</p>
+                  ) : readersError ? (
+                    <p className="admin-error">{readersError}</p>
+                  ) : readers.length === 0 ? (
+                    <p className="muted">Ingen har öppnat meddelandet.</p>
+                  ) : (
+                    <ul className="admin-communication-readers">
+                      {readers.map((reader) => {
+                        const person = String(reader.name || "").trim();
+                        const organization = String(reader.organization || "").trim();
+                        const showOrganization = organization && organization !== person;
+                        return (
+                          <li key={reader.userId}>
+                            <span className="admin-communication-reader-name">{person || reader.username}</span>
+                            {showOrganization ? <span>{organization}</span> : null}
+                            {reader.email ? <span>{reader.email}</span> : null}
+                            <span className="muted">{formatMessageDate(reader.openedAt)}</span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </td>
+              </tr>
+            ) : null}
+            </Fragment>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 const SUBSCRIPTION_PLAN_INFO = [
@@ -3965,6 +4126,10 @@ const AdminPage = () => {
     ? assistOwnerVatExempt !== true
     : profileForm.vatExempt !== true;
   const [activeSubscriptionPlan, setActiveSubscriptionPlan] = useState("bas");
+  const [organizerMessages, setOrganizerMessages] = useState([]);
+  const [organizerMessagesOpen, setOrganizerMessagesOpen] = useState(false);
+  const [organizerMessageDismissingId, setOrganizerMessageDismissingId] = useState(null);
+  const [organizerMessageDismissError, setOrganizerMessageDismissError] = useState("");
   const [showPremiumConfirm, setShowPremiumConfirm] = useState(false);
   const [showPremiumAvslutaInfo, setShowPremiumAvslutaInfo] = useState(false);
   const [premiumPaymentLoading, setPremiumPaymentLoading] = useState(false);
@@ -4018,6 +4183,19 @@ const AdminPage = () => {
   const [adminPayoutRequestsPageSize, setAdminPayoutRequestsPageSize] = useState(10);
   const [adminPayoutRequestsPage, setAdminPayoutRequestsPage] = useState(1);
   const [adminSieMessage, setAdminSieMessage] = useState("");
+  const [adminCommMessages, setAdminCommMessages] = useState([]);
+  const [adminCommLoading, setAdminCommLoading] = useState(false);
+  const [adminCommBody, setAdminCommBody] = useState("");
+  const [adminCommAudience, setAdminCommAudience] = useState("all");
+  const [adminCommNotifyEmail, setAdminCommNotifyEmail] = useState(false);
+  const [adminCommSaving, setAdminCommSaving] = useState(false);
+  const [adminCommNotice, setAdminCommNotice] = useState("");
+  const [adminCommRemovingId, setAdminCommRemovingId] = useState(null);
+  const [adminCommEditingId, setAdminCommEditingId] = useState(null);
+  const [adminCommReadersId, setAdminCommReadersId] = useState(null);
+  const [adminCommReaders, setAdminCommReaders] = useState([]);
+  const [adminCommReadersLoading, setAdminCommReadersLoading] = useState(false);
+  const [adminCommReadersError, setAdminCommReadersError] = useState("");
   const [adminSieExport, setAdminSieExport] = useState(null);
   const [adminSieExporting, setAdminSieExporting] = useState(false);
   const [adminSubscriptionPayments, setAdminSubscriptionPayments] = useState([]);
@@ -4028,6 +4206,14 @@ const AdminPage = () => {
   const [premiumPriceInput, setPremiumPriceInput] = useState("");
   const [premiumPriceSaving, setPremiumPriceSaving] = useState(false);
   const [premiumPriceMessage, setPremiumPriceMessage] = useState("");
+  const [premiumDiscountCodes, setPremiumDiscountCodes] = useState([]);
+  const [premiumDiscountCodeInput, setPremiumDiscountCodeInput] = useState("");
+  const [premiumDiscountPercentInput, setPremiumDiscountPercentInput] = useState("");
+  const [premiumDiscountSaving, setPremiumDiscountSaving] = useState(false);
+  const [premiumDiscountMessage, setPremiumDiscountMessage] = useState("");
+  const [premiumPurchaseCode, setPremiumPurchaseCode] = useState("");
+  const [premiumPurchaseCodeError, setPremiumPurchaseCodeError] = useState("");
+  const [premiumDiscountAvailable, setPremiumDiscountAvailable] = useState(false);
   const [ticketPriceCap, setTicketPriceCap] = useState(null);
   const [ticketPriceCapInput, setTicketPriceCapInput] = useState("");
   const [ticketPriceCapSaving, setTicketPriceCapSaving] = useState(false);
@@ -4916,7 +5102,9 @@ const AdminPage = () => {
     try {
       const response = await fetch(`${API_BASE}/premium-price`);
       const data = await response.json();
-      if (!response.ok || !data.ok || !Number.isFinite(Number(data.priceYear))) return;
+      if (!response.ok || !data.ok) return;
+      setPremiumDiscountAvailable(data.hasDiscountCode === true);
+      if (!Number.isFinite(Number(data.priceYear))) return;
       const price = Number(data.priceYear);
       setPremiumPriceYear(price);
       setPremiumPriceInput(String(price));
@@ -5064,6 +5252,80 @@ const AdminPage = () => {
       setPremiumPriceMessage(err.message || "Kunde inte spara Premium-priset.");
     } finally {
       setPremiumPriceSaving(false);
+    }
+  };
+
+  const loadPremiumDiscountCodes = async () => {
+    if (!token) return;
+    try {
+      const response = await fetch(`${API_BASE}/admin/platform-settings/premium-discount-codes`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) return;
+      setPremiumDiscountCodes(Array.isArray(data.codes) ? data.codes : []);
+    } catch {
+      /* koderna kan fyllas i igen om de inte går att hämta */
+    }
+  };
+
+  const savePremiumDiscountCodes = async (codes) => {
+    const response = await fetch(`${API_BASE}/admin/platform-settings/premium-discount-codes`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({ codes })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error || "Kunde inte spara rabattkoderna.");
+    }
+    const saved = Array.isArray(data.codes) ? data.codes : [];
+    setPremiumDiscountCodes(saved);
+    return saved;
+  };
+
+  const handleAddPremiumDiscountCode = async (event) => {
+    event.preventDefault();
+    if (!token || premiumDiscountSaving) return;
+    const code = premiumDiscountCodeInput.trim().toUpperCase().replace(/\s+/g, "");
+    const percent = Math.round(Number(String(premiumDiscountPercentInput).replace(",", ".")));
+    if (!/^[A-Z0-9-]{1,32}$/.test(code)) {
+      setPremiumDiscountMessage("Koden får bara innehålla bokstäver, siffror och bindestreck.");
+      return;
+    }
+    if (!Number.isInteger(percent) || percent < 1 || percent > 100) {
+      setPremiumDiscountMessage("Ange rabatten i procent, från 1 till 100.");
+      return;
+    }
+    const next = [{ code, percent }, ...premiumDiscountCodes.filter((row) => row.code !== code)];
+    setPremiumDiscountSaving(true);
+    setPremiumDiscountMessage("");
+    try {
+      await savePremiumDiscountCodes(next);
+      setPremiumDiscountCodeInput("");
+      setPremiumDiscountPercentInput("");
+      setPremiumDiscountMessage("Rabattkoden sparades.");
+    } catch (err) {
+      setPremiumDiscountMessage(err.message || "Kunde inte spara rabattkoden.");
+    } finally {
+      setPremiumDiscountSaving(false);
+    }
+  };
+
+  const handleRemovePremiumDiscountCode = async (code) => {
+    if (!token || premiumDiscountSaving) return;
+    setPremiumDiscountSaving(true);
+    setPremiumDiscountMessage("");
+    try {
+      await savePremiumDiscountCodes(premiumDiscountCodes.filter((row) => row.code !== code));
+      setPremiumDiscountMessage("Rabattkoden togs bort.");
+    } catch (err) {
+      setPremiumDiscountMessage(err.message || "Kunde inte ta bort rabattkoden.");
+    } finally {
+      setPremiumDiscountSaving(false);
     }
   };
 
@@ -5471,6 +5733,260 @@ const AdminPage = () => {
       loadAdminOrganizations();
     }
   }, [token, isAdminUser, adminSection, adminPanelTab]);
+
+  const loadOrganizerMessages = async (authToken) => {
+    if (!authToken) return;
+    try {
+      const response = await fetch(`${API_BASE}/admin/messages`, {
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      if (!response.ok) return;
+      const data = await response.json();
+      const messages = Array.isArray(data.messages) ? data.messages : [];
+      setOrganizerMessages(messages);
+      if (messages.length === 0) setOrganizerMessagesOpen(false);
+    } catch {
+      /* behåll senast laddade meddelanden */
+    }
+  };
+
+  const openOrganizerMessages = async () => {
+    if (organizerMessages.length === 0) return;
+    setOrganizerMessagesOpen(true);
+    const ids = organizerMessages.filter((message) => !message.openedAt).map((message) => message.id);
+    if (!token || ids.length === 0) return;
+    try {
+      const response = await fetch(`${API_BASE}/admin/messages/open`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ ids })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) return;
+      const openedById = new Map((data.messages || []).map((message) => [message.id, message.openedAt]));
+      setOrganizerMessages((prev) =>
+        prev.map((message) =>
+          openedById.has(message.id)
+            ? { ...message, openedAt: openedById.get(message.id), showBadge: true }
+            : message
+        )
+      );
+    } catch {
+      /* olästa visas igen vid nästa laddning */
+    }
+  };
+
+  const dismissOrganizerMessage = async (id) => {
+    if (!token || organizerMessageDismissingId) return;
+    setOrganizerMessageDismissingId(id);
+    setOrganizerMessageDismissError("");
+    try {
+      const response = await fetch(`${API_BASE}/admin/messages/${id}/dismiss`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Kunde inte ta bort meddelandet.");
+      let remaining = 0;
+      setOrganizerMessages((prev) => {
+        const next = prev.filter((message) => message.id !== id);
+        remaining = next.length;
+        return next;
+      });
+      if (remaining === 0) setOrganizerMessagesOpen(false);
+    } catch (error) {
+      setOrganizerMessageDismissError(error.message || "Kunde inte ta bort meddelandet.");
+    } finally {
+      setOrganizerMessageDismissingId(null);
+    }
+  };
+
+  const handleToggleAdminCommunicationReaders = async (id) => {
+    if (adminCommReadersId === id) {
+      setAdminCommReadersId(null);
+      setAdminCommReaders([]);
+      setAdminCommReadersError("");
+      return;
+    }
+    if (!token) return;
+    setAdminCommReadersId(id);
+    setAdminCommReaders([]);
+    setAdminCommReadersError("");
+    setAdminCommReadersLoading(true);
+    try {
+      const response = await fetch(`${API_BASE}/admin/communication/messages/${id}/reads`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Kunde inte hämta vilka som öppnat meddelandet.");
+      setAdminCommReaders(Array.isArray(data.readers) ? data.readers : []);
+    } catch (error) {
+      setAdminCommReadersError(error.message || "Kunde inte hämta vilka som öppnat meddelandet.");
+    } finally {
+      setAdminCommReadersLoading(false);
+    }
+  };
+
+  const loadAdminCommunication = async (authToken = token) => {
+    if (!authToken) return;
+    setAdminCommLoading(true);
+    try {
+      const response = await fetch(`${API_BASE}/admin/communication/messages`, {
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Kunde inte hämta meddelanden.");
+      setAdminCommMessages(Array.isArray(data.messages) ? data.messages : []);
+    } catch (error) {
+      setAdminCommNotice(error.message || "Kunde inte hämta meddelanden.");
+    } finally {
+      setAdminCommLoading(false);
+    }
+  };
+
+  const handleSendAdminCommunication = async (event) => {
+    event.preventDefault();
+    if (!token || adminCommSaving) return;
+    const body = adminCommBody.trim();
+    if (!body) {
+      setAdminCommNotice("Skriv ett meddelande.");
+      return;
+    }
+    setAdminCommSaving(true);
+    setAdminCommNotice("");
+    const editingId = adminCommEditingId;
+    try {
+      const response = await fetch(
+        editingId
+          ? `${API_BASE}/admin/communication/messages/${editingId}`
+          : `${API_BASE}/admin/communication/messages`,
+        {
+          method: editingId ? "PUT" : "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            body,
+            audience: adminCommAudience,
+            notifyEmail: !editingId && adminCommNotifyEmail
+          })
+        }
+      );
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || (editingId ? "Kunde inte spara meddelandet." : "Kunde inte skicka meddelandet."));
+      }
+      setAdminCommBody("");
+      setAdminCommAudience("all");
+      setAdminCommNotifyEmail(false);
+      setAdminCommEditingId(null);
+      if (editingId) {
+        setAdminCommNotice("Meddelandet uppdaterades.");
+      } else if (adminCommNotifyEmail && data.emailError) {
+        setAdminCommNotice(`Meddelandet är skickat, men e-posten kunde inte skickas. ${data.emailError}`);
+      } else if (adminCommNotifyEmail && Number(data.emailSent) > 0 && Number(data.emailFailed) > 0) {
+        setAdminCommNotice(`Meddelandet är skickat. E-post gick till ${data.emailSent} av ${Number(data.emailSent) + Number(data.emailFailed)} adresser.`);
+      } else if (adminCommNotifyEmail && Number(data.emailSent) > 0) {
+        const count = Number(data.emailSent);
+        setAdminCommNotice(`Meddelandet är skickat. E-post gick till ${count} ${count === 1 ? "adress" : "adresser"}.`);
+      } else if (adminCommNotifyEmail) {
+        setAdminCommNotice("Meddelandet är skickat. Ingen mottagare hade en e-postadress.");
+      } else {
+        setAdminCommNotice("Meddelandet är skickat.");
+      }
+      await loadAdminCommunication(token);
+      await loadOrganizerMessages(token);
+    } catch (error) {
+      setAdminCommNotice(error.message || (editingId ? "Kunde inte spara meddelandet." : "Kunde inte skicka meddelandet."));
+    } finally {
+      setAdminCommSaving(false);
+    }
+  };
+
+  const handleEditAdminCommunication = (row) => {
+    setAdminCommEditingId(row.id);
+    setAdminCommBody(row.body || "");
+    setAdminCommAudience(row.audience || "all");
+    setAdminCommNotifyEmail(false);
+    setAdminCommNotice("");
+    document.getElementById("admin-communication-form")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const handleCancelAdminCommunicationEdit = () => {
+    setAdminCommEditingId(null);
+    setAdminCommBody("");
+    setAdminCommAudience("all");
+    setAdminCommNotifyEmail(false);
+    setAdminCommNotice("");
+  };
+
+  const handleRemoveAdminCommunication = async (id) => {
+    if (!token || adminCommRemovingId != null) return;
+    if (!window.confirm("Ta bort meddelandet för arrangörerna? Det ligger kvar i historiken.")) return;
+    setAdminCommRemovingId(id);
+    setAdminCommNotice("");
+    try {
+      const response = await fetch(`${API_BASE}/admin/communication/messages/${id}/remove`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Kunde inte ta bort meddelandet.");
+      if (adminCommEditingId === id) {
+        setAdminCommEditingId(null);
+        setAdminCommBody("");
+        setAdminCommAudience("all");
+        setAdminCommNotifyEmail(false);
+      }
+      await loadAdminCommunication(token);
+      await loadOrganizerMessages(token);
+    } catch (error) {
+      setAdminCommNotice(error.message || "Kunde inte ta bort meddelandet.");
+    } finally {
+      setAdminCommRemovingId(null);
+    }
+  };
+
+  const handleDeleteAdminCommunication = async (id) => {
+    if (!token || adminCommRemovingId != null) return;
+    if (!window.confirm("Radera meddelandet ur historiken? Det går inte att ångra.")) return;
+    setAdminCommRemovingId(id);
+    setAdminCommNotice("");
+    try {
+      const response = await fetch(`${API_BASE}/admin/communication/messages/${id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Kunde inte radera meddelandet.");
+      setAdminCommNotice("Meddelandet raderades.");
+      await loadAdminCommunication(token);
+    } catch (error) {
+      setAdminCommNotice(error.message || "Kunde inte radera meddelandet.");
+    } finally {
+      setAdminCommRemovingId(null);
+    }
+  };
+
+  useEffect(() => {
+    if (!token) {
+      setOrganizerMessages([]);
+      setOrganizerMessagesOpen(false);
+      return;
+    }
+    loadOrganizerMessages(token);
+  }, [token, activeSubscriptionPlan]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setOrganizerMessages((prev) => (prev.length ? [...prev] : prev));
+    }, 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -6030,6 +6546,8 @@ const AdminPage = () => {
         showToast("Fyll i förnamn, efternamn och organisation och spara profilen först. Välj sedan Premium och klicka Gå vidare med annat Abonnemang.");
         return;
       }
+      setPremiumPurchaseCodeError("");
+      loadPremiumPrice().catch(() => {});
       setShowPremiumConfirm(true);
       return;
     }
@@ -6050,16 +6568,23 @@ const AdminPage = () => {
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`
-        }
+        },
+        body: JSON.stringify({
+          discountCode: premiumDiscountAvailable ? premiumPurchaseCode.trim() : ""
+        })
       });
       const data = await response.json();
       if (data.ok && data.activated) {
+        setShowPremiumConfirm(false);
+        setPremiumPurchaseCode("");
+        setPremiumPurchaseCodeError("");
         showToast("Premium är aktiverat.");
         await loadProfile(token);
         return;
       }
       if (!data.ok || !data.checkoutUrl || !data.verifyToken) {
         const errMsg = data.error || "Kunde inte starta betalning.";
+        setPremiumPurchaseCodeError(errMsg);
         setError(errMsg);
         if (errMsg.includes("förnamn") || errMsg.includes("organisation")) {
           showToast(errMsg);
@@ -6070,7 +6595,9 @@ const AdminPage = () => {
       sessionStorage.setItem("paymentReturnTo", "profile");
       window.location.href = data.checkoutUrl;
     } catch (err) {
-      setError(err?.message || "Kunde inte starta betalning.");
+      const errMsg = err?.message || "Kunde inte starta betalning.";
+      setPremiumPurchaseCodeError(errMsg);
+      setError(errMsg);
     } finally {
       setPremiumPaymentLoading(false);
     }
@@ -6085,7 +6612,7 @@ const AdminPage = () => {
       showToast("Fyll i förnamn, efternamn och organisation och spara profilen först. Välj sedan Premium och klicka Gå vidare med annat Abonnemang.");
       return;
     }
-    setShowPremiumConfirm(false);
+    setPremiumPurchaseCodeError("");
     setError("");
     setProfileLoading(true);
     const keepPlan = normalizeSubscriptionPlan(activeSubscriptionPlan);
@@ -9573,10 +10100,23 @@ const AdminPage = () => {
                       loadServiceFeeTierSettings(token).catch(() => {});
                       loadTicketPriceCap();
                       loadPayoutFee();
+                      loadPremiumDiscountCodes();
                     }
                   }}
                 >
                   Inställningar
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  className={`admin-main-tab ${adminPanelTab === "communication" ? "is-active" : ""}`}
+                  aria-selected={adminPanelTab === "communication"}
+                  onClick={() => {
+                    setAdminPanelTab("communication");
+                    if (token) loadAdminCommunication(token);
+                  }}
+                >
+                  Kommunikation
                 </button>
               </nav>
             </div>
@@ -11305,7 +11845,83 @@ const AdminPage = () => {
             {adminPanelTab === "settings" ? (
               <div className="admin-panel admin-panel-settings">
                 <h2>Inställningar</h2>
-                <h3 className="admin-subsection-title">Biljettpristak</h3>
+                <h3 className="admin-subsection-title">Rabattkod för Premium</h3>
+                <p className="muted">
+                  Ange koden och hur många procent som dras av årspriset. 100 % ger 0 kr och aktiverar Premium utan betalning. En lägre procent används som det belopp som ska betalas.
+                </p>
+                <form className="admin-premium-price-form" onSubmit={handleAddPremiumDiscountCode}>
+                  <label className="field">
+                    <span className="field-label">Kod</span>
+                    <input
+                      type="text"
+                      value={premiumDiscountCodeInput}
+                      onChange={(event) => {
+                        setPremiumDiscountCodeInput(event.target.value);
+                        setPremiumDiscountMessage("");
+                      }}
+                      placeholder="T.ex. HOST100"
+                      maxLength={32}
+                      autoComplete="off"
+                      required
+                    />
+                  </label>
+                  <label className="field">
+                    <span className="field-label">Rabatt (%)</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="100"
+                      step="1"
+                      value={premiumDiscountPercentInput}
+                      onChange={(event) => {
+                        setPremiumDiscountPercentInput(event.target.value);
+                        setPremiumDiscountMessage("");
+                      }}
+                      required
+                    />
+                  </label>
+                  <button type="submit" className="button" disabled={premiumDiscountSaving}>
+                    {premiumDiscountSaving ? "Sparar…" : "Spara kod"}
+                  </button>
+                  {premiumDiscountMessage ? (
+                    <p className={premiumDiscountMessage.includes("sparades") || premiumDiscountMessage.includes("togs bort") ? "admin-info-text" : "admin-error admin-error-inline"}>
+                      {premiumDiscountMessage}
+                    </p>
+                  ) : null}
+                </form>
+                {premiumDiscountCodes.length > 0 ? (
+                  <ul className="admin-premium-discount-list">
+                    {premiumDiscountCodes.map((row) => {
+                      const payable =
+                        premiumPriceYear == null
+                          ? null
+                          : Math.max(0, Math.round((Number(premiumPriceYear) * (100 - row.percent)) ) / 100);
+                      return (
+                        <li key={row.code}>
+                          <span>
+                            <strong>{row.code}</strong>
+                            {" · "}
+                            {row.percent} %
+                            {payable != null
+                              ? ` · ${payable.toLocaleString("sv-SE", { minimumFractionDigits: 0, maximumFractionDigits: 2 })} kr`
+                              : ""}
+                          </span>
+                          <button
+                            type="button"
+                            className="button button-outline"
+                            disabled={premiumDiscountSaving}
+                            onClick={() => handleRemovePremiumDiscountCode(row.code)}
+                          >
+                            Ta bort
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                ) : (
+                  <p className="muted">Ingen rabattkod är sparad.</p>
+                )}
+                <h3 className="admin-subsection-title admin-subsection-title-spaced">Biljettpristak</h3>
                 <p className="muted">
                   Arrangörer kan inte spara biljettpriser högre än detta belopp. Lämna rutan tom om inget tak ska gälla.
                 </p>
@@ -11458,6 +12074,112 @@ const AdminPage = () => {
                       </button>
                     </div>
                   </form>
+                )}
+              </div>
+            ) : null}
+
+            {adminPanelTab === "communication" ? (
+              <div className="admin-panel admin-panel-communication">
+                <h2>Kommunikation</h2>
+                <p className="muted">
+                  Skicka ett meddelande till arrangörer med Bas, Premium eller till samtliga. Meddelandet ligger kvar tills du tar bort det.
+                </p>
+                <form
+                  id="admin-communication-form"
+                  className="admin-form admin-communication-form"
+                  onSubmit={handleSendAdminCommunication}
+                >
+                  {adminCommEditingId ? <p className="admin-info-text">Redigerar aktivt meddelande.</p> : null}
+                  <label className="field">
+                    <span className="field-label">Meddelande</span>
+                    <textarea
+                      rows={4}
+                      maxLength={2000}
+                      value={adminCommBody}
+                      onChange={(event) => {
+                        setAdminCommBody(event.target.value);
+                        setAdminCommNotice("");
+                      }}
+                      placeholder="Skriv meddelandet som arrangörerna ska se"
+                      required
+                    />
+                  </label>
+                  <label className="field">
+                    <span className="field-label">Skicka till</span>
+                    <select
+                      value={adminCommAudience}
+                      onChange={(event) => setAdminCommAudience(event.target.value)}
+                    >
+                      <option value="all">Samtliga</option>
+                      <option value="bas">Bas</option>
+                      <option value="premium">Premium</option>
+                      <option value="upcoming">Kommande event</option>
+                      <option value="inactive_4m">Inte inloggade på 4 månader</option>
+                    </select>
+                  </label>
+                  {adminCommEditingId ? null : (
+                    <label className="field checkbox-field">
+                      <input
+                        type="checkbox"
+                        checked={adminCommNotifyEmail}
+                        onChange={(event) => setAdminCommNotifyEmail(event.target.checked)}
+                      />
+                      <span>Skicka e-post om nytt meddelande till de valda användarnas adresser</span>
+                    </label>
+                  )}
+                  <div className="admin-actions">
+                    {adminCommEditingId ? (
+                      <button
+                        type="button"
+                        className="button button-outline"
+                        disabled={adminCommSaving}
+                        onClick={handleCancelAdminCommunicationEdit}
+                      >
+                        Avbryt
+                      </button>
+                    ) : null}
+                    <button type="submit" className="button" disabled={adminCommSaving}>
+                      {adminCommSaving ? "Sparar..." : adminCommEditingId ? "Spara" : "Skicka"}
+                    </button>
+                  </div>
+                  {adminCommNotice ? (
+                    <p className={adminCommNotice.includes("skickat") || adminCommNotice.includes("uppdaterades") || adminCommNotice.includes("raderades") ? "admin-info-text" : "admin-error"}>
+                      {adminCommNotice}
+                    </p>
+                  ) : null}
+                </form>
+                <h3 className="admin-subsection-title admin-subsection-title-spaced">Aktiva</h3>
+                {adminCommLoading ? (
+                  <p className="muted">Laddar...</p>
+                ) : (
+                  <AdminCommunicationTable
+                    rows={adminCommMessages.filter((row) => row.active)}
+                    emptyText="Inget aktivt meddelande."
+                    onRemove={handleRemoveAdminCommunication}
+                    onEdit={handleEditAdminCommunication}
+                    removingId={adminCommRemovingId}
+                    editingId={adminCommEditingId}
+                    onToggleReaders={handleToggleAdminCommunicationReaders}
+                    readersId={adminCommReadersId}
+                    readers={adminCommReaders}
+                    readersLoading={adminCommReadersLoading}
+                    readersError={adminCommReadersError}
+                  />
+                )}
+                <h3 className="admin-subsection-title admin-subsection-title-spaced">Historik</h3>
+                {adminCommLoading ? null : (
+                  <AdminCommunicationTable
+                    rows={adminCommMessages.filter((row) => !row.active)}
+                    emptyText="Ingen historik ännu."
+                    onRemove={handleRemoveAdminCommunication}
+                    onDelete={handleDeleteAdminCommunication}
+                    removingId={adminCommRemovingId}
+                    onToggleReaders={handleToggleAdminCommunicationReaders}
+                    readersId={adminCommReadersId}
+                    readers={adminCommReaders}
+                    readersLoading={adminCommReadersLoading}
+                    readersError={adminCommReadersError}
+                  />
                 )}
               </div>
             ) : null}
@@ -12341,7 +13063,7 @@ const AdminPage = () => {
                   }`}
                   disabled={profileLoading}
                 >
-                  Uppgradera till Premium
+                  Spara abonnemangsval
                 </button>
                 <div className="subscription-plan-status">
                   <div className="subscription-plan-status-row">
@@ -12596,13 +13318,13 @@ const AdminPage = () => {
                             {premiumPriceYear == null
                               ? "Premium gäller i ett år från aktiveringsdatum."
                               : Number(premiumPriceYear) <= 0
-                                ? "Premium kostar 0 kr (12 mån) från aktiveringsdatum. Därefter 1995kr/år."
-                                : `När du aktiverar Premium betalar du ${Number(premiumPriceYear).toLocaleString("sv-SE")} kr för ett år via onlinebetalning. Abonnemanget gäller i ett år från aktiveringsdatum.`}
+                                ? "Premium kostar 0 kr (12 mån) från aktiveringsdatum. Därefter 1995kr/år, vi påminner dig när det blir aktuellt."
+                                : `När du aktiverar Premium betalar du ${Number(premiumPriceYear).toLocaleString("sv-SE")} kr för ett år. Abonnemanget gäller i ett år från aktiveringsdatum.`}
                           </p>
                           <p className="premium-confirm-question">
                             {premiumPriceYear != null && Number(premiumPriceYear) <= 0
                               ? "Vill du aktivera Premium?"
-                              : "Vill du gå vidare till betalning?"}
+                              : "Vill du köpa abonnemanget?"}
                           </p>
                         </>
                       );
@@ -12629,14 +13351,33 @@ const AdminPage = () => {
                         );
                       }
                       return (
-                        <>
-                          <button type="button" className="button button-outline" onClick={() => setShowPremiumConfirm(false)}>
-                            Nej
-                          </button>
-                          <button type="button" className="button" onClick={handlePremiumConfirmYes} disabled={profileLoading || premiumPaymentLoading}>
-                            {premiumPaymentLoading ? "Startar…" : "Gå till betalning"}
-                          </button>
-                        </>
+                        <div className="premium-confirm-buy">
+                          {premiumDiscountAvailable ? (
+                            <label className="field">
+                              <span className="field-label">Rabattkod</span>
+                              <input
+                                type="text"
+                                value={premiumPurchaseCode}
+                                onChange={(event) => {
+                                  setPremiumPurchaseCode(event.target.value);
+                                  setPremiumPurchaseCodeError("");
+                                }}
+                                placeholder="Valfritt"
+                                autoComplete="off"
+                                maxLength={32}
+                              />
+                            </label>
+                          ) : null}
+                          {premiumPurchaseCodeError ? <p className="admin-error">{premiumPurchaseCodeError}</p> : null}
+                          <div className="premium-confirm-actions">
+                            <button type="button" className="button button-outline" onClick={() => setShowPremiumConfirm(false)}>
+                              Nej
+                            </button>
+                            <button type="button" className="button" onClick={handlePremiumConfirmYes} disabled={profileLoading || premiumPaymentLoading}>
+                              {premiumPaymentLoading ? "Startar…" : premiumPriceYear != null && Number(premiumPriceYear) <= 0 ? "Aktivera" : "Köp abonnemang"}
+                            </button>
+                          </div>
+                        </div>
                       );
                     })()}
                   </div>
@@ -13101,6 +13842,39 @@ const AdminPage = () => {
                     </ul>
                   </div>
                   <div className="admin-events-plan-wrap">
+                    <div className="admin-events-plan-card admin-events-message-card">
+                      <span className="admin-events-plan-label">Meddelande</span>
+                      {(() => {
+                        const badgeCount = organizerMessages.filter((message) => organizerMessageShowsBadge(message)).length;
+                        const hasUnread = organizerMessages.some((message) => !message.openedAt);
+                        const hasMessages = organizerMessages.length > 0;
+                        return (
+                          <button
+                            type="button"
+                            className={`admin-events-message-button${hasUnread ? " is-unread" : ""}`}
+                            disabled={!hasMessages}
+                            aria-label={
+                              hasMessages
+                                ? badgeCount > 0
+                                  ? `Visa meddelanden, ${badgeCount} nya`
+                                  : "Visa meddelanden"
+                                : "Inga meddelanden"
+                            }
+                            onClick={() => {
+                              openOrganizerMessages();
+                            }}
+                          >
+                            <MessageEnvelopeIcon />
+                            {badgeCount > 0 ? (
+                              <span className="admin-events-message-badge">{badgeCount}</span>
+                            ) : null}
+                          </button>
+                        );
+                      })()}
+                      {organizerMessages.length === 0 ? (
+                        <span className="admin-events-date">Inga meddelanden</span>
+                      ) : null}
+                    </div>
                     <div className="admin-events-plan-card">
                       <span className="admin-events-plan-label">Abonnemang</span>
                       <span className={`admin-events-plan-badge subscription-plan-badge subscription-plan-badge-${normalizeSubscriptionPlan(activeSubscriptionPlan)}`}>
@@ -13131,6 +13905,59 @@ const AdminPage = () => {
                     </div>
                   </div>
                 </div>
+                {organizerMessagesOpen
+                  ? createPortal(
+                      <div
+                        className="modal-overlay"
+                        style={{ zIndex: 10000 }}
+                        onClick={() => setOrganizerMessagesOpen(false)}
+                        role="presentation"
+                      >
+                        <div
+                          className="modal admin-message-modal"
+                          onClick={(event) => event.stopPropagation()}
+                          role="dialog"
+                          aria-modal="true"
+                          aria-labelledby="organizer-messages-title"
+                        >
+                          <div className="modal-header">
+                            <h3 id="organizer-messages-title">
+                              {organizerMessages.length === 1 ? "Meddelande" : "Meddelanden"}
+                            </h3>
+                          </div>
+                          <div className="modal-body">
+                            {organizerMessages.map((message) => (
+                              <article key={message.id} className="admin-message-item">
+                                <div className="admin-message-item-head">
+                                  <p className="muted admin-message-item-date">{formatMessageDay(message.createdAt)}</p>
+                                  <button
+                                    type="button"
+                                    className="icon-button danger"
+                                    aria-label="Ta bort meddelande"
+                                    title="Ta bort meddelande"
+                                    disabled={organizerMessageDismissingId === message.id}
+                                    onClick={() => dismissOrganizerMessage(message.id)}
+                                  >
+                                    🗑
+                                  </button>
+                                </div>
+                                <p className="admin-message-item-body">{message.body}</p>
+                              </article>
+                            ))}
+                            {organizerMessageDismissError ? (
+                              <p className="admin-error">{organizerMessageDismissError}</p>
+                            ) : null}
+                          </div>
+                          <div className="modal-footer">
+                            <button type="button" className="button" onClick={() => setOrganizerMessagesOpen(false)}>
+                              OK
+                            </button>
+                          </div>
+                        </div>
+                      </div>,
+                      document.body
+                    )
+                  : null}
                 <h2>Dina event</h2>
                 <form className="admin-form admin-new-event-form" onSubmit={handleEventSubmit}>
                   <div className="admin-new-event-row">

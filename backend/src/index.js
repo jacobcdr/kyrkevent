@@ -158,6 +158,72 @@ const savePremiumPriceToDb = async (priceYear) => {
   cachedPremiumPriceYear = priceYear;
   return cachedPremiumPriceYear;
 };
+const PLATFORM_SETTINGS_PREMIUM_DISCOUNT_KEY = "premium_discount_codes";
+const normalizePremiumDiscountCode = (code) =>
+  String(code || "")
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, "");
+const parsePremiumDiscountPercent = (value) => {
+  const parsed = Number(String(value ?? "").trim().replace(/\s/g, "").replace(",", "."));
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 100) return null;
+  return Math.round(parsed);
+};
+const normalizePremiumDiscountCodes = (value) => {
+  const rows = Array.isArray(value) ? value : [];
+  const seen = new Set();
+  const codes = [];
+  for (const row of rows) {
+    const code = normalizePremiumDiscountCode(row?.code);
+    const percent = parsePremiumDiscountPercent(row?.percent);
+    if (!code || code.length > 32 || !/^[A-Z0-9-]+$/.test(code) || percent == null || seen.has(code)) continue;
+    seen.add(code);
+    codes.push({ code, percent });
+    if (codes.length >= 50) break;
+  }
+  return codes;
+};
+let cachedPremiumDiscountCodes = [];
+const getPremiumDiscountCodes = () => cachedPremiumDiscountCodes;
+const loadPremiumDiscountCodesFromDb = async () => {
+  try {
+    const result = await pool.query(
+      "SELECT value FROM platform_settings WHERE key = $1",
+      [PLATFORM_SETTINGS_PREMIUM_DISCOUNT_KEY]
+    );
+    cachedPremiumDiscountCodes = normalizePremiumDiscountCodes(result.rows[0]?.value);
+  } catch {
+    cachedPremiumDiscountCodes = [];
+  }
+  return cachedPremiumDiscountCodes;
+};
+const savePremiumDiscountCodesToDb = async (codes) => {
+  const normalized = normalizePremiumDiscountCodes(codes);
+  await pool.query(
+    `
+      INSERT INTO platform_settings (key, value, updated_at)
+      VALUES ($1, $2::jsonb, NOW())
+      ON CONFLICT (key) DO UPDATE SET
+        value = EXCLUDED.value,
+        updated_at = NOW()
+    `,
+    [PLATFORM_SETTINGS_PREMIUM_DISCOUNT_KEY, JSON.stringify(normalized)]
+  );
+  cachedPremiumDiscountCodes = normalized;
+  return cachedPremiumDiscountCodes;
+};
+const premiumAmountAfterDiscount = (listPrice, discountCode) => {
+  const code = normalizePremiumDiscountCode(discountCode);
+  if (!code) {
+    return { ok: true, amountSek: listPrice, code: "", percent: 0 };
+  }
+  const match = cachedPremiumDiscountCodes.find((row) => row.code === code);
+  if (!match) {
+    return { ok: false, error: "Ogiltig rabattkod." };
+  }
+  const amountSek = Math.max(0, Math.round(listPrice * (100 - match.percent)) / 100);
+  return { ok: true, amountSek, code: match.code, percent: match.percent };
+};
 const PLATFORM_SETTINGS_TICKET_PRICE_CAP_KEY = "ticket_price_cap";
 const TICKET_PRICE_CAP_MAX = 10000000;
 let cachedTicketPriceCap = null;
@@ -5340,7 +5406,21 @@ app.post("/admin/payments/start-premium", requireAdmin, paymentLimiter, async (r
       res.status(400).json({ ok: false, error: "Du har redan ett aktivt Premium-abonnemang." });
       return;
     }
-    const amountSek = getPremiumPriceYear();
+    const listPriceSek = getPremiumPriceYear();
+    const priced = premiumAmountAfterDiscount(listPriceSek, req.body?.discountCode);
+    if (!priced.ok) {
+      res.status(400).json({ ok: false, error: priced.error });
+      return;
+    }
+    const amountSek = priced.amountSek;
+    const premiumPayload = {
+      type: "premium",
+      profile_id: profileId,
+      amountSek,
+      listPriceSek,
+      discountCode: priced.code || undefined,
+      discountPercent: priced.percent || undefined
+    };
     if (amountSek <= 0) {
       await pool.query(
         `
@@ -5359,7 +5439,7 @@ app.post("/admin/payments/start-premium", requireAdmin, paymentLimiter, async (r
           INSERT INTO payment_orders (payment_id, payload, status, booking_id)
           VALUES ($1, $2, 'paid', -1)
         `,
-        [paymentId, { type: "premium", profile_id: profileId, amountSek: 0 }]
+        [paymentId, { ...premiumPayload, amountSek: 0 }]
       );
       res.json({ ok: true, activated: true, amountSek: 0 });
       return;
@@ -5386,7 +5466,7 @@ app.post("/admin/payments/start-premium", requireAdmin, paymentLimiter, async (r
          payload = EXCLUDED.payload,
          status = EXCLUDED.status,
          verify_token = COALESCE(payment_orders.verify_token, EXCLUDED.verify_token)`,
-      [payment.id, { type: "premium", profile_id: profileId, amountSek }, payment.status, verifyToken]
+      [payment.id, premiumPayload, payment.status, verifyToken]
     );
     res.json({ ok: true, checkoutUrl, verifyToken });
   } catch (error) {
@@ -6435,6 +6515,513 @@ const requireSuperAdmin = async (req, res, next) => {
   }
 };
 
+const MESSAGE_BADGE_MS = 24 * 60 * 60 * 1000;
+const MESSAGE_BODY_MAX = 2000;
+
+const normalizeMessageAudience = (value) => {
+  const key = String(value || "").trim().toLowerCase();
+  if (key === "bas" || key === "premium" || key === "all" || key === "upcoming" || key === "inactive_4m") return key;
+  return null;
+};
+
+const cleanMessageBody = (value) =>
+  String(value ?? "")
+    .replace(/\r\n/g, "\n")
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "")
+    .trim()
+    .slice(0, MESSAGE_BODY_MAX);
+
+const messageShowsBadge = (openedAt, now = Date.now()) => {
+  if (!openedAt) return true;
+  const opened = new Date(openedAt).getTime();
+  if (!Number.isFinite(opened)) return true;
+  return now - opened < MESSAGE_BADGE_MS;
+};
+
+const userMessageAudienceSql = `
+  CASE
+    WHEN p.subscription_plan = 'premium'
+      AND (p.premium_ends_at IS NULL OR p.premium_ends_at::date >= CURRENT_DATE)
+    THEN 'premium'
+    ELSE 'bas'
+  END
+`;
+
+const userCanSeeMessageSql = (userIdParam) => `
+  (
+    m.audience = 'all'
+    OR m.audience = ${userMessageAudienceSql}
+    OR (
+      m.audience = 'upcoming'
+      AND EXISTS (
+        SELECT 1
+        FROM events e
+        WHERE e.user_id = ${userIdParam}
+          AND COALESCE(e.event_end_date, e.event_start_date) >= CURRENT_DATE
+      )
+    )
+    OR (
+      m.audience = 'inactive_4m'
+      AND EXISTS (
+        SELECT 1
+        FROM admin_users u
+        WHERE u.id = ${userIdParam}
+          AND (u.last_login_at IS NULL OR u.last_login_at < NOW() - INTERVAL '4 months')
+      )
+    )
+  )
+`;
+
+app.get("/admin/messages", requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `
+        SELECT m.id, m.body, m.created_at, r.opened_at
+        FROM admin_messages m
+        LEFT JOIN admin_message_reads r
+          ON r.message_id = m.id AND r.user_id = $1
+        LEFT JOIN admin_user_profiles p ON p.user_id = $1
+        WHERE m.active = TRUE
+          AND r.dismissed_at IS NULL
+          AND ${userCanSeeMessageSql("$1")}
+        ORDER BY m.created_at DESC
+      `,
+      [req.userId]
+    );
+    res.json({
+      ok: true,
+      messages: result.rows.map((row) => ({
+        id: row.id,
+        body: row.body,
+        createdAt: row.created_at,
+        openedAt: row.opened_at,
+        showBadge: messageShowsBadge(row.opened_at)
+      }))
+    });
+  } catch (error) {
+    console.error("GET admin messages error:", error);
+    res.status(500).json({ ok: false, error: "Kunde inte hämta meddelanden." });
+  }
+});
+
+app.post("/admin/messages/open", requireAdmin, async (req, res) => {
+  try {
+    const ids = [
+      ...new Set(
+        (Array.isArray(req.body?.ids) ? req.body.ids : [])
+          .map((id) => parseInt(id, 10))
+          .filter((id) => Number.isInteger(id) && id > 0)
+      )
+    ].slice(0, 50);
+    if (ids.length === 0) {
+      return res.json({ ok: true, messages: [] });
+    }
+    await pool.query(
+      `
+        INSERT INTO admin_message_reads (message_id, user_id, opened_at)
+        SELECT m.id, $2, NOW()
+        FROM admin_messages m
+        LEFT JOIN admin_user_profiles p ON p.user_id = $2
+        WHERE m.id = ANY($1::int[])
+          AND m.active = TRUE
+          AND ${userCanSeeMessageSql("$2")}
+        ON CONFLICT (message_id, user_id) DO NOTHING
+      `,
+      [ids, req.userId]
+    );
+    const result = await pool.query(
+      `
+        SELECT message_id, opened_at
+        FROM admin_message_reads
+        WHERE user_id = $2 AND message_id = ANY($1::int[])
+      `,
+      [ids, req.userId]
+    );
+    res.json({
+      ok: true,
+      messages: result.rows.map((row) => ({
+        id: row.message_id,
+        openedAt: row.opened_at,
+        showBadge: messageShowsBadge(row.opened_at)
+      }))
+    });
+  } catch (error) {
+    console.error("POST admin messages open error:", error);
+    res.status(500).json({ ok: false, error: "Kunde inte markera meddelandet som öppnat." });
+  }
+});
+
+app.post("/admin/messages/:id/dismiss", requireAdmin, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id) || id < 1) {
+      return res.status(400).json({ ok: false, error: "Ogiltigt id" });
+    }
+    const result = await pool.query(
+      `
+        INSERT INTO admin_message_reads (message_id, user_id, opened_at, dismissed_at)
+        SELECT m.id, $2, NOW(), NOW()
+        FROM admin_messages m
+        LEFT JOIN admin_user_profiles p ON p.user_id = $2
+        WHERE m.id = $1
+          AND m.active = TRUE
+          AND ${userCanSeeMessageSql("$2")}
+        ON CONFLICT (message_id, user_id)
+        DO UPDATE SET dismissed_at = COALESCE(admin_message_reads.dismissed_at, NOW())
+        RETURNING message_id
+      `,
+      [id, req.userId]
+    );
+    if (!result.rows[0]) {
+      return res.status(404).json({ ok: false, error: "Meddelandet hittades inte." });
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("POST admin message dismiss error:", error);
+    res.status(500).json({ ok: false, error: "Kunde inte ta bort meddelandet." });
+  }
+});
+
+app.get("/admin/communication/messages", requireAdmin, requireSuperAdmin, async (_req, res) => {
+  try {
+    const result = await pool.query(
+      `
+        SELECT m.id, m.body, m.audience, m.active, m.created_at, m.removed_at,
+               (SELECT COUNT(*)::int FROM admin_message_reads r WHERE r.message_id = m.id) AS opened_count
+        FROM admin_messages m
+        ORDER BY m.created_at DESC
+      `
+    );
+    res.json({
+      ok: true,
+      messages: result.rows.map((row) => ({
+        id: row.id,
+        body: row.body,
+        audience: row.audience,
+        active: row.active === true,
+        createdAt: row.created_at,
+        removedAt: row.removed_at,
+        openedCount: row.opened_count
+      }))
+    });
+  } catch (error) {
+    console.error("GET communication messages error:", error);
+    res.status(500).json({ ok: false, error: "Kunde inte hämta meddelanden." });
+  }
+});
+
+app.get("/admin/communication/messages/:id/reads", requireAdmin, requireSuperAdmin, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id) || id < 1) {
+      return res.status(400).json({ ok: false, error: "Ogiltigt id" });
+    }
+    const message = await pool.query("SELECT id FROM admin_messages WHERE id = $1", [id]);
+    if (!message.rows[0]) {
+      return res.status(404).json({ ok: false, error: "Meddelandet hittades inte." });
+    }
+    const result = await pool.query(
+      `
+        SELECT r.user_id, r.opened_at, u.username,
+               p.first_name, p.last_name, p.organization, p.email
+        FROM admin_message_reads r
+        JOIN admin_users u ON u.id = r.user_id
+        LEFT JOIN admin_user_profiles p ON p.user_id = r.user_id
+        WHERE r.message_id = $1
+        ORDER BY r.opened_at DESC, r.user_id ASC
+      `,
+      [id]
+    );
+    res.json({
+      ok: true,
+      readers: result.rows.map((row) => {
+        const name = [row.first_name, row.last_name].filter(Boolean).join(" ").trim();
+        return {
+          userId: row.user_id,
+          name: name || String(row.organization || "").trim() || row.username,
+          organization: String(row.organization || "").trim(),
+          email: String(row.email || "").trim(),
+          username: row.username,
+          openedAt: row.opened_at
+        };
+      })
+    });
+  } catch (error) {
+    console.error("GET communication message reads error:", error);
+    res.status(500).json({ ok: false, error: "Kunde inte hämta vilka som öppnat meddelandet." });
+  }
+});
+
+const listMessageAudienceEmails = async (audience) => {
+  const result = await pool.query(
+    `
+      SELECT DISTINCT LOWER(TRIM(p.email)) AS email
+      FROM admin_users u
+      JOIN admin_user_profiles p ON p.user_id = u.id
+      WHERE NULLIF(TRIM(p.email), '') IS NOT NULL
+        AND (
+          $1 = 'all'
+          OR (
+            $1 = 'premium'
+            AND p.subscription_plan = 'premium'
+            AND (p.premium_ends_at IS NULL OR p.premium_ends_at::date >= CURRENT_DATE)
+          )
+          OR (
+            $1 = 'bas'
+            AND NOT (
+              p.subscription_plan = 'premium'
+              AND (p.premium_ends_at IS NULL OR p.premium_ends_at::date >= CURRENT_DATE)
+            )
+          )
+          OR (
+            $1 = 'upcoming'
+            AND EXISTS (
+              SELECT 1
+              FROM events e
+              WHERE e.user_id = u.id
+                AND COALESCE(e.event_end_date, e.event_start_date) >= CURRENT_DATE
+            )
+          )
+          OR (
+            $1 = 'inactive_4m'
+            AND (u.last_login_at IS NULL OR u.last_login_at < NOW() - INTERVAL '4 months')
+          )
+        )
+    `,
+    [audience]
+  );
+  return result.rows
+    .map((row) => String(row.email || "").trim())
+    .filter((email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email));
+};
+
+const MESSAGE_EMAIL_LOGO_PATH = path.resolve(__dirname, "..", "..", "frontend", "public", "kyrkevent2.png");
+const MESSAGE_EMAIL_LOGO_CID = "kyrkevent2";
+
+const buildUnreadMessageEmail = (loginUrl) => {
+  const logoUrl = `cid:${MESSAGE_EMAIL_LOGO_CID}`;
+  const safeLoginUrl = String(loginUrl || "https://kyrkevent.se/admin?view=login");
+  const subject = "Du har ett nytt meddelande hos Kyrkevent";
+  const text = [
+    "Du har ett nytt meddelande hos kyrkevent.se.",
+    "",
+    "Logga in för att läsa:",
+    safeLoginUrl
+  ].join("\n");
+  const html = `
+    <div style="margin:0;padding:32px 16px;background:#f1f5f9;">
+      <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="max-width:520px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;">
+        <tr>
+          <td style="padding:28px 32px 8px;text-align:center;">
+            <img src="${logoUrl}" alt="Kyrkevent" width="72" style="display:block;margin:0 auto 14px;width:72px;height:auto;border:0;" />
+            <div style="font-family:Georgia,'Times New Roman',serif;font-size:12px;letter-spacing:0.16em;text-transform:uppercase;color:#64748b;">Kyrkevent.se</div>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:12px 32px 32px;text-align:center;font-family:Arial,Helvetica,sans-serif;color:#334155;">
+            <h1 style="margin:0 0 12px;font-size:22px;line-height:1.3;font-weight:700;color:#1e293b;">Du har ett nytt meddelande</h1>
+            <p style="margin:0 0 22px;font-size:16px;line-height:1.5;">Logga in för att läsa det hos kyrkevent.se.</p>
+            <a href="${safeLoginUrl}" style="display:inline-block;background:#66788d;color:#ffffff;text-decoration:none;font-weight:700;font-size:15px;padding:12px 22px;border-radius:999px;">Logga in</a>
+            <p style="margin:18px 0 0;font-size:13px;line-height:1.5;color:#64748b;">
+              Eller öppna länken:<br />
+              <a href="${safeLoginUrl}" style="color:#556678;word-break:break-all;">${safeLoginUrl}</a>
+            </p>
+          </td>
+        </tr>
+      </table>
+    </div>
+  `;
+  return { subject, text, html };
+};
+
+const sendUnreadMessageNoticeEmails = async (audience) => {
+  if (!resend || !RESEND_FROM) {
+    return { sent: 0, failed: 0, error: "E-post är inte konfigurerat." };
+  }
+  const emails = await listMessageAudienceEmails(audience);
+  if (emails.length === 0) return { sent: 0, failed: 0 };
+  const siteUrl = String(primaryFrontendUrl || "https://kyrkevent.se").replace(/\/+$/, "");
+  const { subject, text, html } = buildUnreadMessageEmail(`${siteUrl}/admin?view=login`);
+  let logoContent = "";
+  try {
+    logoContent = fs.readFileSync(MESSAGE_EMAIL_LOGO_PATH).toString("base64");
+  } catch (error) {
+    console.error("Message email logo error:", error);
+    return { sent: 0, failed: emails.length, error: "Logotypen kyrkevent2.png kunde inte läsas." };
+  }
+  const attachments = [
+    {
+      filename: "kyrkevent2.png",
+      content: logoContent,
+      contentType: "image/png",
+      contentId: MESSAGE_EMAIL_LOGO_CID
+    }
+  ];
+  let sent = 0;
+  let failed = 0;
+  for (let index = 0; index < emails.length; index += 5) {
+    const chunk = emails.slice(index, index + 5);
+    const results = await Promise.allSettled(
+      chunk.map((to) => resend.emails.send({ from: RESEND_FROM, to, subject, text, html, attachments }))
+    );
+    for (const item of results) {
+      if (item.status === "fulfilled" && !item.value?.error) sent += 1;
+      else failed += 1;
+    }
+  }
+  if (sent === 0) {
+    return { sent: 0, failed, error: "E-posten kunde inte skickas." };
+  }
+  return { sent, failed };
+};
+
+app.post("/admin/communication/messages", requireAdmin, requireSuperAdmin, async (req, res) => {
+  try {
+    const body = cleanMessageBody(req.body?.body);
+    const audience = normalizeMessageAudience(req.body?.audience);
+    if (!body) {
+      return res.status(400).json({ ok: false, error: "Skriv ett meddelande." });
+    }
+    if (!audience) {
+      return res.status(400).json({ ok: false, error: "Välj vilka som ska få meddelandet." });
+    }
+    const result = await pool.query(
+      `
+        INSERT INTO admin_messages (body, audience, created_by)
+        VALUES ($1, $2, $3)
+        RETURNING id, body, audience, active, created_at
+      `,
+      [body, audience, req.userId]
+    );
+    const row = result.rows[0];
+    let emailSent = 0;
+    let emailFailed = 0;
+    let emailError = "";
+    if (req.body?.notifyEmail === true) {
+      try {
+        const emailResult = await sendUnreadMessageNoticeEmails(audience);
+        emailSent = emailResult.sent || 0;
+        emailFailed = emailResult.failed || 0;
+        emailError = emailResult.error || "";
+      } catch (error) {
+        console.error("Communication notice email error:", error);
+        emailError = "E-posten kunde inte skickas.";
+      }
+    }
+    res.json({
+      ok: true,
+      emailSent,
+      emailFailed,
+      emailError,
+      message: {
+        id: row.id,
+        body: row.body,
+        audience: row.audience,
+        active: true,
+        createdAt: row.created_at,
+        removedAt: null,
+        openedCount: 0
+      }
+    });
+  } catch (error) {
+    console.error("POST communication message error:", error);
+    res.status(500).json({ ok: false, error: "Kunde inte skicka meddelandet." });
+  }
+});
+
+app.put("/admin/communication/messages/:id", requireAdmin, requireSuperAdmin, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id) || id < 1) {
+      return res.status(400).json({ ok: false, error: "Ogiltigt id" });
+    }
+    const body = cleanMessageBody(req.body?.body);
+    const audience = normalizeMessageAudience(req.body?.audience);
+    if (!body) {
+      return res.status(400).json({ ok: false, error: "Skriv ett meddelande." });
+    }
+    if (!audience) {
+      return res.status(400).json({ ok: false, error: "Välj vilka som ska få meddelandet." });
+    }
+    const result = await pool.query(
+      `
+        UPDATE admin_messages
+        SET body = $2, audience = $3
+        WHERE id = $1 AND active = TRUE
+        RETURNING id, body, audience, active, created_at, removed_at
+      `,
+      [id, body, audience]
+    );
+    const row = result.rows[0];
+    if (!row) {
+      return res.status(404).json({ ok: false, error: "Aktivt meddelande hittades inte." });
+    }
+    res.json({
+      ok: true,
+      message: {
+        id: row.id,
+        body: row.body,
+        audience: row.audience,
+        active: true,
+        createdAt: row.created_at,
+        removedAt: row.removed_at
+      }
+    });
+  } catch (error) {
+    console.error("PUT communication message error:", error);
+    res.status(500).json({ ok: false, error: "Kunde inte spara meddelandet." });
+  }
+});
+
+app.post("/admin/communication/messages/:id/remove", requireAdmin, requireSuperAdmin, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id) || id < 1) {
+      return res.status(400).json({ ok: false, error: "Ogiltigt id" });
+    }
+    const result = await pool.query(
+      `
+        UPDATE admin_messages
+        SET active = FALSE, removed_at = COALESCE(removed_at, NOW())
+        WHERE id = $1 AND active = TRUE
+        RETURNING id
+      `,
+      [id]
+    );
+    if (!result.rows[0]) {
+      return res.status(404).json({ ok: false, error: "Meddelandet hittades inte eller är redan borttaget." });
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("POST remove communication message error:", error);
+    res.status(500).json({ ok: false, error: "Kunde inte ta bort meddelandet." });
+  }
+});
+
+app.delete("/admin/communication/messages/:id", requireAdmin, requireSuperAdmin, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id) || id < 1) {
+      return res.status(400).json({ ok: false, error: "Ogiltigt id" });
+    }
+    const result = await pool.query(
+      `
+        DELETE FROM admin_messages
+        WHERE id = $1 AND active = FALSE
+        RETURNING id
+      `,
+      [id]
+    );
+    if (!result.rows[0]) {
+      return res.status(404).json({ ok: false, error: "Historiskt meddelande hittades inte." });
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("DELETE communication message error:", error);
+    res.status(500).json({ ok: false, error: "Kunde inte radera meddelandet." });
+  }
+});
+
 app.get("/service-fee/tiers", async (_req, res) => {
   try {
     res.json({ ok: true, tiers: getServiceFeeTiers() });
@@ -6467,11 +7054,45 @@ app.put("/admin/platform-settings/service-fee-tiers", requireAdmin, requireSuper
 });
 
 app.get("/premium-price", async (_req, res) => {
-  res.json({ ok: true, priceYear: getPremiumPriceYear() });
+  res.json({
+    ok: true,
+    priceYear: getPremiumPriceYear(),
+    hasDiscountCode: getPremiumDiscountCodes().length > 0
+  });
 });
 
 app.get("/admin/platform-settings/premium-price", requireAdmin, requireSuperAdmin, async (_req, res) => {
   res.json({ ok: true, priceYear: getPremiumPriceYear() });
+});
+
+app.get("/admin/platform-settings/premium-discount-codes", requireAdmin, requireSuperAdmin, async (_req, res) => {
+  res.json({ ok: true, codes: getPremiumDiscountCodes() });
+});
+
+app.put("/admin/platform-settings/premium-discount-codes", requireAdmin, requireSuperAdmin, async (req, res) => {
+  const incoming = Array.isArray(req.body?.codes) ? req.body.codes : null;
+  if (!incoming) {
+    res.status(400).json({ ok: false, error: "Ange rabattkoderna som en lista." });
+    return;
+  }
+  if (incoming.length > 50) {
+    res.status(400).json({ ok: false, error: "Högst 50 rabattkoder." });
+    return;
+  }
+  for (const row of incoming) {
+    const code = normalizePremiumDiscountCode(row?.code);
+    const percent = parsePremiumDiscountPercent(row?.percent);
+    if (!code || code.length > 32 || !/^[A-Z0-9-]+$/.test(code) || percent == null) {
+      res.status(400).json({ ok: false, error: "Varje kod behöver ett namn och en rabatt mellan 1 och 100 procent." });
+      return;
+    }
+  }
+  try {
+    const codes = await savePremiumDiscountCodesToDb(incoming);
+    res.json({ ok: true, codes });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Kunde inte spara rabattkoderna." });
+  }
 });
 
 app.put("/admin/platform-settings/premium-price", requireAdmin, requireSuperAdmin, async (req, res) => {
@@ -13731,6 +14352,44 @@ const ensureBookingsTable = async () => {
   );
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS admin_messages (
+      id SERIAL PRIMARY KEY,
+      body TEXT NOT NULL,
+      audience TEXT NOT NULL,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_by INTEGER REFERENCES admin_users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      removed_at TIMESTAMPTZ,
+      CONSTRAINT admin_messages_audience_check CHECK (audience IN ('bas', 'premium', 'all', 'upcoming', 'inactive_4m'))
+    )
+  `);
+  await pool.query(`
+    ALTER TABLE admin_messages DROP CONSTRAINT IF EXISTS admin_messages_audience_check
+  `);
+  await pool.query(`
+    ALTER TABLE admin_messages
+      ADD CONSTRAINT admin_messages_audience_check
+      CHECK (audience IN ('bas', 'premium', 'all', 'upcoming', 'inactive_4m'))
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_admin_messages_active_created
+      ON admin_messages (active, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS admin_message_reads (
+      message_id INTEGER NOT NULL REFERENCES admin_messages(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+      opened_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      dismissed_at TIMESTAMPTZ,
+      PRIMARY KEY (message_id, user_id)
+    )
+  `);
+  await pool.query(`
+    ALTER TABLE admin_message_reads
+      ADD COLUMN IF NOT EXISTS dismissed_at TIMESTAMPTZ
+  `);
+
+  await pool.query(`
     ALTER TABLE admin_user_profiles
       ALTER COLUMN subscription_plan SET DEFAULT 'bas'
   `);
@@ -13773,6 +14432,7 @@ waitForDatabase(pool)
   .then(() => ensureBookingsTable())
   .then(() => loadServiceFeeTiersFromDb())
   .then(() => loadPremiumPriceFromDb())
+  .then(() => loadPremiumDiscountCodesFromDb())
   .then(() => loadTicketPriceCapFromDb())
   .then(() => loadPayoutFeeFromDb())
   .then(() => {
