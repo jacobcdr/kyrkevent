@@ -46,6 +46,20 @@ const REFERRER_LABELS = {
   unknown: "Okänd"
 };
 
+const SECTION_ATTENTION_LABELS = {
+  hero: "Startbild",
+  text: "Eventbeskrivning",
+  formButton: "Call to action",
+  program: "Program",
+  faq: "FAQ",
+  form: "Anmäl dig här",
+  speakers: "Personer",
+  partners: "Partner",
+  gallery: "Galleri",
+  social: "Sociala medier",
+  place: "Plats"
+};
+
 function formatDayLabel(isoDate) {
   if (!isoDate) return "";
   const d = new Date(`${isoDate}T12:00:00`);
@@ -323,6 +337,94 @@ function TicketSalesDonut({ ticketSales, checkIn }) {
         </div>
       )}
       <CheckInChart checkIn={checkIn} />
+    </div>
+  );
+}
+
+function SectionAttentionDonut({ rows }) {
+  const slices = (Array.isArray(rows) ? rows : [])
+    .filter((row) => Number(row.percent) > 0)
+    .map((row) => ({
+      key: row.key,
+      name: SECTION_ATTENTION_LABELS[row.key] || row.key,
+      percent: Number(row.percent) || 0
+    }));
+  const [activeIndex, setActiveIndex] = useState(0);
+  const highlighted = slices[activeIndex] || slices[0] || null;
+
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [rows]);
+
+  return (
+    <div className="ticket-donut-section">
+      <h2>Sektioner besökarna tittar på</h2>
+      <p className="muted" style={{ marginTop: 0 }}>
+        Andel av tiden en sektion är synlig på skärmen i vald period. Siffrorna uppdateras medan besökare tittar.
+      </p>
+      {slices.length === 0 ? (
+        <p className="muted">Ingen sektionsdata för valt filter ännu.</p>
+      ) : (
+        <div className="ticket-donut">
+          <div className="ticket-donut-chart" aria-hidden="true">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart margin={{ top: 4, right: 4, bottom: 4, left: 4 }}>
+                <Pie
+                  data={slices}
+                  dataKey="percent"
+                  nameKey="name"
+                  cx="50%"
+                  cy="50%"
+                  innerRadius="68%"
+                  outerRadius="92%"
+                  paddingAngle={slices.length > 1 ? 3 : 0}
+                  startAngle={90}
+                  endAngle={-270}
+                  stroke="#ffffff"
+                  strokeWidth={3}
+                  cornerRadius={slices.length > 1 ? 4 : 0}
+                  style={{ cursor: "pointer", outline: "none" }}
+                  onMouseEnter={(_, index) => setActiveIndex(index)}
+                >
+                  {slices.map((row, index) => (
+                    <Cell
+                      key={row.key}
+                      fill={TICKET_DONUT_COLORS[index % TICKET_DONUT_COLORS.length]}
+                      fillOpacity={index === activeIndex ? 1 : 0.88}
+                    />
+                  ))}
+                </Pie>
+              </PieChart>
+            </ResponsiveContainer>
+            {highlighted ? (
+              <div className="ticket-donut-center">
+                <strong>{highlighted.percent}%</strong>
+                <span>{highlighted.name}</span>
+              </div>
+            ) : null}
+          </div>
+          <ul className="ticket-donut-legend">
+            {slices.map((row, index) => (
+              <li key={row.key}>
+                <button
+                  type="button"
+                  className={`ticket-donut-legend-item${index === activeIndex ? " is-active" : ""}`}
+                  onMouseEnter={() => setActiveIndex(index)}
+                  onFocus={() => setActiveIndex(index)}
+                  onClick={() => setActiveIndex(index)}
+                >
+                  <span
+                    className="ticket-donut-legend-swatch"
+                    style={{ background: TICKET_DONUT_COLORS[index % TICKET_DONUT_COLORS.length] }}
+                  />
+                  <span className="ticket-donut-legend-label">{row.name}</span>
+                  <span className="ticket-donut-legend-percent">{row.percent}%</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
@@ -888,6 +990,8 @@ export function EventAnalytics({ apiBase, token, eventId, overview, bookings = [
           ) : (
             <p className="muted">Inga besökare i valt filter ännu.</p>
           )}
+
+          <SectionAttentionDonut rows={data.sectionAttention} />
 
           <div className="event-analytics-breakdown">
             <div className="event-analytics-breakdown-col event-analytics-breakdown-col--wide">

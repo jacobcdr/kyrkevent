@@ -525,6 +525,12 @@ const siteViewLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false
 });
+const sectionViewLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false
+});
 const eventViewLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 60,
@@ -2806,6 +2812,67 @@ app.post("/events/:slug/view", eventViewLimiter, async (req, res) => {
     res.json({ ok: true, viewCount: result.rows[0]?.view_count ?? null });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to track view" });
+  }
+});
+
+const EVENT_SECTION_VIEW_KEYS = new Set([
+  "hero",
+  "text",
+  "formButton",
+  "program",
+  "faq",
+  "form",
+  "speakers",
+  "partners",
+  "gallery",
+  "social",
+  "place"
+]);
+
+app.post("/events/:slug/section-views", sectionViewLimiter, async (req, res) => {
+  const slug = String(req.params.slug || "").trim();
+  if (!slug) {
+    res.status(400).json({ ok: false, error: "Missing slug" });
+    return;
+  }
+  if (parseDeviceType(req.headers["user-agent"] || "") === "bot") {
+    res.json({ ok: true });
+    return;
+  }
+  const incoming = Array.isArray(req.body?.sections) ? req.body.sections.slice(0, 12) : [];
+  const sections = [];
+  for (const row of incoming) {
+    const key = String(row?.key || "").trim();
+    const ms = Math.round(Number(row?.ms));
+    if (!EVENT_SECTION_VIEW_KEYS.has(key) || !Number.isFinite(ms) || ms < 1000) continue;
+    sections.push({ key, ms: Math.min(ms, 60000) });
+  }
+  if (sections.length === 0) {
+    res.json({ ok: true });
+    return;
+  }
+  try {
+    const eventResult = await pool.query("SELECT id FROM events WHERE slug = $1", [slug]);
+    if (eventResult.rowCount === 0) {
+      res.status(404).json({ ok: false, error: "Event not found" });
+      return;
+    }
+    const eventId = eventResult.rows[0].id;
+    for (const section of sections) {
+      await pool.query(
+        `
+          INSERT INTO event_section_view_days (event_id, section_key, view_date, visible_ms)
+          VALUES ($1, $2, (NOW() AT TIME ZONE '${ANALYTICS_TZ}')::date, $3)
+          ON CONFLICT (event_id, section_key, view_date)
+          DO UPDATE SET visible_ms = event_section_view_days.visible_ms + EXCLUDED.visible_ms
+        `,
+        [eventId, section.key, section.ms]
+      );
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("POST section views error:", error);
+    res.status(500).json({ ok: false, error: "Failed to track sections" });
   }
 });
 
@@ -5311,9 +5378,9 @@ app.get("/admin/profile", requireAdmin, async (req, res) => {
       [req.userId]
     );
     let profile = result.rows[0] || null;
-    if (profile && profile.subscription_plan === "premium" && profile.premium_ends_at) {
+    if (profile && profile.subscription_plan === "premium" && profile.premium_avslut_requested_at && profile.premium_ends_at) {
       const expired = await pool.query(
-        "SELECT (premium_ends_at::date < CURRENT_DATE) AS expired FROM admin_user_profiles WHERE user_id = $1",
+        "SELECT (premium_ends_at::date < CURRENT_DATE AND premium_avslut_requested_at IS NOT NULL) AS expired FROM admin_user_profiles WHERE user_id = $1",
         [req.userId]
       );
       if (expired.rows[0]?.expired === true) {
@@ -5376,10 +5443,30 @@ app.post("/admin/payments/start-bas", requireAdmin, paymentLimiter, async (_req,
   });
 });
 
+app.post("/admin/payments/preview-premium", requireAdmin, async (req, res) => {
+  const listPriceSek = getPremiumPriceYear();
+  const priced = premiumAmountAfterDiscount(listPriceSek, req.body?.discountCode);
+  if (!priced.ok) {
+    res.status(400).json({ ok: false, error: priced.error });
+    return;
+  }
+  if (!priced.code) {
+    res.status(400).json({ ok: false, error: "Ange en rabattkod." });
+    return;
+  }
+  res.json({
+    ok: true,
+    code: priced.code,
+    percent: priced.percent,
+    amountSek: priced.amountSek,
+    listPriceSek
+  });
+});
+
 app.post("/admin/payments/start-premium", requireAdmin, paymentLimiter, async (req, res) => {
   try {
     const profileRow = await pool.query(
-      "SELECT profile_id, first_name, last_name, organization, subscription_plan, premium_ends_at FROM admin_user_profiles WHERE user_id = $1",
+      "SELECT profile_id, first_name, last_name, organization, subscription_plan, premium_ends_at, premium_avslut_requested_at FROM admin_user_profiles WHERE user_id = $1",
       [req.userId]
     );
     const row = profileRow.rows[0];
@@ -5400,8 +5487,10 @@ app.post("/admin/payments/start-premium", requireAdmin, paymentLimiter, async (r
     }
     const todayStr = new Date().toISOString().slice(0, 10);
     const endsAtStr = row?.premium_ends_at ? new Date(row.premium_ends_at).toISOString().slice(0, 10) : "";
+    const premiumCancelled = Boolean(row?.premium_avslut_requested_at);
     const hasActivePremium =
-      (row?.subscription_plan || "").toLowerCase() === "premium" && endsAtStr && endsAtStr >= todayStr;
+      (row?.subscription_plan || "").toLowerCase() === "premium" &&
+      (!premiumCancelled || !endsAtStr || endsAtStr >= todayStr);
     if (hasActivePremium) {
       res.status(400).json({ ok: false, error: "Du har redan ett aktivt Premium-abonnemang." });
       return;
@@ -5495,14 +5584,15 @@ app.put("/admin/profile", requireAdmin, async (req, res) => {
     : normalizeSubscriptionPlan(subscriptionPlan);
   try {
     const existing = await pool.query(
-      "SELECT profile_id, subscription_plan, premium_activated_at, premium_ends_at FROM admin_user_profiles WHERE user_id = $1",
+      "SELECT profile_id, subscription_plan, premium_activated_at, premium_ends_at, premium_avslut_requested_at FROM admin_user_profiles WHERE user_id = $1",
       [req.userId]
     );
     const wasPremium = (existing.rows[0]?.subscription_plan || "").toLowerCase() === "premium";
     const premiumEndsAt = existing.rows[0]?.premium_ends_at;
     const todayStr = new Date().toISOString().slice(0, 10);
     const endsAtStr = premiumEndsAt ? new Date(premiumEndsAt).toISOString().slice(0, 10) : "";
-    const premiumStillActive = wasPremium && endsAtStr && endsAtStr >= todayStr;
+    const premiumCancelled = Boolean(existing.rows[0]?.premium_avslut_requested_at);
+    const premiumStillActive = wasPremium && (!premiumCancelled || !endsAtStr || endsAtStr >= todayStr);
     let effectivePlan = premiumStillActive && plan === "bas" ? "premium" : plan;
     if (plan === "premium" && !premiumStillActive) {
       effectivePlan = normalizeSubscriptionPlan(existing.rows[0]?.subscription_plan);
@@ -5586,6 +5676,28 @@ app.post("/admin/profile/premium-avslut", requireAdmin, async (req, res) => {
     res.json({ ok: true, premium_avslut_requested_at: result.rows[0].premium_avslut_requested_at });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Kunde inte registrera avslut." });
+  }
+});
+
+app.post("/admin/profile/premium-ateraktivera", requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `UPDATE admin_user_profiles
+       SET premium_avslut_requested_at = NULL
+       WHERE user_id = $1
+         AND subscription_plan = 'premium'
+         AND premium_ends_at IS NOT NULL
+         AND premium_ends_at::date >= CURRENT_DATE
+         AND premium_avslut_requested_at IS NOT NULL
+       RETURNING user_id`,
+      [req.userId]
+    );
+    if (result.rowCount === 0) {
+      return res.status(400).json({ ok: false, error: "Inget avslutat Premium-abonnemang att aktivera igen." });
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Kunde inte aktivera Premium igen." });
   }
 });
 
@@ -6541,7 +6653,11 @@ const messageShowsBadge = (openedAt, now = Date.now()) => {
 const userMessageAudienceSql = `
   CASE
     WHEN p.subscription_plan = 'premium'
-      AND (p.premium_ends_at IS NULL OR p.premium_ends_at::date >= CURRENT_DATE)
+      AND (
+        p.premium_avslut_requested_at IS NULL
+        OR p.premium_ends_at IS NULL
+        OR p.premium_ends_at::date >= CURRENT_DATE
+      )
     THEN 'premium'
     ELSE 'bas'
   END
@@ -6764,13 +6880,21 @@ const listMessageAudienceEmails = async (audience) => {
           OR (
             $1 = 'premium'
             AND p.subscription_plan = 'premium'
-            AND (p.premium_ends_at IS NULL OR p.premium_ends_at::date >= CURRENT_DATE)
+            AND (
+              p.premium_avslut_requested_at IS NULL
+              OR p.premium_ends_at IS NULL
+              OR p.premium_ends_at::date >= CURRENT_DATE
+            )
           )
           OR (
             $1 = 'bas'
             AND NOT (
               p.subscription_plan = 'premium'
-              AND (p.premium_ends_at IS NULL OR p.premium_ends_at::date >= CURRENT_DATE)
+              AND (
+                p.premium_avslut_requested_at IS NULL
+                OR p.premium_ends_at IS NULL
+                OR p.premium_ends_at::date >= CURRENT_DATE
+              )
             )
           )
           OR (
@@ -9907,6 +10031,7 @@ app.delete("/admin/events/:id", requireAdmin, async (req, res) => {
     await client.query("DELETE FROM hero_section WHERE event_id = $1", [eventId]);
     await client.query("DELETE FROM event_page_view_hits WHERE event_id = $1", [eventId]);
     await client.query("DELETE FROM event_page_views WHERE event_id = $1", [eventId]);
+    await client.query("DELETE FROM event_section_view_days WHERE event_id = $1", [eventId]);
     await client.query("DELETE FROM event_activity_log WHERE event_id = $1", [eventId]);
     const result = await client.query(
       "DELETE FROM events WHERE id = $1 AND user_id = $2",
@@ -13198,7 +13323,7 @@ app.get("/admin/event-analytics", requireAdmin, async (req, res) => {
       ORDER BY unique_count DESC, view_count DESC
     `;
 
-    const [seriesResult, deviceResult, referrerResult, locationResult, totalResult, lifetimeResult, lifetimeUniqueResult, ticketSalesResult, checkInResult] =
+    const [seriesResult, deviceResult, referrerResult, locationResult, totalResult, lifetimeResult, lifetimeUniqueResult, ticketSalesResult, checkInResult, sectionViewResult] =
       await Promise.all([
       pool.query(seriesQuery, baseParams),
       pool.query(breakdownQuery("device_type"), baseParams),
@@ -13268,6 +13393,18 @@ app.get("/admin/event-analytics", requireAdmin, async (req, res) => {
             AND LOWER(payment_status) IN ('paid', 'manual')
         `,
         [eventId]
+      ),
+      pool.query(
+        `
+          SELECT section_key, SUM(visible_ms)::bigint AS visible_ms
+          FROM event_section_view_days
+          WHERE event_id = $1
+            AND view_date >= $2::date
+            AND view_date <= $3::date
+          GROUP BY section_key
+          ORDER BY visible_ms DESC, section_key ASC
+        `,
+        [eventId, range.from, range.to]
       )
     ]);
 
@@ -13299,6 +13436,12 @@ app.get("/admin/event-analytics", requireAdmin, async (req, res) => {
     const checkInTotal = Number(checkInResult.rows[0]?.total) || 0;
     const notCheckedIn = Math.max(0, checkInTotal - checkedIn);
     const [checkedPercent = 0, notCheckedPercent = 0] = allocateWholePercents([checkedIn, notCheckedIn]);
+    const sectionMs = (sectionViewResult.rows || []).map((row) => Number(row.visible_ms) || 0);
+    const sectionPercents = allocateWholePercents(sectionMs);
+    const sectionAttention = (sectionViewResult.rows || []).map((row, index) => ({
+      key: row.section_key,
+      percent: sectionPercents[index] || 0
+    }));
 
     res.json({
       ok: true,
@@ -13325,6 +13468,7 @@ app.get("/admin/event-analytics", requireAdmin, async (req, res) => {
           checkedPercent,
           notCheckedPercent
         },
+        sectionAttention,
         series,
         devices: withPercents(deviceResult.rows),
         referrers: withPercents(referrerResult.rows),
@@ -13935,6 +14079,15 @@ const ensureBookingsTable = async () => {
     CREATE INDEX IF NOT EXISTS idx_event_page_view_hits_event_visitor
       ON event_page_view_hits (event_id, visitor_id)
       WHERE visitor_id <> ''
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS event_section_view_days (
+      event_id INTEGER NOT NULL,
+      section_key TEXT NOT NULL,
+      view_date DATE NOT NULL,
+      visible_ms BIGINT NOT NULL DEFAULT 0,
+      PRIMARY KEY (event_id, section_key, view_date)
+    )
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS site_page_view_hits (

@@ -5438,6 +5438,44 @@ select.goog-te-combo {
   width: 100%;
 }
 
+.premium-code-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.premium-confirm-buy .premium-code-row input {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+}
+
+.premium-code-toggle {
+  width: 2.5rem;
+  min-width: 2.5rem;
+  height: 2.5rem;
+  padding: 0;
+  font-size: 1.45rem;
+  line-height: 1;
+}
+
+.premium-code-applied {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 0.35rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid #bbf7d0;
+  border-radius: 10px;
+  background: #f0fdf4;
+}
+
+.premium-code-applied p {
+  margin: 0;
+}
+
 .premium-confirm-actions {
   display: flex;
   justify-content: flex-end;

@@ -3748,6 +3748,7 @@ const AdminPage = () => {
   };
   const [vatRateHelpOpen, setVatRateHelpOpen] = useState(false);
   const [subscriptionPlanInfoOpen, setSubscriptionPlanInfoOpen] = useState(false);
+  const [subscriptionSamePlanNotice, setSubscriptionSamePlanNotice] = useState(false);
   const [loading, setLoading] = useState(false);
   const [backendStatus, setBackendStatus] = useState("checking");
   const [dbStatus, setDbStatus] = useState("checking");
@@ -4132,6 +4133,7 @@ const AdminPage = () => {
   const [organizerMessageDismissError, setOrganizerMessageDismissError] = useState("");
   const [showPremiumConfirm, setShowPremiumConfirm] = useState(false);
   const [showPremiumAvslutaInfo, setShowPremiumAvslutaInfo] = useState(false);
+  const [premiumReactivateLoading, setPremiumReactivateLoading] = useState(false);
   const [premiumPaymentLoading, setPremiumPaymentLoading] = useState(false);
   const [passwordForm, setPasswordForm] = useState({
     currentPassword: "",
@@ -4213,6 +4215,9 @@ const AdminPage = () => {
   const [premiumDiscountMessage, setPremiumDiscountMessage] = useState("");
   const [premiumPurchaseCode, setPremiumPurchaseCode] = useState("");
   const [premiumPurchaseCodeError, setPremiumPurchaseCodeError] = useState("");
+  const [premiumPurchaseApplied, setPremiumPurchaseApplied] = useState(null);
+  const [premiumPurchaseCodeNotice, setPremiumPurchaseCodeNotice] = useState(false);
+  const [premiumPurchaseCodeChecking, setPremiumPurchaseCodeChecking] = useState(false);
   const [premiumDiscountAvailable, setPremiumDiscountAvailable] = useState(false);
   const [ticketPriceCap, setTicketPriceCap] = useState(null);
   const [ticketPriceCapInput, setTicketPriceCapInput] = useState("");
@@ -4713,7 +4718,8 @@ const AdminPage = () => {
       bgNumber: profile.bg_number || "",
       vatExempt: profile.vat_exempt === true,
       premium_activated_at: profile.premium_activated_at || null,
-      premium_ends_at: profile.premium_ends_at || null
+      premium_ends_at: profile.premium_ends_at || null,
+      premium_avslut_requested_at: profile.premium_avslut_requested_at || null
     });
   };
 
@@ -5725,6 +5731,14 @@ const AdminPage = () => {
   }, []);
 
   useEffect(() => {
+    if (showPremiumConfirm) return;
+    setPremiumPurchaseCode("");
+    setPremiumPurchaseCodeError("");
+    setPremiumPurchaseApplied(null);
+    setPremiumPurchaseCodeNotice(false);
+  }, [showPremiumConfirm]);
+
+  useEffect(() => {
     if (token) loadTicketPriceCap();
   }, [token]);
 
@@ -6534,7 +6548,7 @@ const AdminPage = () => {
     const activePlan = normalizeSubscriptionPlan(activeSubscriptionPlan);
     if (plan === "bas" && activePlan === "bas") {
       setError("");
-      showToast("Du har redan Bas-abonnemang.");
+      setSubscriptionSamePlanNotice(true);
       return;
     }
     if (plan === "premium") {
@@ -6570,7 +6584,7 @@ const AdminPage = () => {
           Authorization: `Bearer ${token}`
         },
         body: JSON.stringify({
-          discountCode: premiumDiscountAvailable ? premiumPurchaseCode.trim() : ""
+          discountCode: premiumPurchaseApplied?.code || ""
         })
       });
       const data = await response.json();
@@ -6600,6 +6614,49 @@ const AdminPage = () => {
       setError(errMsg);
     } finally {
       setPremiumPaymentLoading(false);
+    }
+  };
+
+  const applyPremiumPurchaseCode = async () => {
+    if (!token || premiumPurchaseCodeChecking) return false;
+    const code = premiumPurchaseCode.trim();
+    if (!code) {
+      setPremiumPurchaseCodeError("Ange en rabattkod.");
+      return false;
+    }
+    setPremiumPurchaseCodeChecking(true);
+    setPremiumPurchaseCodeError("");
+    setPremiumPurchaseCodeNotice(false);
+    try {
+      const response = await fetch(`${API_BASE}/admin/payments/preview-premium`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ discountCode: code })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) {
+        setPremiumPurchaseApplied(null);
+        setPremiumPurchaseCodeError(data.error || "Ogiltig rabattkod.");
+        return false;
+      }
+      setPremiumPurchaseCode(data.code || code);
+      setPremiumPurchaseApplied({
+        code: data.code,
+        percent: data.percent,
+        amountSek: data.amountSek,
+        listPriceSek: data.listPriceSek
+      });
+      setPremiumPurchaseCodeNotice(true);
+      return true;
+    } catch {
+      setPremiumPurchaseApplied(null);
+      setPremiumPurchaseCodeError("Kunde inte kontrollera rabattkoden.");
+      return false;
+    } finally {
+      setPremiumPurchaseCodeChecking(false);
     }
   };
 
@@ -6639,6 +6696,30 @@ const AdminPage = () => {
       }
     } catch (err) {
       setError(err?.message || "Kunde inte registrera avslut.");
+    }
+  };
+
+  const handlePremiumReactivate = async () => {
+    if (!token || premiumReactivateLoading) return;
+    setPremiumReactivateLoading(true);
+    setError("");
+    try {
+      const response = await fetch(`${API_BASE}/admin/profile/premium-ateraktivera`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error || "Kunde inte aktivera Premium igen.");
+      }
+      await loadProfile(token);
+      setShowPremiumAvslutaInfo(false);
+      setShowPremiumConfirm(false);
+      showToast("Premium är aktiverat igen.");
+    } catch (err) {
+      setError(err?.message || "Kunde inte aktivera Premium igen.");
+    } finally {
+      setPremiumReactivateLoading(false);
     }
   };
 
@@ -9573,6 +9654,26 @@ const AdminPage = () => {
               </button>
               <button type="button" className="button button-danger" onClick={confirmCustomFieldDelete}>
                 Ja
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {subscriptionSamePlanNotice ? (
+        <div className="toaster-overlay" onClick={() => setSubscriptionSamePlanNotice(false)} aria-hidden="false">
+          <div
+            className="toaster toaster-confirm"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-labelledby="subscription-same-plan-title"
+            aria-modal="true"
+          >
+            <h3 id="subscription-same-plan-title" className="toaster-title">Abonnemang</h3>
+            <p className="toaster-message">Ange ett annat abonnemang för att spara.</p>
+            <div className="toaster-actions">
+              <button type="button" className="button" onClick={() => setSubscriptionSamePlanNotice(false)}>
+                OK
               </button>
             </div>
           </div>
@@ -13022,7 +13123,8 @@ const AdminPage = () => {
                     const todayStart = new Date();
                     todayStart.setHours(0, 0, 0, 0);
                     const activePlan = normalizeSubscriptionPlan(activeSubscriptionPlan);
-                    const isPremiumActive = activePlan === "premium" && (!premiumEndsAt || premiumEndsAt >= todayStart);
+                    const premiumCancelled = Boolean(profileForm.premium_avslut_requested_at);
+                    const isPremiumActive = activePlan === "premium" && (!premiumCancelled || !premiumEndsAt || premiumEndsAt >= todayStart);
                     const basDisabled = isPremiumActive;
                     return (
                       <>
@@ -13077,14 +13179,13 @@ const AdminPage = () => {
                       Bas ingår vid registrering – abonnemang med begränsade funktioner.
                     </p>
                   ) : null}
-                  {normalizeSubscriptionPlan(activeSubscriptionPlan) === "premium" && (profileForm.premium_activated_at || profileForm.premium_ends_at) ? (
+                  {normalizeSubscriptionPlan(activeSubscriptionPlan) === "premium" ? (
                     <div className="subscription-plan-premium-dates">
-                      {profileForm.premium_activated_at ? (
-                        <div className="subscription-plan-credits">Aktiv från {new Date(profileForm.premium_activated_at).toLocaleDateString("sv-SE", { year: "numeric", month: "long", day: "numeric" })}</div>
-                      ) : null}
-                      {profileForm.premium_ends_at ? (
+                      {profileForm.premium_avslut_requested_at && profileForm.premium_ends_at ? (
                         <div className="subscription-plan-credits">Giltig till {new Date(profileForm.premium_ends_at).toLocaleDateString("sv-SE", { year: "numeric", month: "long", day: "numeric" })}</div>
-                      ) : null}
+                      ) : (
+                        <div className="subscription-plan-credits">Tillsvidare</div>
+                      )}
                     </div>
                   ) : null}
                 </div>
@@ -13280,7 +13381,8 @@ const AdminPage = () => {
                       const pe = profileForm.premium_ends_at ? new Date(profileForm.premium_ends_at) : null;
                       const todayStart = new Date();
                       todayStart.setHours(0, 0, 0, 0);
-                      const hasActivePremium = normalizeSubscriptionPlan(activeSubscriptionPlan) === "premium" && pe && pe >= todayStart;
+                      const premiumCancelled = Boolean(profileForm.premium_avslut_requested_at);
+                      const hasActivePremium = normalizeSubscriptionPlan(activeSubscriptionPlan) === "premium" && (!premiumCancelled || !pe || pe >= todayStart);
                       return hasActivePremium ? "Premium-abonnemang" : "Aktivera Premium";
                     })()}</h3>
                     <button
@@ -13297,7 +13399,8 @@ const AdminPage = () => {
                       const pe = profileForm.premium_ends_at ? new Date(profileForm.premium_ends_at) : null;
                       const todayStart = new Date();
                       todayStart.setHours(0, 0, 0, 0);
-                      const hasActivePremium = normalizeSubscriptionPlan(activeSubscriptionPlan) === "premium" && pe && pe >= todayStart;
+                      const premiumCancelled = Boolean(profileForm.premium_avslut_requested_at);
+                      const hasActivePremium = normalizeSubscriptionPlan(activeSubscriptionPlan) === "premium" && (!premiumCancelled || !pe || pe >= todayStart);
                       if (hasActivePremium && showPremiumAvslutaInfo) {
                         return (
                           <p className="premium-confirm-text">
@@ -13306,9 +13409,14 @@ const AdminPage = () => {
                         );
                       }
                       if (hasActivePremium) {
+                        const endLabel = profileForm.premium_ends_at
+                          ? new Date(profileForm.premium_ends_at).toLocaleDateString("sv-SE", { year: "numeric", month: "long", day: "numeric" })
+                          : "–";
                         return (
                           <p className="premium-confirm-text">
-                            Du har redan Premium-abonnemang, giltigt till {profileForm.premium_ends_at ? new Date(profileForm.premium_ends_at).toLocaleDateString("sv-SE", { year: "numeric", month: "long", day: "numeric" }) : "–"}.
+                            {premiumCancelled
+                              ? `Du har redan Premium-abonnemang, giltigt till ${endLabel}. Efter detta övergår kontot till Bas-abonnemang.`
+                              : "Du har redan Premium-abonnemang, tillsvidare."}
                           </p>
                         );
                       }
@@ -13335,12 +13443,24 @@ const AdminPage = () => {
                       const pe = profileForm.premium_ends_at ? new Date(profileForm.premium_ends_at) : null;
                       const todayStart = new Date();
                       todayStart.setHours(0, 0, 0, 0);
-                      const hasActivePremium = normalizeSubscriptionPlan(activeSubscriptionPlan) === "premium" && pe && pe >= todayStart;
-                      if (hasActivePremium && showPremiumAvslutaInfo) {
+                      const premiumCancelled = Boolean(profileForm.premium_avslut_requested_at);
+                      const hasActivePremium = normalizeSubscriptionPlan(activeSubscriptionPlan) === "premium" && (!premiumCancelled || !pe || pe >= todayStart);
+                      const premiumEnded = Boolean(profileForm.premium_avslut_requested_at);
+                      if (hasActivePremium && (showPremiumAvslutaInfo || premiumEnded)) {
                         return (
-                          <button type="button" className="button" onClick={() => { setShowPremiumConfirm(false); setShowPremiumAvslutaInfo(false); }}>
-                            Stäng
-                          </button>
+                          <div className="premium-confirm-actions">
+                            <button
+                              type="button"
+                              className="button"
+                              onClick={handlePremiumReactivate}
+                              disabled={premiumReactivateLoading}
+                            >
+                              {premiumReactivateLoading ? "Aktiverar…" : "Aktivera igen"}
+                            </button>
+                            <button type="button" className="button button-outline" onClick={() => { setShowPremiumConfirm(false); setShowPremiumAvslutaInfo(false); }}>
+                              Stäng
+                            </button>
+                          </div>
                         );
                       }
                       if (hasActivePremium) {
@@ -13353,20 +13473,60 @@ const AdminPage = () => {
                       return (
                         <div className="premium-confirm-buy">
                           {premiumDiscountAvailable ? (
-                            <label className="field">
-                              <span className="field-label">Rabattkod</span>
-                              <input
-                                type="text"
-                                value={premiumPurchaseCode}
-                                onChange={(event) => {
-                                  setPremiumPurchaseCode(event.target.value);
-                                  setPremiumPurchaseCodeError("");
-                                }}
-                                placeholder="Valfritt"
-                                autoComplete="off"
-                                maxLength={32}
-                              />
-                            </label>
+                            <div className="premium-code-block">
+                              <label className="field">
+                                <span className="field-label">Rabattkod</span>
+                                <div className="premium-code-row">
+                                  <input
+                                    type="text"
+                                    value={premiumPurchaseCode}
+                                    onChange={(event) => {
+                                      setPremiumPurchaseCode(event.target.value);
+                                      setPremiumPurchaseCodeError("");
+                                    }}
+                                    placeholder="Valfritt"
+                                    autoComplete="off"
+                                    maxLength={32}
+                                    disabled={Boolean(premiumPurchaseApplied) || premiumPurchaseCodeChecking}
+                                  />
+                                  <button
+                                    type="button"
+                                    className="button button-outline premium-code-toggle"
+                                    onClick={applyPremiumPurchaseCode}
+                                    disabled={Boolean(premiumPurchaseApplied) || premiumPurchaseCodeChecking || !premiumPurchaseCode.trim()}
+                                    aria-label="Lägg till rabattkod"
+                                  >
+                                    +
+                                  </button>
+                                </div>
+                              </label>
+                              {premiumPurchaseApplied ? (
+                                <div className="premium-code-applied">
+                                  <p>
+                                    Rabattkoden är tillagd
+                                    {Number(premiumPurchaseApplied.percent) > 0
+                                      ? ` (${premiumPurchaseApplied.percent} %).`
+                                      : "."}{" "}
+                                    {Number(premiumPurchaseApplied.amountSek) <= 0
+                                      ? "Premium aktiveras utan betalning."
+                                      : `Du betalar ${Number(premiumPurchaseApplied.amountSek).toLocaleString("sv-SE")} kr.`}
+                                  </p>
+                                  <button
+                                    type="button"
+                                    className="button button-outline premium-code-toggle"
+                                    onClick={() => {
+                                      setPremiumPurchaseApplied(null);
+                                      setPremiumPurchaseCode("");
+                                      setPremiumPurchaseCodeNotice(false);
+                                      setPremiumPurchaseCodeError("");
+                                    }}
+                                    aria-label="Ta bort rabattkod"
+                                  >
+                                    −
+                                  </button>
+                                </div>
+                              ) : null}
+                            </div>
                           ) : null}
                           {premiumPurchaseCodeError ? <p className="admin-error">{premiumPurchaseCodeError}</p> : null}
                           <div className="premium-confirm-actions">
@@ -13892,14 +14052,13 @@ const AdminPage = () => {
                           Uppdatera
                         </button>
                       ) : null}
-                      {normalizeSubscriptionPlan(activeSubscriptionPlan) === "premium" && (profileForm.premium_activated_at || profileForm.premium_ends_at) ? (
+                      {normalizeSubscriptionPlan(activeSubscriptionPlan) === "premium" ? (
                         <div className="admin-events-premium-dates">
-                          {profileForm.premium_activated_at ? (
-                            <span className="admin-events-date">Från {new Date(profileForm.premium_activated_at).toLocaleDateString("sv-SE", { year: "numeric", month: "short", day: "numeric" })}</span>
-                          ) : null}
-                          {profileForm.premium_ends_at ? (
+                          {profileForm.premium_avslut_requested_at && profileForm.premium_ends_at ? (
                             <span className="admin-events-date">Till {new Date(profileForm.premium_ends_at).toLocaleDateString("sv-SE", { year: "numeric", month: "short", day: "numeric" })}</span>
-                          ) : null}
+                          ) : (
+                            <span className="admin-events-date">Tillsvidare</span>
+                          )}
                         </div>
                       ) : null}
                     </div>
@@ -19052,6 +19211,98 @@ function App() {
       .finally(() => setEventLoading(false));
   }, [eventSlug, isAdminRoute, isPaymentStatusRoute, isVerifyEmailRoute, isResetPasswordRoute, isLandingRoute, sitePage]);
 
+  useEffect(() => {
+    if (!event?.slug || !eventSectionsLoaded) return undefined;
+    const root = pageRef.current;
+    if (!root) return undefined;
+    const allowed = new Set([
+      "hero",
+      "text",
+      "formButton",
+      "program",
+      "faq",
+      "form",
+      "speakers",
+      "partners",
+      "gallery",
+      "social",
+      "place"
+    ]);
+    const visibleSince = new Map();
+    const pending = new Map();
+    const mark = (key, start, end) => {
+      const ms = end - start;
+      if (!allowed.has(key) || ms < 200) return;
+      pending.set(key, (pending.get(key) || 0) + ms);
+    };
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (document.visibilityState === "hidden") return;
+        const now = performance.now();
+        for (const entry of entries) {
+          const key = entry.target.getAttribute("data-track-section");
+          if (!key) continue;
+          const onScreen = entry.isIntersecting && entry.intersectionRatio >= 0.35;
+          if (onScreen) {
+            if (!visibleSince.has(key)) visibleSince.set(key, now);
+          } else if (visibleSince.has(key)) {
+            mark(key, visibleSince.get(key), now);
+            visibleSince.delete(key);
+          }
+        }
+      },
+      { threshold: [0, 0.35, 0.6, 1] }
+    );
+    root.querySelectorAll("[data-track-section]").forEach((element) => observer.observe(element));
+    const settle = () => {
+      const now = performance.now();
+      if (document.visibilityState === "hidden") {
+        for (const [key, start] of visibleSince) mark(key, start, now);
+        visibleSince.clear();
+        return;
+      }
+      for (const [key, start] of visibleSince) {
+        mark(key, start, now);
+        visibleSince.set(key, now);
+      }
+    };
+    const send = () => {
+      settle();
+      const sections = [];
+      for (const [key, ms] of pending) {
+        const rounded = Math.round(ms);
+        if (rounded >= 1000) sections.push({ key, ms: Math.min(rounded, 60000) });
+      }
+      if (sections.length === 0) return;
+      for (const row of sections) pending.set(row.key, Math.max(0, (pending.get(row.key) || 0) - row.ms));
+      const slug = event.slug;
+      fetch(`${API_BASE}/events/${encodeURIComponent(slug)}/section-views`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          visitorId: getOrCreateVisitorId() || "",
+          sections
+        }),
+        keepalive: true
+      }).catch(() => {
+        for (const row of sections) pending.set(row.key, (pending.get(row.key) || 0) + row.ms);
+      });
+    };
+    const timer = window.setInterval(send, 15000);
+    const onHide = () => {
+      if (document.visibilityState === "hidden") send();
+    };
+    document.addEventListener("visibilitychange", onHide);
+    window.addEventListener("pagehide", send);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onHide);
+      window.removeEventListener("pagehide", send);
+      observer.disconnect();
+      send();
+    };
+  }, [event?.slug, eventSectionsLoaded, sectionOrder]);
+
   const loadProgramItems = async (eventId) => {
     const response = await fetch(`${API_BASE}/program?eventId=${eventId}`);
     if (!response.ok) {
@@ -19625,7 +19876,7 @@ function App() {
   return (
     <div className="page public-event-page" ref={pageRef}>
       {event && heroBackground.url && !heroImageError ? (
-        <div className="hero hero--banner" ref={heroBannerRef}>
+        <div className="hero hero--banner" ref={heroBannerRef} data-track-section="hero">
           {sectionVisibility.showTranslate && eventSectionsLoaded ? (
             <div className="translate-row translate-row--overlay notranslate">
               <div id="google_translate_element" className="notranslate" />
@@ -19708,7 +19959,7 @@ function App() {
           ["section", extra, sectionVisibility[invertKey] ? "section--invert" : ""].filter(Boolean).join(" ");
         if (key === "text" && sectionVisibility.showText && (hero.title || hero.bodyHtml)) {
           return (
-            <div className={sectionClass("invertText")} key="text">
+            <div className={sectionClass("invertText")} key="text" data-track-section="text">
               {hero.title ? <h2>{hero.title}</h2> : null}
               {hero.bodyHtml ? (
                 <div
@@ -19721,7 +19972,7 @@ function App() {
         }
         if (key === "program" && sectionVisibility.showProgram) {
           return (
-            <div className={sectionClass("invertProgram")} key="program">
+            <div className={sectionClass("invertProgram")} key="program" data-track-section="program">
               <h2>{sectionLabels.program.trim() || "Program"}</h2>
               {programItems.length > 0 ? (
                 <div className="program">
@@ -19752,7 +20003,7 @@ function App() {
         }
         if (key === "faq" && sectionVisibility.showFaq) {
           return (
-            <div className={sectionClass("invertFaq")} key="faq">
+            <div className={sectionClass("invertFaq")} key="faq" data-track-section="faq">
               <h2>{sectionLabels.faq.trim() || "FAQ"}</h2>
               {faqText && faqText.trim() ? (
                 <FaqCollapsible html={faqText} enabled={faqCollapse} />
@@ -19764,7 +20015,7 @@ function App() {
         }
         if (key === "speakers" && sectionVisibility.showSpeakers) {
           return (
-            <div className={sectionClass("invertSpeakers")} key="speakers">
+            <div className={sectionClass("invertSpeakers")} key="speakers" data-track-section="speakers">
               <h2>{sectionLabels.speakers.trim() || "Personer"}</h2>
               {speakers.length > 0 ? (
                 <div className={`speakers${speakersLayout === "list" ? " speakers--list" : ""}`}>
@@ -19790,7 +20041,7 @@ function App() {
         }
         if (key === "partners" && sectionVisibility.showPartners) {
           return (
-            <div className={sectionClass("invertPartners")} key="partners">
+            <div className={sectionClass("invertPartners")} key="partners" data-track-section="partners">
               <h2>{sectionLabels.partners.trim() || "Partner"}</h2>
               {partners.length > 0 ? (
                 <div className="partner-grid">
@@ -19822,7 +20073,7 @@ function App() {
         }
         if (key === "gallery" && sectionVisibility.showGallery && galleryImages.length > 0) {
           return (
-            <div className={sectionClass("invertGallery", "section-gallery")} key="gallery">
+            <div className={sectionClass("invertGallery", "section-gallery")} key="gallery" data-track-section="gallery">
               <h2>{sectionLabels.gallery.trim() || "Galleri"}</h2>
               <EventGallery
                 images={galleryImages}
@@ -19846,7 +20097,7 @@ function App() {
             return null;
           }
           return (
-            <div className={sectionClass("invertSocial", "section-social")} key="social">
+            <div className={sectionClass("invertSocial", "section-social")} key="social" data-track-section="social">
               <h2>{sectionLabels.social.trim() || "Följ oss"}</h2>
               <SocialLinks
                 items={socialItems}
@@ -19859,7 +20110,7 @@ function App() {
         }
         if (key === "place" && sectionVisibility.showPlace) {
           return (
-            <div className={sectionClass("invertPlace")} key="place">
+            <div className={sectionClass("invertPlace")} key="place" data-track-section="place">
               <h2>Plats</h2>
               <PlaceCard address={place.address} description={place.description} />
             </div>
@@ -19867,7 +20118,7 @@ function App() {
         }
         if (key === "formButton" && sectionVisibility.showFormButton) {
           return (
-            <div className={sectionClass("invertFormButton", `section-form-button section-form-button--${formButtonWidth}`)} key="formButton">
+            <div className={sectionClass("invertFormButton", `section-form-button section-form-button--${formButtonWidth}`)} key="formButton" data-track-section="formButton">
               <button
                 type="button"
                 className={`button${formButtonWidth === "wide" ? " full-width" : ""}`}
@@ -19880,7 +20131,7 @@ function App() {
         }
         if (key === "form") {
           return (
-            <div className="section" key="form" id="form-section">
+            <div className="section" key="form" id="form-section" data-track-section="form">
               <h2>Anmäl dig här</h2>
               <form className="form" onSubmit={handleAddToCart} id="booking-form">
           {(() => {
