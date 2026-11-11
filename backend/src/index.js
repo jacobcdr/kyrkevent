@@ -6919,11 +6919,26 @@ const listMessageAudienceEmails = async (audience) => {
     .filter((email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email));
 };
 
-const MESSAGE_EMAIL_LOGO_PATH = path.resolve(__dirname, "..", "..", "frontend", "public", "kyrkevent2.png");
+const MESSAGE_EMAIL_LOGO_CANDIDATES = [
+  path.resolve(__dirname, "..", "assets", "kyrkevent2.png"),
+  path.resolve(__dirname, "..", "..", "frontend", "public", "kyrkevent2.png"),
+  path.resolve(__dirname, "..", "..", "frontend", "dist", "kyrkevent2.png")
+];
 const MESSAGE_EMAIL_LOGO_CID = "kyrkevent2";
+const MESSAGE_EMAIL_LOGO_URL = "https://kyrkevent.se/kyrkevent2.png";
 
-const buildUnreadMessageEmail = (loginUrl) => {
-  const logoUrl = `cid:${MESSAGE_EMAIL_LOGO_CID}`;
+const readMessageEmailLogo = () => {
+  for (const logoPath of MESSAGE_EMAIL_LOGO_CANDIDATES) {
+    try {
+      if (fs.existsSync(logoPath)) return fs.readFileSync(logoPath).toString("base64");
+    } catch (error) {
+      console.error("Message email logo error:", logoPath, error);
+    }
+  }
+  return "";
+};
+
+const buildUnreadMessageEmail = (loginUrl, logoUrl) => {
   const safeLoginUrl = String(loginUrl || "https://kyrkevent.se/admin?view=login");
   const subject = "Du har ett nytt meddelande hos Kyrkevent";
   const text = [
@@ -6965,22 +6980,21 @@ const sendUnreadMessageNoticeEmails = async (audience) => {
   const emails = await listMessageAudienceEmails(audience);
   if (emails.length === 0) return { sent: 0, failed: 0 };
   const siteUrl = String(primaryFrontendUrl || "https://kyrkevent.se").replace(/\/+$/, "");
-  const { subject, text, html } = buildUnreadMessageEmail(`${siteUrl}/admin?view=login`);
-  let logoContent = "";
-  try {
-    logoContent = fs.readFileSync(MESSAGE_EMAIL_LOGO_PATH).toString("base64");
-  } catch (error) {
-    console.error("Message email logo error:", error);
-    return { sent: 0, failed: emails.length, error: "Logotypen kyrkevent2.png kunde inte läsas." };
-  }
-  const attachments = [
-    {
-      filename: "kyrkevent2.png",
-      content: logoContent,
-      contentType: "image/png",
-      contentId: MESSAGE_EMAIL_LOGO_CID
-    }
-  ];
+  const logoContent = readMessageEmailLogo();
+  const { subject, text, html } = buildUnreadMessageEmail(
+    `${siteUrl}/admin?view=login`,
+    logoContent ? `cid:${MESSAGE_EMAIL_LOGO_CID}` : MESSAGE_EMAIL_LOGO_URL
+  );
+  const attachments = logoContent
+    ? [
+        {
+          filename: "kyrkevent2.png",
+          content: logoContent,
+          contentType: "image/png",
+          contentId: MESSAGE_EMAIL_LOGO_CID
+        }
+      ]
+    : undefined;
   let sent = 0;
   let failed = 0;
   for (let index = 0; index < emails.length; index += 5) {
