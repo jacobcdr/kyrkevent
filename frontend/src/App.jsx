@@ -1432,6 +1432,161 @@ function formatMessageDay(value) {
   return date.toLocaleDateString("sv-SE");
 }
 
+function formatDateOnlySv(value) {
+  const match = String(value || "").trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return "";
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("sv-SE");
+}
+
+const MAX_TICKET_PRICE_STEPS = 4;
+
+function emptyPriceForm() {
+  return {
+    name: "",
+    amount: "",
+    description: "",
+    maxQuantity: "",
+    useSalesEnd: false,
+    salesEndDate: "",
+    priceSteps: [],
+    showSalesEndOnCard: false,
+    useSalesStart: false,
+    salesStartDate: "",
+    isActive: true
+  };
+}
+
+function addDaysToDateOnly(value, days) {
+  const match = String(value || "").trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return "";
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  if (Number.isNaN(date.getTime())) return "";
+  date.setDate(date.getDate() + days);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function todayDateInputValue() {
+  const date = new Date();
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function roundTicketAmount(value) {
+  const parsed = Number(String(value ?? "").trim().replace(/\s/g, "").replace(",", "."));
+  if (!Number.isFinite(parsed)) return null;
+  return Math.round(parsed);
+}
+
+function priceStepsFromPrice(price) {
+  const steps = Array.isArray(price?.price_steps) ? price.price_steps : [];
+  return steps.slice(0, MAX_TICKET_PRICE_STEPS).map((step) => ({
+    amount: step?.amount != null ? String(step.amount) : "",
+    date: step?.date ? String(step.date).slice(0, 10) : ""
+  }));
+}
+
+function payableTicketAmount(price) {
+  const current = Number(price?.current_amount);
+  if (Number.isFinite(current)) return current;
+  const amount = Number(price?.amount);
+  return Number.isFinite(amount) ? amount : 0;
+}
+
+function priceStepDateBounds(steps, index, windowStart, windowEnd) {
+  const today = todayDateInputValue();
+  let min = today;
+  if (windowStart && windowStart > min) min = windowStart;
+  for (let i = index - 1; i >= 0; i -= 1) {
+    if (steps[i]?.date) {
+      const afterPrevious = addDaysToDateOnly(steps[i].date, 1);
+      if (afterPrevious > min) min = afterPrevious;
+      break;
+    }
+  }
+  let max = windowEnd || "";
+  for (let i = index + 1; i < steps.length; i += 1) {
+    if (steps[i]?.date) {
+      const beforeNext = addDaysToDateOnly(steps[i].date, -1);
+      max = max && beforeNext > max ? max : beforeNext;
+      break;
+    }
+  }
+  return { min, max };
+}
+
+function ticketPriceWindowError(date, windowStart, windowEnd) {
+  if (windowStart && date < windowStart) {
+    return "Prishöjningen måste ligga på eller efter aktiveringsdagen.";
+  }
+  if (windowEnd && date > windowEnd) {
+    return "Prishöjningen måste ligga på eller före sista köpdag.";
+  }
+  return "";
+}
+
+function validateTicketPriceSteps(baseAmount, steps, windowStart, windowEnd) {
+  const list = Array.isArray(steps) ? steps : [];
+  if (list.length > MAX_TICKET_PRICE_STEPS) {
+    return "Prisstegen kan ha högst fyra höjningar.";
+  }
+  const base = roundTicketAmount(baseAmount);
+  if (list.length > 0 && base == null) {
+    return "Ange biljettpriset innan du lägger till en prisstege.";
+  }
+  let previousAmount = base ?? 0;
+  let previousDate = "";
+  for (let i = 0; i < list.length; i += 1) {
+    const step = list[i] || {};
+    const date = String(step.date || "").slice(0, 10);
+    const amount = roundTicketAmount(step.amount);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return `Ange datum för höjning ${i + 1}.`;
+    }
+    if (amount == null) {
+      return `Ange pris för höjning ${i + 1}.`;
+    }
+    if (date < todayDateInputValue()) {
+      return "Datumet i prisstegen kan inte ha passerat.";
+    }
+    const windowError = ticketPriceWindowError(date, windowStart, windowEnd);
+    if (windowError) return windowError;
+    if (previousDate && date <= previousDate) {
+      return "Datumen i prisstegen måste komma efter varandra. Samma dag kan inte användas två gånger.";
+    }
+    if (amount <= previousAmount) {
+      return "Varje pris i prisstegen måste vara högre än priset före.";
+    }
+    previousDate = date;
+    previousAmount = amount;
+  }
+  return "";
+}
+
+function ticketPriceStepConflict(steps, windowStart, windowEnd) {
+  let previousDate = "";
+  for (const step of steps || []) {
+    const date = String(step?.date || "").slice(0, 10);
+    if (!date) continue;
+    if (date < todayDateInputValue()) {
+      return "Datumet i prisstegen kan inte ha passerat.";
+    }
+    const windowError = ticketPriceWindowError(date, windowStart, windowEnd);
+    if (windowError) return windowError;
+    if (previousDate && date <= previousDate) {
+      return "Datumen i prisstegen måste komma efter varandra. Samma dag kan inte användas två gånger.";
+    }
+    previousDate = date;
+  }
+  return "";
+}
+
 function organizerMessageShowsBadge(message, now = Date.now()) {
   if (!message?.openedAt) return true;
   const opened = new Date(message.openedAt).getTime();
@@ -3699,13 +3854,7 @@ const AdminPage = () => {
   const partnerImageInputRef = useRef(null);
   const galleryImageInputRef = useRef(null);
   const [pricesAdmin, setPricesAdmin] = useState([]);
-  const [priceForm, setPriceForm] = useState({
-    name: "",
-    amount: "",
-    description: "",
-    maxQuantity: "",
-    isActive: true
-  });
+  const [priceForm, setPriceForm] = useState(emptyPriceForm);
   const [priceEditingId, setPriceEditingId] = useState(null);
   const [discounts, setDiscounts] = useState([]);
   const [discountForm, setDiscountForm] = useState({
@@ -6911,6 +7060,47 @@ const AdminPage = () => {
       showToast(ticketPriceCapToastMessage(ticketPriceCap), 7000);
       return;
     }
+    if (priceForm.useSalesEnd && !String(priceForm.salesEndDate || "").trim()) {
+      setPriceSectionError("Ange sista köpdag.");
+      return;
+    }
+    if (priceForm.useSalesStart && !String(priceForm.salesStartDate || "").trim()) {
+      setPriceSectionError("Ange aktiveringsdag.");
+      return;
+    }
+    const storedSalesStart = editingPrice?.sales_start_date
+      ? String(editingPrice.sales_start_date).slice(0, 10)
+      : "";
+    if (
+      priceForm.useSalesStart &&
+      priceForm.salesStartDate &&
+      priceForm.salesStartDate < todayDateInputValue() &&
+      priceForm.salesStartDate !== storedSalesStart
+    ) {
+      setPriceSectionError("Aktiveringsdag kan inte ha passerat.");
+      return;
+    }
+    const ladderWindowEnd = priceForm.useSalesEnd ? priceForm.salesEndDate : "";
+    if (
+      priceForm.useSalesStart &&
+      priceForm.salesStartDate &&
+      ladderWindowEnd &&
+      priceForm.salesStartDate > ladderWindowEnd
+    ) {
+      setPriceSectionError("Aktiveringsdag kan inte ligga efter sista köpdag.");
+      return;
+    }
+    const ladderWindowStart = priceForm.useSalesStart ? priceForm.salesStartDate : "";
+    const ladderError = validateTicketPriceSteps(
+      priceForm.amount,
+      priceForm.priceSteps,
+      ladderWindowStart,
+      ladderWindowEnd
+    );
+    if (ladderError) {
+      setPriceSectionError(ladderError);
+      return;
+    }
     const savePrice = async () => {
       const profileRes = await fetch(`${API_BASE}/admin/profile`, {
         headers: { Authorization: `Bearer ${token}` }
@@ -6946,6 +7136,13 @@ const AdminPage = () => {
           amount: priceForm.amount,
           description: priceForm.description.trim(),
           maxQuantity: priceForm.maxQuantity.trim(),
+          salesEndDate: priceForm.useSalesEnd ? priceForm.salesEndDate.trim() : "",
+          showSalesEndOnCard: priceForm.useSalesEnd && priceForm.showSalesEndOnCard === true,
+          salesStartDate: priceForm.useSalesStart ? priceForm.salesStartDate.trim() : "",
+          priceSteps: (priceForm.priceSteps || []).map((step) => ({
+            amount: step.amount,
+            date: step.date
+          })),
           isActive: priceForm.isActive !== false
         })
       });
@@ -6957,7 +7154,7 @@ const AdminPage = () => {
         }
         throw new Error(errData.error || "Kunde inte spara priset.");
       }
-      setPriceForm({ name: "", amount: "", description: "", maxQuantity: "", isActive: true });
+      setPriceForm(emptyPriceForm());
       setPriceEditingId(null);
       await loadAdminPrices(token, selectedEventId);
       localStorage.setItem(buildStorageKey("pricesUpdatedAt", selectedEventId), String(Date.now()));
@@ -7181,14 +7378,52 @@ const AdminPage = () => {
       amount: String(price.amount ?? ""),
       description: price.description || "",
       maxQuantity: price.max_quantity != null ? String(price.max_quantity) : "",
+      useSalesEnd: Boolean(price.sales_end_date),
+      salesEndDate: price.sales_end_date ? String(price.sales_end_date).slice(0, 10) : "",
+      showSalesEndOnCard: price.show_sales_end_on_card === true,
+      useSalesStart: Boolean(price.sales_start_date),
+      salesStartDate: price.sales_start_date ? String(price.sales_start_date).slice(0, 10) : "",
+      priceSteps: priceStepsFromPrice(price),
       isActive: price.is_active !== false
     });
     setPriceEditingId(price.id);
   };
 
   const handlePriceCancel = () => {
-    setPriceForm({ name: "", amount: "", description: "", maxQuantity: "", isActive: true });
+    setPriceForm(emptyPriceForm());
     setPriceEditingId(null);
+  };
+
+  const addPriceStep = () => {
+    setPriceForm((prev) => {
+      const steps = prev.priceSteps || [];
+      if (steps.length >= MAX_TICKET_PRICE_STEPS) return prev;
+      const lastDate = [...steps].reverse().find((step) => step.date)?.date || "";
+      let date = lastDate ? addDaysToDateOnly(lastDate, 1) : "";
+      const today = todayDateInputValue();
+      const start = prev.useSalesStart ? prev.salesStartDate : "";
+      if (date && date < today) date = today;
+      if (start && start > today && (!date || date < start)) date = start;
+      const end = prev.useSalesEnd ? prev.salesEndDate : "";
+      if (end && date && date > end) date = "";
+      return { ...prev, priceSteps: [...steps, { amount: "", date }] };
+    });
+  };
+
+  const updatePriceStep = (index, patch) => {
+    setPriceForm((prev) => ({
+      ...prev,
+      priceSteps: (prev.priceSteps || []).map((step, stepIndex) =>
+        stepIndex === index ? { ...step, ...patch } : step
+      )
+    }));
+  };
+
+  const removePriceStep = (index) => {
+    setPriceForm((prev) => ({
+      ...prev,
+      priceSteps: (prev.priceSteps || []).filter((_, stepIndex) => stepIndex !== index)
+    }));
   };
 
   const handlePriceToggleActive = (price) => {
@@ -7215,6 +7450,10 @@ const AdminPage = () => {
           amount: price.amount,
           description: price.description || "",
           maxQuantity: price.max_quantity == null ? "" : String(price.max_quantity),
+          salesEndDate: price.sales_end_date ? String(price.sales_end_date).slice(0, 10) : "",
+          showSalesEndOnCard: price.show_sales_end_on_card === true,
+          salesStartDate: price.sales_start_date ? String(price.sales_start_date).slice(0, 10) : "",
+          priceSteps: priceStepsFromPrice(price),
           isActive: price.is_active === false
         })
       });
@@ -17928,33 +18167,35 @@ const AdminPage = () => {
                   </p>
                 ) : null}
                 <form className="admin-form" onSubmit={handlePriceSubmit}>
-                  <label className="field">
-                    <span className="field-label">Namn</span>
-                    <input
-                      name="name"
-                      type="text"
-                      value={priceForm.name}
-                      onChange={handlePriceChange}
-                      required
-                    />
-                  </label>
-                  <label className="field">
-                    <span className="field-label">Pris</span>
-                    <input
-                      name="amount"
-                      type="number"
-                      min="0"
-                      step="1"
-                      value={priceForm.amount}
-                      onChange={handlePriceChange}
-                      required
-                    />
-                    {ticketPriceCap != null ? (
-                      <span className="muted">
-                        Högsta tillåtna biljettpris är {Number(ticketPriceCap).toLocaleString("sv-SE")} kr.
-                      </span>
-                    ) : null}
-                  </label>
+                  <div className="field-row">
+                    <label className="field">
+                      <span className="field-label">Namn</span>
+                      <input
+                        name="name"
+                        type="text"
+                        value={priceForm.name}
+                        onChange={handlePriceChange}
+                        required
+                      />
+                    </label>
+                    <label className="field">
+                      <span className="field-label">Pris</span>
+                      <input
+                        name="amount"
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={priceForm.amount}
+                        onChange={handlePriceChange}
+                        required
+                      />
+                      {ticketPriceCap != null ? (
+                        <span className="muted">
+                          Högsta tillåtna biljettpris är {Number(ticketPriceCap).toLocaleString("sv-SE")} kr.
+                        </span>
+                      ) : null}
+                    </label>
+                  </div>
                   {(() => {
                     const previewAmount = Number(priceForm.amount);
                     if (!Number.isFinite(previewAmount) || previewAmount <= 0) return null;
@@ -17966,19 +18207,203 @@ const AdminPage = () => {
                       </p>
                     );
                   })()}
-                  <label className="field">
-                    <span className="field-label">Antal biljetter</span>
-                    <input
-                      name="maxQuantity"
-                      type="number"
-                      min="1"
-                      step="1"
-                      value={priceForm.maxQuantity || ""}
-                      onChange={handlePriceChange}
-                      placeholder="Lämna tomt för obegränsat"
-                    />
-                    <span className="muted">Valfritt. Gäller bara den här biljetten, inte hela eventet.</span>
-                  </label>
+                  <div className="field-row">
+                    <label className="field">
+                      <span className="field-label">Antal biljetter</span>
+                      <input
+                        name="maxQuantity"
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={priceForm.maxQuantity || ""}
+                        onChange={handlePriceChange}
+                        placeholder="Lämna tomt för obegränsat"
+                      />
+                      <span className="muted">Valfritt. Gäller bara den här biljetten, inte hela eventet.</span>
+                    </label>
+                    <div className="field">
+                      <label className="field checkbox-field price-sales-end-toggle">
+                        <span className="field-label">Sista köpdag</span>
+                        <input
+                          type="checkbox"
+                          checked={priceForm.useSalesEnd === true}
+                          onChange={(event) =>
+                            setPriceForm((prev) => ({
+                              ...prev,
+                              useSalesEnd: event.target.checked,
+                              salesEndDate: event.target.checked ? prev.salesEndDate : "",
+                              showSalesEndOnCard: event.target.checked ? prev.showSalesEndOnCard : false
+                            }))
+                          }
+                        />
+                      </label>
+                      {priceForm.useSalesEnd ? (
+                        <label className="field">
+                          <span className="field-label">Datum</span>
+                          <input
+                            name="salesEndDate"
+                            type="date"
+                            required
+                            min={
+                              priceForm.useSalesStart && priceForm.salesStartDate
+                                ? priceForm.salesStartDate
+                                : undefined
+                            }
+                            value={priceForm.salesEndDate || ""}
+                            onChange={handlePriceChange}
+                          />
+                          <span className="muted">
+                            Biljetten kan köpas den dagen, inte dagen efter.
+                          </span>
+                        </label>
+                      ) : null}
+                      {priceForm.useSalesEnd ? (
+                        <label className="field checkbox-field price-sales-end-toggle">
+                          <span className="field-label">Visa sista köpdag på biljettkortet</span>
+                          <input
+                            type="checkbox"
+                            checked={priceForm.showSalesEndOnCard === true}
+                            onChange={(event) =>
+                              setPriceForm((prev) => ({
+                                ...prev,
+                                showSalesEndOnCard: event.target.checked
+                              }))
+                            }
+                          />
+                        </label>
+                      ) : null}
+                      <label className="field checkbox-field price-sales-end-toggle">
+                        <span className="field-label">Aktiveringsdag</span>
+                        <input
+                          type="checkbox"
+                          checked={priceForm.useSalesStart === true}
+                          onChange={(event) =>
+                            setPriceForm((prev) => ({
+                              ...prev,
+                              useSalesStart: event.target.checked,
+                              salesStartDate: event.target.checked ? prev.salesStartDate : ""
+                            }))
+                          }
+                        />
+                      </label>
+                      {priceForm.useSalesStart ? (
+                        <label className="field">
+                          <span className="field-label">Datum</span>
+                          <input
+                            name="salesStartDate"
+                            type="date"
+                            required
+                            min={todayDateInputValue()}
+                            max={
+                              priceForm.useSalesEnd && priceForm.salesEndDate
+                                ? priceForm.salesEndDate
+                                : undefined
+                            }
+                            value={priceForm.salesStartDate || ""}
+                            onChange={handlePriceChange}
+                          />
+                          <span className="muted">
+                            Endast idag eller senare. Biljetten syns på eventsidan från och med detta datum.
+                          </span>
+                        </label>
+                      ) : null}
+                    </div>
+                  </div>
+                  {(() => {
+                    const steps = priceForm.priceSteps || [];
+                    const ladderFull = steps.length >= MAX_TICKET_PRICE_STEPS;
+                    const canAddPriceStep = !ladderFull;
+                    const ladderWindowStart = priceForm.useSalesStart ? priceForm.salesStartDate : "";
+                    const ladderWindowEnd = priceForm.useSalesEnd ? priceForm.salesEndDate : "";
+                    const ladderConflict = ticketPriceStepConflict(
+                      steps,
+                      ladderWindowStart,
+                      ladderWindowEnd
+                    );
+                    return (
+                      <div className="price-ladder">
+                        <div>
+                          <span className="field-label">Prisstege</span>
+                          <p className="muted">
+                            Valfritt. Priset höjs på valda datum, högst fyra gånger. Varje datum måste ligga efter det förra. Datum som passerat går inte att välja. Om aktiveringsdag eller sista köpdag används måste höjningen ligga inom det spannet.
+                          </p>
+                        </div>
+                        <div className="price-ladder-row">
+                          {steps.length === 0 ? (
+                            <button
+                              type="button"
+                              className="price-ladder-add"
+                              onClick={addPriceStep}
+                              disabled={!canAddPriceStep}
+                              aria-label="Lägg till prishöjning"
+                              title={ladderFull ? "Högst fyra höjningar" : "Lägg till prishöjning"}
+                            >
+                              +
+                            </button>
+                          ) : null}
+                          <div className="price-ladder-steps">
+                        {steps.map((step, index) => {
+                          const bounds = priceStepDateBounds(
+                            steps,
+                            index,
+                            priceForm.useSalesStart ? priceForm.salesStartDate : "",
+                            priceForm.useSalesEnd ? priceForm.salesEndDate : ""
+                          );
+                          const previousAmount =
+                            index === 0
+                              ? roundTicketAmount(priceForm.amount)
+                              : roundTicketAmount(steps[index - 1]?.amount);
+                          const minAmount = previousAmount == null ? 0 : previousAmount + 1;
+                          return (
+                            <div className="price-ladder-step" key={`price-step-${index}`}>
+                              <span className="field-label price-ladder-label is-price">Pris från och med</span>
+                              <span className="field-label price-ladder-label is-date">Datum</span>
+                              {index === 0 ? (
+                                <button
+                                  type="button"
+                                  className="price-ladder-add"
+                                  onClick={addPriceStep}
+                                  disabled={!canAddPriceStep}
+                                  aria-label="Lägg till prishöjning"
+                                  title={ladderFull ? "Högst fyra höjningar" : "Lägg till prishöjning"}
+                                >
+                                  +
+                                </button>
+                              ) : (
+                                <span className="price-ladder-add-spacer" aria-hidden="true" />
+                              )}
+                              <input
+                                className="is-price"
+                                type="number"
+                                min={minAmount}
+                                step="1"
+                                value={step.amount}
+                                onChange={(event) => updatePriceStep(index, { amount: event.target.value })}
+                              />
+                              <input
+                                className="is-date"
+                                type="date"
+                                min={bounds.min || undefined}
+                                max={bounds.max || undefined}
+                                value={step.date || ""}
+                                onChange={(event) => updatePriceStep(index, { date: event.target.value })}
+                              />
+                              <button
+                                type="button"
+                                className="button button-outline button-small price-ladder-remove"
+                                onClick={() => removePriceStep(index)}
+                              >
+                                Ta bort
+                              </button>
+                            </div>
+                          );
+                        })}
+                          </div>
+                        </div>
+                        {ladderConflict ? <p className="admin-error admin-error-inline">{ladderConflict}</p> : null}
+                      </div>
+                    );
+                  })()}
                   <label className="field">
                     <span className="field-label">Beskrivning</span>
                     <textarea
@@ -18021,6 +18446,7 @@ const AdminPage = () => {
                           <th>Namn</th>
                           <th>Pris</th>
                           <th>Antal</th>
+                          <th>Sista köpdag</th>
                           <th>Status</th>
                           <th>Beskrivning</th>
                           <th></th>
@@ -18033,7 +18459,19 @@ const AdminPage = () => {
                             className={price.is_active === false ? "price-row-inactive" : undefined}
                           >
                             <td>{price.name}</td>
-                            <td>{price.amount}</td>
+                            <td>
+                              {Number(price.current_amount ?? price.amount).toLocaleString("sv-SE")} kr
+                              {Array.isArray(price.price_steps) && price.price_steps.length > 0 ? (
+                                <div className="muted">
+                                  Start {Number(price.amount).toLocaleString("sv-SE")} kr
+                                  {price.price_steps.map((step) => (
+                                    <div key={step.date}>
+                                      {Number(step.amount).toLocaleString("sv-SE")} kr {formatDateOnlySv(step.date)}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </td>
                             <td>
                               {price.max_quantity == null
                                 ? "Obegränsat"
@@ -18042,6 +18480,26 @@ const AdminPage = () => {
                                       ? ` (${price.sold_count} sålda)`
                                       : ""
                                   }`}
+                            </td>
+                            <td>
+                              {price.sales_start_date ? (
+                                <div className="muted">
+                                  Från {formatDateOnlySv(price.sales_start_date)}
+                                  {price.on_sale === false ? " · syns inte än" : ""}
+                                </div>
+                              ) : null}
+                              {price.sales_end_date ? (
+                                <>
+                                  {formatDateOnlySv(price.sales_end_date)}
+                                  {price.sales_open === false ? (
+                                    <div className="muted">Avslutad</div>
+                                  ) : price.show_sales_end_on_card ? (
+                                    <div className="muted">Visas på kortet</div>
+                                  ) : null}
+                                </>
+                              ) : price.sales_start_date ? null : (
+                                "–"
+                              )}
                             </td>
                             <td>
                               <span
@@ -19664,6 +20122,10 @@ function App() {
       setPaymentError("Välj ett biljettalternativ.");
       return;
     }
+    if (selectedPrice && selectedPrice.sales_open === false) {
+      setPaymentError(`Biljetten "${selectedPrice.name}" går inte längre att köpa.`);
+      return;
+    }
     if (selectedPrice && selectedPrice.remaining != null) {
       const alreadyInCart = bookingCart.filter((item) => item.priceName === selectedPrice.name).length;
       const remainingAfterCart = Math.max(0, selectedPrice.remaining - alreadyInCart);
@@ -19690,7 +20152,7 @@ function App() {
       terms: true,
       priceId: selectedPrice ? selectedPrice.id : "",
       priceName: selectedPrice ? selectedPrice.name : "Anmälan",
-      priceAmount: selectedPrice ? selectedPrice.amount : 0,
+      priceAmount: selectedPrice ? payableTicketAmount(selectedPrice) : 0,
       customFields: customFields
         .map((field) => ({
           id: field.id,
@@ -19779,6 +20241,10 @@ function App() {
     }
     for (const [ticketName, requested] of Object.entries(requestedByName)) {
       const price = prices.find((entry) => entry.name === ticketName);
+      if (price && price.sales_open === false) {
+        setPaymentError(`Biljetten "${ticketName}" går inte längre att köpa.`);
+        return;
+      }
       if (!price || price.remaining == null) continue;
       if (requested > price.remaining) {
         setPaymentError(
@@ -20423,30 +20889,38 @@ function App() {
                   const inCart = bookingCart.filter((item) => item.priceName === price.name).length;
                   const remaining =
                     price.remaining == null ? null : Math.max(0, price.remaining - inCart);
-                  const soldOut = remaining === 0;
-                  const fewLeft = remaining != null && remaining > 0 && remaining <= 5;
+                  const salesClosed = price.sales_open === false;
+                  const soldOut = !salesClosed && remaining === 0;
+                  const unavailable = salesClosed || soldOut;
+                  const fewLeft = !unavailable && remaining != null && remaining > 0 && remaining <= 5;
+                  const salesEndLabel = price.sales_end_date ? formatDateOnlySv(price.sales_end_date) : "";
                   return (
                   <button
                     key={price.id}
                     type="button"
                     className={`pricing-card ${
                       String(form.priceId) === String(price.id) ? "is-selected" : ""
-                    }${soldOut ? " is-sold-out" : ""}`}
-                    disabled={soldOut}
-                    aria-disabled={soldOut}
+                    }${unavailable ? " is-sold-out" : ""}`}
+                    disabled={unavailable}
+                    aria-disabled={unavailable}
                     onClick={() => {
-                      if (soldOut) return;
+                      if (unavailable) return;
                       setForm((prev) => ({ ...prev, priceId: String(price.id) }));
                     }}
                   >
                     <div className="pricing-name">{price.name}</div>
                     <div className="pricing-price">
-                      {Number(price.amount).toLocaleString("sv-SE")} kr
+                      {payableTicketAmount(price).toLocaleString("sv-SE")} kr
                     </div>
                     {price.description ? (
                       <div className="pricing-desc">{price.description}</div>
                     ) : null}
-                    {soldOut ? (
+                    {price.show_sales_end_on_card && salesEndLabel && !salesClosed ? (
+                      <div className="pricing-desc">Kan köpas t.o.m. {salesEndLabel}</div>
+                    ) : null}
+                    {salesClosed ? (
+                      <div className="pricing-availability is-sold-out">Ej tillgänglig</div>
+                    ) : soldOut ? (
                       <div className="pricing-availability is-sold-out">Slutsålt</div>
                     ) : fewLeft ? (
                       <div className="pricing-availability is-few-left">Fåtal biljetter kvar</div>

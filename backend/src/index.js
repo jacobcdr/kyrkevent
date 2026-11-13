@@ -2450,7 +2450,7 @@ const parseMaxQuantity = (value) => {
 const loadPricesWithAvailability = async (eventId) => {
   const [pricesResult, soldResult] = await Promise.all([
     pool.query(
-      "SELECT id, name, amount, description, position, max_quantity, is_active FROM prices WHERE event_id = $1 ORDER BY position ASC, id ASC",
+      "SELECT id, name, amount, description, position, max_quantity, is_active, sales_start_date::text AS sales_start_date, sales_end_date::text AS sales_end_date, show_sales_end_on_card, price_steps FROM prices WHERE event_id = $1 ORDER BY position ASC, id ASC",
       [eventId]
     ),
     pool.query(
@@ -2472,6 +2472,9 @@ const loadPricesWithAvailability = async (eventId) => {
         ? null
         : Number(price.max_quantity);
     const soldCount = soldByTicket.get(price.name) || 0;
+    const salesStartDate = toDateOnlyString(price.sales_start_date);
+    const salesEndDate = toDateOnlyString(price.sales_end_date);
+    const priceSteps = normalizeStoredPriceSteps(price.price_steps);
     return {
       id: price.id,
       name: price.name,
@@ -2481,10 +2484,169 @@ const loadPricesWithAvailability = async (eventId) => {
       max_quantity: maxQuantity,
       sold_count: soldCount,
       remaining: maxQuantity == null ? null : Math.max(0, maxQuantity - soldCount),
-      is_active: price.is_active !== false
+      is_active: price.is_active !== false,
+      sales_start_date: salesStartDate,
+      on_sale: isTicketOnSale(salesStartDate),
+      sales_end_date: salesEndDate,
+      sales_open: isTicketSalesOpen(salesEndDate),
+      show_sales_end_on_card: price.show_sales_end_on_card === true,
+      price_steps: priceSteps,
+      current_amount: effectiveTicketAmount(price.amount, priceSteps)
     };
   });
 };
+
+const normalizeStoredPriceSteps = (value) => {
+  let list = value;
+  if (typeof list === "string") {
+    try {
+      list = JSON.parse(list);
+    } catch (error) {
+      list = [];
+    }
+  }
+  if (!Array.isArray(list)) return [];
+  return list
+    .map((step) => ({
+      date: toDateOnlyString(step?.date),
+      amount: Math.round(Number(step?.amount))
+    }))
+    .filter((step) => step.date && Number.isFinite(step.amount))
+    .sort((a, b) => a.date.localeCompare(b.date));
+};
+
+const effectiveTicketAmount = (baseAmount, steps) => {
+  let current = Math.round(Number(baseAmount));
+  const today = todayDateStr();
+  for (const step of steps || []) {
+    if (step.date <= today) current = step.amount;
+  }
+  return current;
+};
+
+const parsePriceSteps = (value, baseAmount, windowStart, windowEnd) => {
+  if (value == null || value === "") {
+    return { ok: true, value: [] };
+  }
+  let list = value;
+  if (typeof list === "string") {
+    try {
+      list = JSON.parse(list);
+    } catch (error) {
+      return { ok: false, error: "Ogiltig prisstege." };
+    }
+  }
+  if (!Array.isArray(list)) {
+    return { ok: false, error: "Ogiltig prisstege." };
+  }
+  if (list.length > 4) {
+    return { ok: false, error: "Prisstegen kan ha högst fyra höjningar." };
+  }
+  const steps = [];
+  let previousAmount = Math.round(Number(baseAmount));
+  let previousDate = "";
+  for (let i = 0; i < list.length; i += 1) {
+    const item = list[i] || {};
+    const date = parseDate(String(item.date || ""));
+    if (!date) {
+      return { ok: false, error: `Ange datum för höjning ${i + 1}.` };
+    }
+    if (date < todayDateStr()) {
+      return { ok: false, error: "Datumet i prisstegen kan inte ha passerat." };
+    }
+    if (windowStart && date < windowStart) {
+      return { ok: false, error: "Prishöjningen måste ligga på eller efter aktiveringsdagen." };
+    }
+    if (windowEnd && date > windowEnd) {
+      return { ok: false, error: "Prishöjningen måste ligga på eller före sista köpdag." };
+    }
+    if (previousDate && date <= previousDate) {
+      return {
+        ok: false,
+        error: "Datumen i prisstegen måste komma efter varandra. Samma dag kan inte användas två gånger."
+      };
+    }
+    const amount = Number(item.amount);
+    if (!Number.isFinite(amount)) {
+      return { ok: false, error: `Ange pris för höjning ${i + 1}.` };
+    }
+    const rounded = Math.round(amount);
+    if (rounded <= previousAmount) {
+      return { ok: false, error: "Varje pris i prisstegen måste vara högre än priset före." };
+    }
+    steps.push({ date, amount: rounded });
+    previousAmount = rounded;
+    previousDate = date;
+  }
+  return { ok: true, value: steps };
+};
+
+const priceStepCapViolation = async (steps, { eventId, priceId } = {}) => {
+  const cap = getTicketPriceCap();
+  if (cap == null || !steps || steps.length === 0) return null;
+  const exempt = new Set();
+  if (priceId != null && eventId != null) {
+    const existing = await pool.query(
+      "SELECT amount, price_steps FROM prices WHERE id = $1 AND event_id = $2",
+      [priceId, eventId]
+    );
+    if (existing.rowCount > 0) {
+      exempt.add(Math.round(Number(existing.rows[0].amount)));
+      for (const step of normalizeStoredPriceSteps(existing.rows[0].price_steps)) {
+        exempt.add(step.amount);
+      }
+    }
+  }
+  for (const step of steps) {
+    if (step.amount > cap && !exempt.has(step.amount)) {
+      return {
+        ok: false,
+        code: "ticket_price_cap",
+        maxAmount: cap,
+        error: `Biljettpriset får högst vara ${cap} kr.`
+      };
+    }
+  }
+  return null;
+};
+
+const parseSalesEndDate = (value) => {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return { ok: true, value: null };
+  }
+  const parsed = parseDate(String(value));
+  if (!parsed) {
+    return { ok: false, error: "Ogiltigt sista köpdatum." };
+  }
+  return { ok: true, value: parsed };
+};
+
+const parseSalesStartDate = (value, unchangedDate) => {
+  const parsed = parseSalesEndDate(value);
+  if (!parsed.ok) return { ok: false, error: "Ogiltig aktiveringsdag." };
+  if (!parsed.value) return parsed;
+  const kept = toDateOnlyString(unchangedDate);
+  if (kept && parsed.value === kept) return parsed;
+  if (parsed.value < todayDateStr()) {
+    return { ok: false, error: "Aktiveringsdag kan inte ha passerat." };
+  }
+  return parsed;
+};
+
+const isTicketSalesOpen = (salesEndDate) => {
+  const end = toDateOnlyString(salesEndDate);
+  if (!end) return true;
+  return todayDateStr() <= end;
+};
+
+const isTicketOnSale = (salesStartDate) => {
+  const start = toDateOnlyString(salesStartDate);
+  if (!start) return true;
+  return todayDateStr() >= start;
+};
+
+const ticketSalesClosedError = (ticketName) =>
+  `Biljetten "${ticketName}" går inte längre att köpa.`;
 
 const parseIsActive = (value) => {
   if (value === false || value === "false" || value === 0 || value === "0") {
@@ -2506,7 +2668,9 @@ const applyCatalogTicket = async (payload) => {
       }
     };
   }
-  const active = prices.filter((price) => price.is_active);
+  const active = prices.filter(
+    (price) => price.is_active && price.sales_open !== false && price.on_sale !== false
+  );
   const requestedId = payload.priceId != null ? String(payload.priceId).trim() : "";
   const requestedName = String(payload.priceName || "").trim();
   let match = null;
@@ -2523,6 +2687,12 @@ const applyCatalogTicket = async (payload) => {
         (requestedId && String(price.id) === requestedId) ||
         (requestedName && price.name === requestedName)
     );
+    if (inactiveOrSold && inactiveOrSold.on_sale === false) {
+      return { ok: false, error: `Biljetten "${inactiveOrSold.name}" är inte tillgänglig.` };
+    }
+    if (inactiveOrSold && inactiveOrSold.sales_open === false) {
+      return { ok: false, error: ticketSalesClosedError(inactiveOrSold.name) };
+    }
     if (inactiveOrSold && inactiveOrSold.is_active === false) {
       return { ok: false, error: `Biljetten "${inactiveOrSold.name}" är inte tillgänglig.` };
     }
@@ -2534,7 +2704,7 @@ const applyCatalogTicket = async (payload) => {
       ...payload,
       priceId: String(match.id),
       priceName: match.name,
-      priceAmount: Number(match.amount)
+      priceAmount: Number(match.current_amount ?? match.amount)
     }
   };
 };
@@ -2574,11 +2744,14 @@ const checkTicketCapacities = async (eventId, requestedItems) => {
   }
   for (const [ticketName, requested] of Object.entries(requestedByName)) {
     const price = byName.get(ticketName);
-    if (!price || price.is_active === false) {
+    if (!price || price.is_active === false || price.sales_open === false || price.on_sale === false) {
       return {
         ok: false,
         ticketName,
-        error: `Biljetten "${ticketName}" är inte tillgänglig.`
+        error:
+          price && price.sales_open === false
+            ? ticketSalesClosedError(ticketName)
+            : `Biljetten "${ticketName}" är inte tillgänglig.`
       };
     }
     if (price.max_quantity == null) continue;
@@ -2900,7 +3073,9 @@ app.get("/prices", async (req, res) => {
       res.status(400).json({ ok: false, error: "Missing event" });
       return;
     }
-    const prices = (await loadPricesWithAvailability(eventId)).filter((price) => price.is_active);
+    const prices = (await loadPricesWithAvailability(eventId)).filter(
+      (price) => price.is_active && price.on_sale !== false
+    );
     res.json({ ok: true, prices });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to load prices" });
@@ -10274,7 +10449,7 @@ const requireSubscriptionForPrices = async (req, res, eventId) => {
 };
 
 app.post("/admin/prices", requireAdmin, async (req, res) => {
-  const { name, amount, description, maxQuantity, isActive, eventId } = req.body || {};
+  const { name, amount, description, maxQuantity, isActive, salesEndDate, showSalesEndOnCard, salesStartDate, priceSteps, eventId } = req.body || {};
   const parsedEventId = await ensureEventOwnership(eventId, req.userId, res);
   if (!parsedEventId) {
     return;
@@ -10302,15 +10477,48 @@ app.post("/admin/prices", requireAdmin, async (req, res) => {
     return;
   }
   const parsedIsActive = parseIsActive(isActive);
+  const parsedSalesEndDate = parseSalesEndDate(salesEndDate);
+  if (!parsedSalesEndDate.ok) {
+    res.status(400).json({ ok: false, error: parsedSalesEndDate.error });
+    return;
+  }
+  const parsedSalesStartDate = parseSalesStartDate(salesStartDate);
+  if (!parsedSalesStartDate.ok) {
+    res.status(400).json({ ok: false, error: parsedSalesStartDate.error });
+    return;
+  }
+  if (
+    parsedSalesStartDate.value &&
+    parsedSalesEndDate.value &&
+    parsedSalesStartDate.value > parsedSalesEndDate.value
+  ) {
+    res.status(400).json({ ok: false, error: "Aktiveringsdag kan inte ligga efter sista köpdag." });
+    return;
+  }
+  const parsedPriceSteps = parsePriceSteps(
+    priceSteps,
+    parsedAmount,
+    parsedSalesStartDate.value,
+    parsedSalesEndDate.value
+  );
+  if (!parsedPriceSteps.ok) {
+    res.status(400).json({ ok: false, error: parsedPriceSteps.error });
+    return;
+  }
+  const stepCapError = await priceStepCapViolation(parsedPriceSteps.value);
+  if (stepCapError) {
+    res.status(400).json(stepCapError);
+    return;
+  }
   try {
     const result = await pool.query(
       `
         WITH next_pos AS (
-          SELECT COALESCE(MAX(position), 0) + 1 AS pos FROM prices WHERE event_id = $6
+          SELECT COALESCE(MAX(position), 0) + 1 AS pos FROM prices WHERE event_id = $10
         )
-        INSERT INTO prices (event_id, name, amount, description, position, max_quantity, is_active)
-        SELECT $6, $1, $2, $3, pos, $4, $5 FROM next_pos
-        RETURNING id, name, amount, description, position, max_quantity, is_active
+        INSERT INTO prices (event_id, name, amount, description, position, max_quantity, is_active, sales_end_date, show_sales_end_on_card, sales_start_date, price_steps)
+        SELECT $10, $1, $2, $3, pos, $4, $5, $6, $7, $8, $9::jsonb FROM next_pos
+        RETURNING id, name, amount, description, position, max_quantity, is_active, sales_start_date::text AS sales_start_date, sales_end_date::text AS sales_end_date, show_sales_end_on_card, price_steps
       `,
       [
         String(name).trim(),
@@ -10318,6 +10526,10 @@ app.post("/admin/prices", requireAdmin, async (req, res) => {
         String(description || "").trim(),
         parsedMaxQuantity.value,
         parsedIsActive,
+        parsedSalesEndDate.value,
+        showSalesEndOnCard === true,
+        parsedSalesStartDate.value,
+        JSON.stringify(parsedPriceSteps.value),
         parsedEventId
       ]
     );
@@ -10329,7 +10541,7 @@ app.post("/admin/prices", requireAdmin, async (req, res) => {
 
 app.put("/admin/prices/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { name, amount, description, maxQuantity, isActive, eventId } = req.body || {};
+  const { name, amount, description, maxQuantity, isActive, salesEndDate, showSalesEndOnCard, salesStartDate, priceSteps, eventId } = req.body || {};
   const parsedEventId = await ensureEventOwnership(eventId, req.userId, res);
   if (!parsedEventId) {
     return;
@@ -10360,15 +10572,62 @@ app.put("/admin/prices/:id", requireAdmin, async (req, res) => {
     return;
   }
   const parsedIsActive = parseIsActive(isActive);
+  const parsedSalesEndDate = parseSalesEndDate(salesEndDate);
+  if (!parsedSalesEndDate.ok) {
+    res.status(400).json({ ok: false, error: parsedSalesEndDate.error });
+    return;
+  }
+  const existingStart = await pool.query(
+    "SELECT sales_start_date::text AS sales_start_date FROM prices WHERE id = $1 AND event_id = $2",
+    [id, parsedEventId]
+  );
+  const parsedSalesStartDate = parseSalesStartDate(
+    salesStartDate,
+    existingStart.rows[0]?.sales_start_date
+  );
+  if (!parsedSalesStartDate.ok) {
+    res.status(400).json({ ok: false, error: parsedSalesStartDate.error });
+    return;
+  }
+  if (
+    parsedSalesStartDate.value &&
+    parsedSalesEndDate.value &&
+    parsedSalesStartDate.value > parsedSalesEndDate.value
+  ) {
+    res.status(400).json({ ok: false, error: "Aktiveringsdag kan inte ligga efter sista köpdag." });
+    return;
+  }
+  const parsedPriceSteps = parsePriceSteps(
+    priceSteps,
+    parsedAmount,
+    parsedSalesStartDate.value,
+    parsedSalesEndDate.value
+  );
+  if (!parsedPriceSteps.ok) {
+    res.status(400).json({ ok: false, error: parsedPriceSteps.error });
+    return;
+  }
+  const stepCapError = await priceStepCapViolation(parsedPriceSteps.value, {
+    eventId: parsedEventId,
+    priceId: id
+  });
+  if (stepCapError) {
+    res.status(400).json(stepCapError);
+    return;
+  }
   try {
     const result = await pool.query(
-      "UPDATE prices SET name = $1, amount = $2, description = $3, max_quantity = $4, is_active = $5 WHERE id = $6 AND event_id = $7 RETURNING id, name, amount, description, position, max_quantity, is_active",
+      "UPDATE prices SET name = $1, amount = $2, description = $3, max_quantity = $4, is_active = $5, sales_end_date = $6, show_sales_end_on_card = $7, sales_start_date = $8, price_steps = $9::jsonb WHERE id = $10 AND event_id = $11 RETURNING id, name, amount, description, position, max_quantity, is_active, sales_start_date::text AS sales_start_date, sales_end_date::text AS sales_end_date, show_sales_end_on_card, price_steps",
       [
         String(name).trim(),
         Math.round(parsedAmount),
         String(description || "").trim(),
         parsedMaxQuantity.value,
         parsedIsActive,
+        parsedSalesEndDate.value,
+        showSalesEndOnCard === true,
+        parsedSalesStartDate.value,
+        JSON.stringify(parsedPriceSteps.value),
         id,
         parsedEventId
       ]
@@ -14375,7 +14634,11 @@ const ensureBookingsTable = async () => {
       ADD COLUMN IF NOT EXISTS event_id INTEGER,
       ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '',
       ADD COLUMN IF NOT EXISTS max_quantity INTEGER,
-      ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE
+      ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      ADD COLUMN IF NOT EXISTS sales_end_date DATE,
+      ADD COLUMN IF NOT EXISTS price_steps JSONB NOT NULL DEFAULT '[]'::jsonb,
+      ADD COLUMN IF NOT EXISTS show_sales_end_on_card BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS sales_start_date DATE
   `);
   const priceCount = await pool.query(
     "SELECT COUNT(*)::int AS count FROM prices WHERE event_id = $1",

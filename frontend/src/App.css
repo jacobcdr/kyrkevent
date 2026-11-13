@@ -2410,6 +2410,133 @@ fieldset.field {
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
 }
 
+.price-ladder {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.price-ladder .muted {
+  margin: 0.25rem 0 0;
+}
+
+.price-ladder-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.price-ladder-add {
+  flex: 0 0 auto;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--accent);
+  font-size: 1.15rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.price-ladder-add:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.price-ladder-steps {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.price-ladder-add-spacer {
+  grid-column: 1;
+  grid-row: 2;
+  width: 1.75rem;
+}
+
+.price-ladder-step {
+  display: grid;
+  grid-template-columns: 1.75rem minmax(0, 1fr) minmax(0, 1fr) auto;
+  column-gap: 0.75rem;
+  row-gap: 0.5rem;
+  align-items: center;
+}
+
+.price-ladder-step .price-ladder-label.is-price {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.price-ladder-step .price-ladder-label.is-date {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.price-ladder-step .price-ladder-add,
+.price-ladder-step .price-ladder-add-spacer {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.price-ladder-step input.is-price {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.price-ladder-step input.is-date {
+  grid-column: 3;
+  grid-row: 2;
+}
+
+.price-ladder-step .price-ladder-remove {
+  grid-column: 4;
+  grid-row: 2;
+  align-self: center;
+}
+
+.price-ladder-step input {
+  width: 100%;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 0.95rem;
+  background: var(--card);
+}
+
+.price-ladder-step input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(102, 120, 141, 0.2);
+}
+
+@media (max-width: 720px) {
+  .price-ladder-step {
+    grid-template-columns: 1.75rem minmax(0, 1fr);
+  }
+
+  .price-ladder-step .price-ladder-label.is-date,
+  .price-ladder-step input.is-date,
+  .price-ladder-step .price-ladder-remove {
+    grid-column: 2;
+  }
+
+  .price-ladder-step .price-ladder-label.is-date {
+    grid-row: 3;
+  }
+
+  .price-ladder-step input.is-date,
+  .price-ladder-step .price-ladder-remove {
+    grid-row: 4;
+  }
+}
+
+.price-sales-end-toggle {
+  margin-top: 0.15rem;
+}
+
 .field-label {
   font-weight: 600;
   font-size: 0.95rem;
