@@ -645,6 +645,18 @@ const HERO_VIDEO_MAX_BYTES = 40 * 1024 * 1024;
 const parseHeroBackgroundKind = (value) =>
   String(value || "").toLowerCase() === "video" ? "video" : "image";
 
+const parseHeroCtaWidth = (value) => {
+  const normalized = String(value || "").toLowerCase();
+  return normalized === "small" || normalized === "large" ? normalized : "medium";
+};
+
+const sanitizeHeroEventTime = (value) => {
+  const match = String(value ?? "")
+    .trim()
+    .match(/^([01]\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?$/);
+  return match ? `${match[1]}:${match[2]}` : "";
+};
+
 const videoFileFilter = (_req, file, cb) => {
   const mime = String(file.mimetype || "").toLowerCase();
   const ext = path.extname(file.originalname || "").toLowerCase();
@@ -3165,7 +3177,7 @@ app.get("/hero", async (req, res) => {
       return;
     }
     const result = await pool.query(
-      "SELECT title, body_html, image_url, video_url, background_kind, show_event_name, show_cta_button, show_date_place FROM hero_section WHERE event_id = $1",
+      "SELECT title, body_html, image_url, video_url, background_kind, show_event_name, show_cta_button, show_date_place, cta_button_width, show_event_time, event_time_text FROM hero_section WHERE event_id = $1",
       [eventId]
     );
     const row = result.rows[0] || { title: "", body_html: "", image_url: "", video_url: "", background_kind: "image" };
@@ -3178,7 +3190,10 @@ app.get("/hero", async (req, res) => {
       backgroundKind: parseHeroBackgroundKind(row.background_kind),
       showEventName: row.show_event_name !== false,
       showCtaButton: row.show_cta_button !== false,
-      showDatePlace: row.show_date_place !== false
+      showDatePlace: row.show_date_place !== false,
+      ctaButtonWidth: parseHeroCtaWidth(row.cta_button_width),
+      showEventTime: row.show_event_time === true,
+      eventTime: sanitizeHeroEventTime(row.event_time_text)
     });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to load hero" });
@@ -10861,7 +10876,8 @@ app.put("/admin/hero", requireAdmin, async (req, res) => {
 });
 
 app.put("/admin/hero/overlay", requireAdmin, async (req, res) => {
-  const { eventId, showEventName, showCtaButton, showDatePlace } = req.body || {};
+  const { eventId, showEventName, showCtaButton, showDatePlace, ctaButtonWidth, showEventTime, eventTime } =
+    req.body || {};
   const parsedEventId = await ensureEventOwnership(eventId, req.userId, res);
   if (!parsedEventId) {
     return;
@@ -10877,20 +10893,29 @@ app.put("/admin/hero/overlay", requireAdmin, async (req, res) => {
           image_url,
           show_event_name,
           show_cta_button,
-          show_date_place
+          show_date_place,
+          cta_button_width,
+          show_event_time,
+          event_time_text
         )
-        VALUES ($1, $1, '', '', '', $2, $3, $4)
+        VALUES ($1, $1, '', '', '', $2, $3, $4, $5, $6, $7)
         ON CONFLICT (id) DO UPDATE SET
           show_event_name = EXCLUDED.show_event_name,
           show_cta_button = EXCLUDED.show_cta_button,
-          show_date_place = EXCLUDED.show_date_place
-        RETURNING show_event_name, show_cta_button, show_date_place
+          show_date_place = EXCLUDED.show_date_place,
+          cta_button_width = EXCLUDED.cta_button_width,
+          show_event_time = EXCLUDED.show_event_time,
+          event_time_text = EXCLUDED.event_time_text
+        RETURNING show_event_name, show_cta_button, show_date_place, cta_button_width, show_event_time, event_time_text
       `,
       [
         parsedEventId,
         showEventName !== false,
         showCtaButton !== false,
-        showDatePlace !== false
+        showDatePlace !== false,
+        parseHeroCtaWidth(ctaButtonWidth),
+        showEventTime === true,
+        sanitizeHeroEventTime(eventTime)
       ]
     );
     const row = result.rows[0] || {};
@@ -10898,7 +10923,10 @@ app.put("/admin/hero/overlay", requireAdmin, async (req, res) => {
       ok: true,
       showEventName: row.show_event_name !== false,
       showCtaButton: row.show_cta_button !== false,
-      showDatePlace: row.show_date_place !== false
+      showDatePlace: row.show_date_place !== false,
+      ctaButtonWidth: parseHeroCtaWidth(row.cta_button_width),
+      showEventTime: row.show_event_time === true,
+      eventTime: sanitizeHeroEventTime(row.event_time_text)
     });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Failed to update hero overlay" });
@@ -14674,7 +14702,10 @@ const ensureBookingsTable = async () => {
       ADD COLUMN IF NOT EXISTS background_kind TEXT NOT NULL DEFAULT 'image',
       ADD COLUMN IF NOT EXISTS show_event_name BOOLEAN NOT NULL DEFAULT true,
       ADD COLUMN IF NOT EXISTS show_cta_button BOOLEAN NOT NULL DEFAULT true,
-      ADD COLUMN IF NOT EXISTS show_date_place BOOLEAN NOT NULL DEFAULT true
+      ADD COLUMN IF NOT EXISTS show_date_place BOOLEAN NOT NULL DEFAULT true,
+      ADD COLUMN IF NOT EXISTS cta_button_width TEXT NOT NULL DEFAULT 'medium',
+      ADD COLUMN IF NOT EXISTS show_event_time BOOLEAN NOT NULL DEFAULT false,
+      ADD COLUMN IF NOT EXISTS event_time_text TEXT NOT NULL DEFAULT ''
   `);
   if (defaultEventId) {
     await pool.query(

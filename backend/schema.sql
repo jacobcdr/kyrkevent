@@ -494,7 +494,10 @@ ALTER TABLE hero_section
   ADD COLUMN IF NOT EXISTS background_kind TEXT NOT NULL DEFAULT 'image',
   ADD COLUMN IF NOT EXISTS show_event_name BOOLEAN NOT NULL DEFAULT true,
   ADD COLUMN IF NOT EXISTS show_cta_button BOOLEAN NOT NULL DEFAULT true,
-  ADD COLUMN IF NOT EXISTS show_date_place BOOLEAN NOT NULL DEFAULT true;
+  ADD COLUMN IF NOT EXISTS show_date_place BOOLEAN NOT NULL DEFAULT true,
+  ADD COLUMN IF NOT EXISTS cta_button_width TEXT NOT NULL DEFAULT 'medium',
+  ADD COLUMN IF NOT EXISTS show_event_time BOOLEAN NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS event_time_text TEXT NOT NULL DEFAULT '';
 
 INSERT INTO hero_section (id, event_id, title, body_html, image_url)
 VALUES (

@@ -129,6 +129,34 @@ function parseHeroBackgroundKind(value) {
   return String(value || "").toLowerCase() === "video" ? "video" : "image";
 }
 
+function parseHeroCtaWidth(value) {
+  const normalized = String(value || "").toLowerCase();
+  return normalized === "small" || normalized === "large" ? normalized : "medium";
+}
+
+function sanitizeHeroEventTime(value) {
+  const match = String(value ?? "")
+    .trim()
+    .match(/^([01]\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?$/);
+  return match ? `${match[1]}:${match[2]}` : "";
+}
+
+function heroOverlayFromData(data) {
+  return {
+    showEventName: data?.showEventName !== false,
+    showCtaButton: data?.showCtaButton !== false,
+    showDatePlace: data?.showDatePlace !== false,
+    ctaButtonWidth: parseHeroCtaWidth(data?.ctaButtonWidth),
+    showEventTime: data?.showEventTime === true,
+    eventTime: sanitizeHeroEventTime(data?.eventTime)
+  };
+}
+
+function buildHeroOverlayMeta(dateLabel, placeLabel, overlay) {
+  const time = overlay?.showEventTime ? sanitizeHeroEventTime(overlay.eventTime) : "";
+  return [dateLabel, time, placeLabel].filter(Boolean).join(" • ");
+}
+
 function resolveHeroBackground({ imageUrl, videoUrl, backgroundKind } = {}) {
   const kind = parseHeroBackgroundKind(backgroundKind);
   const video = String(videoUrl || "").trim();
@@ -854,11 +882,15 @@ function HeroBannerMiniPreview({
   showEventName,
   showCtaButton,
   showDatePlace,
+  ctaButtonWidth,
+  showEventTime,
+  eventTime,
   theme
 }) {
   const title = String(eventName || "").trim() || "Event";
   const buttonText = String(ctaLabel || "").trim() || "Anmäl dig här";
-  const meta = [dateLabel, placeLabel].filter(Boolean).join(" • ");
+  const buttonWidth = parseHeroCtaWidth(ctaButtonWidth);
+  const meta = buildHeroOverlayMeta(dateLabel, placeLabel, { showEventTime, eventTime });
   const compactTitle = title.length > 28;
   const isVideo = mediaType === "video" && videoUrl;
 
@@ -891,7 +923,11 @@ function HeroBannerMiniPreview({
                 {title}
               </div>
             ) : null}
-            {showCtaButton ? <span className="hero-admin-preview__cta">{buttonText}</span> : null}
+            {showCtaButton ? (
+              <span className={`hero-admin-preview__cta hero-admin-preview__cta--${buttonWidth}`}>
+                {buttonText}
+              </span>
+            ) : null}
             {showDatePlace && meta ? <p className="hero-admin-preview__meta">{meta}</p> : null}
           </div>
         </div>
@@ -3841,11 +3877,7 @@ const AdminPage = () => {
   const [heroVideoUrl, setHeroVideoUrl] = useState("");
   const [heroBackgroundKind, setHeroBackgroundKind] = useState("image");
   const [heroMediaUploading, setHeroMediaUploading] = useState(false);
-  const [heroOverlay, setHeroOverlay] = useState({
-    showEventName: true,
-    showCtaButton: true,
-    showDatePlace: true
-  });
+  const [heroOverlay, setHeroOverlay] = useState(() => heroOverlayFromData({}));
   const heroEditorRef = useRef(null);
   const faqEditorRef = useRef(null);
   const programTimeEditorRef = useRef(null);
@@ -4634,11 +4666,7 @@ const AdminPage = () => {
     setHeroImageUrl(data.imageUrl || "");
     setHeroVideoUrl(data.videoUrl || "");
     setHeroBackgroundKind(parseHeroBackgroundKind(data.backgroundKind));
-    setHeroOverlay({
-      showEventName: data.showEventName !== false,
-      showCtaButton: data.showCtaButton !== false,
-      showDatePlace: data.showDatePlace !== false
-    });
+    setHeroOverlay(heroOverlayFromData(data));
     if (heroEditorRef.current) {
       heroEditorRef.current.innerHTML = data.bodyHtml || "";
     }
@@ -7931,10 +7959,7 @@ const AdminPage = () => {
     saveKind().catch(() => showToast("Kunde inte spara valet av bakgrund."));
   };
 
-  const handleHeroOverlayChange = (event) => {
-    const { name, checked } = event.target;
-    const next = { ...heroOverlay, [name]: checked };
-    setHeroOverlay(next);
+  const saveHeroOverlay = (next) => {
     if (!token || !selectedEventId) {
       return;
     }
@@ -7950,7 +7975,10 @@ const AdminPage = () => {
           eventId: selectedEventId,
           showEventName: next.showEventName,
           showCtaButton: next.showCtaButton,
-          showDatePlace: next.showDatePlace
+          showDatePlace: next.showDatePlace,
+          ctaButtonWidth: parseHeroCtaWidth(next.ctaButtonWidth),
+          showEventTime: next.showEventTime === true,
+          eventTime: sanitizeHeroEventTime(next.eventTime)
         })
       });
       if (!response.ok) {
@@ -7959,6 +7987,28 @@ const AdminPage = () => {
       localStorage.setItem(buildStorageKey("heroUpdatedAt", selectedEventId), String(Date.now()));
     };
     saveOverlay().catch(() => showToast("Kunde inte spara inställningarna för eventbilden."));
+  };
+
+  const handleHeroOverlayChange = (event) => {
+    const { name, checked } = event.target;
+    const next = { ...heroOverlay, [name]: checked };
+    setHeroOverlay(next);
+    saveHeroOverlay(next);
+  };
+
+  const handleHeroCtaWidthChange = (width) => {
+    const next = { ...heroOverlay, ctaButtonWidth: parseHeroCtaWidth(width) };
+    setHeroOverlay(next);
+    saveHeroOverlay(next);
+  };
+
+  const handleHeroEventTimeChange = (event) => {
+    const eventTime = sanitizeHeroEventTime(event.target.value);
+    setHeroOverlay((prev) => {
+      const next = { ...prev, eventTime };
+      saveHeroOverlay(next);
+      return next;
+    });
   };
 
   const handleHeroImageRemove = () => {
@@ -17388,7 +17438,7 @@ const AdminPage = () => {
                     </label>
                   )}
                 </div>
-                <div className="field-row hero-overlay-toggles">
+                <div className="hero-overlay-options">
                   <label className="field checkbox-field">
                     <span className="field-label">Visa eventnamn</span>
                     <input
@@ -17398,24 +17448,79 @@ const AdminPage = () => {
                       onChange={handleHeroOverlayChange}
                     />
                   </label>
-                  <label className="field checkbox-field">
-                    <span className="field-label">Visa knapp</span>
-                    <input
-                      name="showCtaButton"
-                      type="checkbox"
-                      checked={heroOverlay.showCtaButton}
-                      onChange={handleHeroOverlayChange}
-                    />
-                  </label>
-                  <label className="field checkbox-field">
-                    <span className="field-label">Visa datum och plats</span>
-                    <input
-                      name="showDatePlace"
-                      type="checkbox"
-                      checked={heroOverlay.showDatePlace}
-                      onChange={handleHeroOverlayChange}
-                    />
-                  </label>
+                  <div className="hero-overlay-option">
+                    <label className="field checkbox-field">
+                      <span className="field-label">Visa knapp</span>
+                      <input
+                        name="showCtaButton"
+                        type="checkbox"
+                        checked={heroOverlay.showCtaButton}
+                        onChange={handleHeroOverlayChange}
+                      />
+                    </label>
+                    {heroOverlay.showCtaButton ? (
+                      <fieldset className="gallery-mode-picker hero-overlay-extra">
+                        <legend className="field-label">Knappbredd</legend>
+                        <div className="gallery-mode-options">
+                          {[
+                            { id: "small", label: "Liten" },
+                            { id: "medium", label: "Mellan" },
+                            { id: "large", label: "Stor" }
+                          ].map((option) => (
+                            <label key={option.id} className="gallery-mode-option">
+                              <input
+                                type="radio"
+                                name="heroCtaButtonWidth"
+                                value={option.id}
+                                checked={heroOverlay.ctaButtonWidth === option.id}
+                                onChange={() => handleHeroCtaWidthChange(option.id)}
+                              />
+                              <span>{option.label}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </fieldset>
+                    ) : null}
+                  </div>
+                  <div className="hero-overlay-option">
+                    <label className="field checkbox-field">
+                      <span className="field-label">Visa datum och plats</span>
+                      <input
+                        name="showDatePlace"
+                        type="checkbox"
+                        checked={heroOverlay.showDatePlace}
+                        onChange={handleHeroOverlayChange}
+                      />
+                    </label>
+                    {heroOverlay.showDatePlace ? (
+                      <div className="hero-overlay-time">
+                        <label className="field checkbox-field">
+                          <span className="field-label">Visa tid</span>
+                          <input
+                            name="showEventTime"
+                            type="checkbox"
+                            checked={heroOverlay.showEventTime}
+                            onChange={handleHeroOverlayChange}
+                          />
+                        </label>
+                        <label className="field">
+                          <span className="field-label">Tid</span>
+                          <input
+                            type="time"
+                            name="eventTime"
+                            value={heroOverlay.eventTime}
+                            onChange={handleHeroEventTimeChange}
+                            disabled={!heroOverlay.showEventTime}
+                            step="60"
+                            aria-label="Tid som visas med datum och plats, format HH:mm"
+                          />
+                        </label>
+                        <p className="muted">
+                          Kryssa i Visa tid och välj en tid i formatet HH:mm. Den visas tillsammans med datum och plats.
+                        </p>
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
                 <p className="muted hero-overlay-toggles-hint">
                   Styr vad som läggs ovanpå eventbilden eller videon på eventsidan. Alla tre är aktiverade som standard.
@@ -17452,6 +17557,9 @@ const AdminPage = () => {
                         showEventName={heroOverlay.showEventName}
                         showCtaButton={heroOverlay.showCtaButton}
                         showDatePlace={heroOverlay.showDatePlace}
+                        ctaButtonWidth={heroOverlay.ctaButtonWidth}
+                        showEventTime={heroOverlay.showEventTime}
+                        eventTime={heroOverlay.eventTime}
                         theme={THEMES[pendingTheme] || THEMES[selectedEvent?.theme] || THEMES.default}
                       />
                       <div className="admin-actions">
@@ -19120,9 +19228,7 @@ function App() {
     imageUrl: "",
     videoUrl: "",
     backgroundKind: "image",
-    showEventName: true,
-    showCtaButton: true,
-    showDatePlace: true
+    ...heroOverlayFromData({})
   });
   const [heroImageError, setHeroImageError] = useState(false);
   const [sectionVisibility, setSectionVisibility] = useState({
@@ -19186,6 +19292,7 @@ function App() {
     [event?.event_start_date, event?.event_end_date]
   );
   const heroPlaceLabel = place.address?.trim() || "";
+  const heroMetaLabel = buildHeroOverlayMeta(heroEventDateLabel, heroPlaceLabel, hero);
   const heroTitleText = event?.name || hero.title || "Event";
   const heroBackground = resolveHeroBackground(hero);
 
@@ -19305,10 +19412,14 @@ function App() {
     hero.showEventName,
     hero.showCtaButton,
     hero.showDatePlace,
+    hero.ctaButtonWidth,
+    hero.showEventTime,
+    hero.eventTime,
     heroTitleText,
     sectionLabels.formButton,
     heroEventDateLabel,
-    heroPlaceLabel
+    heroPlaceLabel,
+    heroMetaLabel
   ]);
 
   useEffect(() => {
@@ -19800,9 +19911,7 @@ function App() {
       imageUrl: data.imageUrl || "",
       videoUrl: data.videoUrl || "",
       backgroundKind: parseHeroBackgroundKind(data.backgroundKind),
-      showEventName: data.showEventName !== false,
-      showCtaButton: data.showCtaButton !== false,
-      showDatePlace: data.showDatePlace !== false
+      ...heroOverlayFromData(data)
     });
   };
 
@@ -19968,9 +20077,7 @@ function App() {
         imageUrl: "",
         videoUrl: "",
         backgroundKind: "image",
-        showEventName: true,
-        showCtaButton: true,
-        showDatePlace: true
+        ...heroOverlayFromData({})
       })
     );
     loadCustomFields(event.id).catch(() => setCustomFields([]));
@@ -20013,9 +20120,7 @@ function App() {
         imageUrl: "",
         videoUrl: "",
         backgroundKind: "image",
-        showEventName: true,
-        showCtaButton: true,
-        showDatePlace: true
+        ...heroOverlayFromData({})
       })
     );
       }
@@ -20382,17 +20487,15 @@ function App() {
               {hero.showCtaButton !== false ? (
                 <button
                   type="button"
-                  className="button hero-banner-cta"
+                  className={`button hero-banner-cta hero-banner-cta--${parseHeroCtaWidth(hero.ctaButtonWidth)}`}
                   ref={heroBannerCtaRef}
                   onClick={scrollToRegistrationForm}
                 >
                   {sectionLabels.formButton.trim() || "Anmäl dig här"}
                 </button>
               ) : null}
-              {hero.showDatePlace !== false && (heroEventDateLabel || heroPlaceLabel) ? (
-                <p className="hero-banner-meta">
-                  {[heroEventDateLabel, heroPlaceLabel].filter(Boolean).join(" • ")}
-                </p>
+              {hero.showDatePlace !== false && heroMetaLabel ? (
+                <p className="hero-banner-meta">{heroMetaLabel}</p>
               ) : null}
             </div>
             <button

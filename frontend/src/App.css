@@ -850,8 +850,8 @@ body:has(.landing-page) {
 }
 
 .page > .hero--banner .hero-scroll-hint svg {
-  width: 2.35rem;
-  height: 2.35rem;
+  width: 3.15rem;
+  height: 3.15rem;
   display: block;
 }
 
@@ -931,6 +931,18 @@ body:has(.landing-page) {
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.22);
 }
 
+.page > .hero--banner .hero-banner-cta--small {
+  padding: 0.55rem 1.15rem;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+}
+
+.page > .hero--banner .hero-banner-cta--large {
+  padding: 1rem 3.75rem;
+  font-size: 1.08rem;
+  min-width: min(18rem, 100%);
+}
+
 .page > .hero--banner .hero-banner-cta:hover {
   background: var(--accent-dark, var(--accent));
   border-color: rgba(255, 255, 255, 0.55);
@@ -981,6 +993,17 @@ body:has(.landing-page) {
     letter-spacing: 0.03em;
     border-width: 1.5px;
     box-shadow: 0 3px 14px rgba(0, 0, 0, 0.18);
+  }
+
+  .page > .hero--banner .hero-banner-cta--small {
+    padding: 0.4rem 0.85rem;
+    font-size: 0.68rem;
+  }
+
+  .page > .hero--banner .hero-banner-cta--large {
+    padding: 0.7rem 1.9rem;
+    font-size: 0.9rem;
+    min-width: min(14rem, 100%);
   }
 
   .page > .hero--banner .hero-scroll-hint svg {
@@ -2604,8 +2627,31 @@ fieldset.field {
   margin-bottom: 0;
 }
 
-.hero-overlay-toggles {
+.hero-overlay-options {
+  display: grid;
+  gap: 0.85rem;
   margin-top: 1.25rem;
+}
+
+.hero-overlay-option {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.hero-overlay-extra {
+  margin: 0 0 0 2.15rem;
+}
+
+.hero-overlay-time {
+  display: grid;
+  gap: 0.65rem;
+  margin-left: 2.15rem;
+  max-width: 22rem;
+}
+
+.hero-overlay-time .field,
+.hero-overlay-time .muted {
+  margin: 0;
 }
 
 .hero-overlay-toggles-hint {
@@ -5229,6 +5275,17 @@ select.goog-te-combo {
   text-transform: uppercase;
   line-height: 1.2;
   box-shadow: 0 3px 12px rgba(0, 0, 0, 0.22);
+}
+
+.hero-admin-preview__cta--small {
+  padding: 0.22rem 0.5rem;
+  font-size: 0.5rem;
+}
+
+.hero-admin-preview__cta--large {
+  padding: 0.48rem 1.55rem;
+  font-size: 0.72rem;
+  min-width: 7rem;
 }
 
 .hero-admin-preview__meta {
