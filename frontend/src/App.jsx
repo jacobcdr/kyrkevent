@@ -683,7 +683,7 @@ function SocialGlyph({ platform }) {
   );
 }
 
-function SocialLinks({ items, iconStyle, iconShape, caption }) {
+function SocialLinks({ items, iconStyle, iconShape, caption, onPlatformClick }) {
   const links = (items || []).filter((item) => item && item.url && item.url.trim());
   if (links.length === 0) {
     return null;
@@ -714,6 +714,9 @@ function SocialLinks({ items, iconStyle, iconShape, caption }) {
               rel="noreferrer"
               style={inlineStyle}
               aria-label={item.label}
+              onClick={() => {
+                if (typeof onPlatformClick === "function") onPlatformClick(item.platform);
+              }}
             >
               <SocialGlyph platform={item.platform} />
               <span className="sr-only">{item.label}</span>
@@ -20132,6 +20135,28 @@ function App() {
     return () => window.removeEventListener("storage", handleStorage);
   }, [event, isAdminRoute]);
 
+  const trackPartnerClick = (partnerId) => {
+    const id = Number(partnerId);
+    if (!eventSlug || !Number.isInteger(id) || id <= 0) return;
+    fetch(`${API_BASE}/events/${encodeURIComponent(eventSlug)}/partner-click`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ partnerId: id }),
+      keepalive: true
+    }).catch(() => {});
+  };
+
+  const trackSocialClick = (platform) => {
+    const key = String(platform || "").trim().toLowerCase();
+    if (!eventSlug || !key) return;
+    fetch(`${API_BASE}/events/${encodeURIComponent(eventSlug)}/social-click`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ platform: key }),
+      keepalive: true
+    }).catch(() => {});
+  };
+
   const handleChange = (event) => {
     const { name, value, type, checked } = event.target;
     setForm((prev) => ({
@@ -20617,7 +20642,12 @@ function App() {
                   {partners.map((partner) => (
                     <div className="partner-card" key={partner.id}>
                       {partner.url ? (
-                        <a href={partner.url} target="_blank" rel="noreferrer">
+                        <a
+                          href={partner.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={() => trackPartnerClick(partner.id)}
+                        >
                           <img
                             className="partner-logo"
                             src={resolveAssetUrl(partner.image_url)}
@@ -20673,6 +20703,7 @@ function App() {
                 iconStyle={social.iconStyle}
                 iconShape={social.iconShape}
                 caption={social.caption}
+                onPlatformClick={trackSocialClick}
               />
             </div>
           );

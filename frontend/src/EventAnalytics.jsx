@@ -46,6 +46,12 @@ const REFERRER_LABELS = {
   unknown: "Okänd"
 };
 
+const SOCIAL_CLICK_LABELS = {
+  instagram: "Instagram",
+  facebook: "Facebook",
+  linkedin: "LinkedIn"
+};
+
 const SECTION_ATTENTION_LABELS = {
   hero: "Startbild",
   text: "Eventbeskrivning",
@@ -567,7 +573,7 @@ function FormChoiceStats({ bookings, formFields, apiBase, token, eventId }) {
         <div>
           <h2>Formulärsvar</h2>
           <p className="muted" style={{ marginTop: 0 }}>
-            Välj ett fält i listan. Procenten är andel av anmälningarna. Makulerade anmälningar räknas inte. PDF-filen samlar alla extra fält.
+            Alla anmälningar, oberoende av datumfiltret för besöksstatistiken. Procenten är andel av anmälningarna. Makulerade anmälningar räknas inte.
           </p>
         </div>
         <button
@@ -692,6 +698,26 @@ export function EventAnalytics({ apiBase, token, eventId, overview, bookings = [
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [reportExporting, setReportExporting] = useState(false);
+  const [reportError, setReportError] = useState("");
+
+  const analyticsParams = useCallback(() => {
+    const params = new URLSearchParams({
+      eventId: String(eventId),
+      device: deviceFilter,
+      referrer: referrerFilter
+    });
+    if (drillDay) {
+      params.set("from", drillDay);
+      params.set("to", drillDay);
+    } else if (preset === "custom") {
+      params.set("from", fromDate);
+      params.set("to", toDate);
+    } else {
+      params.set("preset", preset);
+    }
+    return params;
+  }, [eventId, deviceFilter, referrerFilter, drillDay, preset, fromDate, toDate]);
 
   const applyPreset = (nextPreset) => {
     setPreset(nextPreset);
@@ -714,20 +740,7 @@ export function EventAnalytics({ apiBase, token, eventId, overview, bookings = [
     setLoading(true);
     setError("");
     try {
-      const params = new URLSearchParams({
-        eventId: String(eventId),
-        device: deviceFilter,
-        referrer: referrerFilter
-      });
-      if (drillDay) {
-        params.set("from", drillDay);
-        params.set("to", drillDay);
-      } else if (preset === "custom") {
-        params.set("from", fromDate);
-        params.set("to", toDate);
-      } else {
-        params.set("preset", preset);
-      }
+      const params = analyticsParams();
       const response = await fetch(`${apiBase}/admin/event-analytics?${params}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -742,7 +755,39 @@ export function EventAnalytics({ apiBase, token, eventId, overview, bookings = [
     } finally {
       setLoading(false);
     }
-  }, [apiBase, token, eventId, preset, fromDate, toDate, deviceFilter, referrerFilter, drillDay]);
+  }, [apiBase, token, analyticsParams]);
+
+  const downloadVisitReport = async () => {
+    if (!token || !eventId || reportExporting) return;
+    setReportError("");
+    setReportExporting(true);
+    try {
+      const params = analyticsParams();
+      params.delete("eventId");
+      const response = await fetch(
+        `${apiBase}/admin/events/${eventId}/visit-report.pdf?${params.toString()}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (!response.ok) {
+        throw new Error("Kunde inte skapa PDF.");
+      }
+      const blob = await response.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const disposition = response.headers.get("Content-Disposition") || "";
+      const filename = disposition.match(/filename="([^"]+)"/)?.[1] || "besoksstatistik.pdf";
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(blobUrl);
+    } catch (err) {
+      setReportError(err?.message || "Kunde inte skapa PDF.");
+    } finally {
+      setReportExporting(false);
+    }
+  };
 
   useEffect(() => {
     setData(null);
@@ -803,12 +848,37 @@ export function EventAnalytics({ apiBase, token, eventId, overview, bookings = [
         </div>
       ) : null}
 
-      <h2>Besöksstatistik på sidan</h2>
+      <FormChoiceStats
+        bookings={bookings}
+        formFields={formFields}
+        apiBase={apiBase}
+        token={token}
+        eventId={eventId}
+      />
+
+      <section className="event-analytics-visit">
+      <div className="event-analytics-visit-head">
+        <h2>Besöksstatistik på sidan</h2>
+        <button
+          type="button"
+          className="button event-analytics-report"
+          onClick={downloadVisitReport}
+          disabled={!token || !eventId || reportExporting}
+        >
+          {reportExporting ? "Skapar PDF…" : "Generera rapport i PDF"}
+        </button>
+      </div>
+      {reportError ? <p className="field-hint field-hint-error">{reportError}</p> : null}
+      <p className="muted event-analytics-visit-note">
+        Datumvalet styr diagrammet, sektionerna besökarna tittar på, besökarnas plats, partnerklick och
+        klick på sociala medier i perioden. Enhet och källa påverkar diagram, plats, enhet och
+        trafikkälla. Biljetter och formulärsvar ovan följer inte det här filtret.
+      </p>
       <p className="muted" style={{ marginTop: 0 }}>
         Unika besökare räknas per webbläsare och dag. Uppdatering av sidan ökar sidvisningar men inte
         antalet unika besökare. Klicka på en dag i diagrammet för att se fördelning per timme. Historik
         samlas in från och med att denna funktion är aktiv. Plats på kartan baseras på ungefärlig
-        IP-geolokalisering och följer samma filter som diagrammet.
+        IP-geolokalisering.
       </p>
 
       <div className="event-analytics-presets">
@@ -1049,15 +1119,71 @@ export function EventAnalytics({ apiBase, token, eventId, overview, bookings = [
               )}
             </div>
           </div>
+
+          <section className="event-analytics-partners">
+            <h3 className="admin-subsection-title">Partnerklick</h3>
+            <p className="muted event-analytics-partners-note">
+              Antal klick på partnerloggor som har en länk. Klick i perioden följer datumfiltret ovan.
+            </p>
+            {data.partnerClicks?.length ? (
+              <ul className="event-analytics-partner-list">
+                {data.partnerClicks.map((partner) => (
+                  <li key={partner.id} className="event-analytics-partner-card">
+                    <div className="event-analytics-partner-head">
+                      <strong>{partner.name.trim() || "Partner"}</strong>
+                      <span className="event-analytics-partner-url">{partner.url}</span>
+                    </div>
+                    <div className="event-analytics-partner-metrics">
+                      <div>
+                        <span>I perioden</span>
+                        <strong>{(partner.periodClicks || 0).toLocaleString("sv-SE")}</strong>
+                      </div>
+                      <div>
+                        <span>Totalt</span>
+                        <strong>{(partner.totalClicks || 0).toLocaleString("sv-SE")}</strong>
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="muted">Inga partner med länk på sidan.</p>
+            )}
+          </section>
+
+          <section className="event-analytics-partners">
+            <h3 className="admin-subsection-title">Sociala medier</h3>
+            <p className="muted event-analytics-partners-note">
+              Antal klick på ikonerna för sociala medier som har en länk. Klick i perioden följer datumfiltret ovan.
+            </p>
+            {data.socialClicks?.length ? (
+              <ul className="event-analytics-partner-list">
+                {data.socialClicks.map((item) => (
+                  <li key={item.platform} className="event-analytics-partner-card">
+                    <div className="event-analytics-partner-head">
+                      <strong>{SOCIAL_CLICK_LABELS[item.platform] || item.platform}</strong>
+                      <span className="event-analytics-partner-url">{item.url}</span>
+                    </div>
+                    <div className="event-analytics-partner-metrics">
+                      <div>
+                        <span>I perioden</span>
+                        <strong>{(item.periodClicks || 0).toLocaleString("sv-SE")}</strong>
+                      </div>
+                      <div>
+                        <span>Totalt</span>
+                        <strong>{(item.totalClicks || 0).toLocaleString("sv-SE")}</strong>
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="muted">Inga sociala medier med länk på sidan.</p>
+            )}
+          </section>
         </>
       ) : null}
-      <FormChoiceStats
-        bookings={bookings}
-        formFields={formFields}
-        apiBase={apiBase}
-        token={token}
-        eventId={eventId}
-      />
+      </section>
     </div>
   );
 }

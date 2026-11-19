@@ -7241,10 +7241,38 @@ button.admin-booking-void-button:hover {
   margin-bottom: 1.25rem;
 }
 
-.form-choice-stats {
+.event-analytics-visit {
   margin-top: 2rem;
-  padding-top: 1.5rem;
-  border-top: 1px solid var(--border);
+  padding: 1.25rem 1.15rem 1.4rem;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg);
+}
+
+.event-analytics-visit-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.35rem;
+}
+
+.event-analytics-visit-head h2 {
+  margin: 0;
+}
+
+.event-analytics-report {
+  flex: 0 0 auto;
+}
+
+.event-analytics-visit-note {
+  margin-top: 0;
+  margin-bottom: 0.45rem;
+}
+
+.form-choice-stats {
+  margin-top: 0.5rem;
 }
 
 .form-choice-stats-head {
@@ -7297,6 +7325,85 @@ button.admin-booking-void-button:hover {
 
 .form-choice-stat-note {
   margin: 0 0 0.75rem;
+}
+
+.event-analytics-partners {
+  margin-top: 1.75rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border);
+}
+
+.event-analytics-partners-note {
+  margin-top: 0;
+}
+
+.event-analytics-partner-list {
+  list-style: none;
+  margin: 0.85rem 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 0.75rem;
+}
+
+.event-analytics-partner-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  min-width: 0;
+  padding: 0.95rem 1rem;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+
+.event-analytics-partner-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.event-analytics-partner-head strong {
+  font-size: 0.98rem;
+  line-height: 1.3;
+}
+
+.event-analytics-partner-url {
+  color: var(--muted);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+.event-analytics-partner-metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.event-analytics-partner-metrics div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.45rem 0.6rem;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--card));
+}
+
+.event-analytics-partner-metrics span {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.event-analytics-partner-metrics strong {
+  font-size: 1.15rem;
+  font-weight: 800;
+  line-height: 1.2;
+  color: #0f172a;
 }
 
 .event-analytics-breakdown {

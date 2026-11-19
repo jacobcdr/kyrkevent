@@ -52,6 +52,7 @@ export default defineConfig({
       "/place": "http://localhost:3001",
       "/hero": "http://localhost:3001",
       "/payments": "http://localhost:3001",
+      "/events": "http://localhost:3001",
       "/speakers": "http://localhost:3001",
       "/partners": "http://localhost:3001",
       "/uploads": "http://localhost:3001",

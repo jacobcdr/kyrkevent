@@ -450,6 +450,32 @@ FROM (
 ) AS sub
 WHERE p.id = sub.id AND p.position IS NULL;
 
+CREATE TABLE IF NOT EXISTS partner_link_clicks (
+  id BIGSERIAL PRIMARY KEY,
+  event_id INTEGER NOT NULL,
+  partner_id INTEGER NOT NULL,
+  clicked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_partner_link_clicks_event_partner
+  ON partner_link_clicks (event_id, partner_id);
+
+CREATE INDEX IF NOT EXISTS idx_partner_link_clicks_event_clicked
+  ON partner_link_clicks (event_id, clicked_at DESC);
+
+CREATE TABLE IF NOT EXISTS social_link_clicks (
+  id BIGSERIAL PRIMARY KEY,
+  event_id INTEGER NOT NULL,
+  platform TEXT NOT NULL,
+  clicked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_social_link_clicks_event_platform
+  ON social_link_clicks (event_id, platform);
+
+CREATE INDEX IF NOT EXISTS idx_social_link_clicks_event_clicked
+  ON social_link_clicks (event_id, clicked_at DESC);
+
 CREATE TABLE IF NOT EXISTS prices (
   id SERIAL PRIMARY KEY,
   event_id INTEGER,

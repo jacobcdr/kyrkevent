@@ -537,6 +537,12 @@ const eventViewLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false
 });
+const partnerClickLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false
+});
 const demoTokenLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 30,
@@ -3058,6 +3064,84 @@ app.post("/events/:slug/section-views", sectionViewLimiter, async (req, res) => 
   } catch (error) {
     console.error("POST section views error:", error);
     res.status(500).json({ ok: false, error: "Failed to track sections" });
+  }
+});
+
+app.post("/events/:slug/partner-click", partnerClickLimiter, async (req, res) => {
+  const slug = String(req.params.slug || "").trim();
+  const partnerId = Number.parseInt(req.body?.partnerId, 10);
+  if (!slug || !Number.isInteger(partnerId) || partnerId <= 0) {
+    res.status(400).json({ ok: false, error: "Missing partner" });
+    return;
+  }
+  if (parseDeviceType(req.headers["user-agent"] || "") === "bot") {
+    res.json({ ok: true });
+    return;
+  }
+  try {
+    const result = await pool.query(
+      `
+        INSERT INTO partner_link_clicks (event_id, partner_id)
+        SELECT p.event_id, p.id
+        FROM partners p
+        JOIN events e ON e.id = p.event_id
+        WHERE e.slug = $1
+          AND p.id = $2
+          AND TRIM(COALESCE(p.url, '')) <> ''
+        RETURNING id
+      `,
+      [slug, partnerId]
+    );
+    if (result.rowCount === 0) {
+      res.status(404).json({ ok: false, error: "Partner not found" });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Failed to track partner click" });
+  }
+});
+
+const SOCIAL_CLICK_PLATFORMS = {
+  instagram: { url: "social_instagram_url", show: "social_show_instagram" },
+  facebook: { url: "social_facebook_url", show: "social_show_facebook" },
+  linkedin: { url: "social_linkedin_url", show: "social_show_linkedin" }
+};
+
+app.post("/events/:slug/social-click", partnerClickLimiter, async (req, res) => {
+  const slug = String(req.params.slug || "").trim();
+  const platform = String(req.body?.platform || "").trim().toLowerCase();
+  const columns = SOCIAL_CLICK_PLATFORMS[platform];
+  if (!slug || !columns) {
+    res.status(400).json({ ok: false, error: "Missing platform" });
+    return;
+  }
+  if (parseDeviceType(req.headers["user-agent"] || "") === "bot") {
+    res.json({ ok: true });
+    return;
+  }
+  try {
+    const result = await pool.query(
+      `
+        INSERT INTO social_link_clicks (event_id, platform)
+        SELECT e.id, $2
+        FROM events e
+        JOIN event_sections s ON s.event_id = e.id
+        WHERE e.slug = $1
+          AND s.show_social = TRUE
+          AND s.${columns.show} = TRUE
+          AND TRIM(COALESCE(s.${columns.url}, '')) <> ''
+        RETURNING id
+      `,
+      [slug, platform]
+    );
+    if (result.rowCount === 0) {
+      res.status(404).json({ ok: false, error: "Social link not found" });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Failed to track social click" });
   }
 });
 
@@ -10218,6 +10302,8 @@ app.delete("/admin/events/:id", requireAdmin, async (req, res) => {
     await client.query("DELETE FROM program_items WHERE event_id = $1", [eventId]);
     await client.query("DELETE FROM prices WHERE event_id = $1", [eventId]);
     await client.query("DELETE FROM speakers WHERE event_id = $1", [eventId]);
+    await client.query("DELETE FROM partner_link_clicks WHERE event_id = $1", [eventId]);
+    await client.query("DELETE FROM social_link_clicks WHERE event_id = $1", [eventId]);
     await client.query("DELETE FROM partners WHERE event_id = $1", [eventId]);
     const galleryFiles = await client.query(
       "SELECT image_url FROM event_gallery_images WHERE event_id = $1",
@@ -11793,6 +11879,10 @@ app.delete("/admin/partners/:id", requireAdmin, async (req, res) => {
     return;
   }
   try {
+    await pool.query("DELETE FROM partner_link_clicks WHERE partner_id = $1 AND event_id = $2", [
+      id,
+      eventId
+    ]);
     const result = await pool.query(
       "DELETE FROM partners WHERE id = $1 AND event_id = $2 RETURNING image_url",
       [id, eventId]
@@ -13556,25 +13646,561 @@ app.get("/admin/event-views", requireAdmin, async (req, res) => {
   }
 });
 
-app.get("/admin/event-analytics", requireAdmin, async (req, res) => {
+const VISIT_REPORT_SECTION_LABELS = {
+  hero: "Startbild",
+  text: "Eventbeskrivning",
+  formButton: "Call to action",
+  program: "Program",
+  faq: "FAQ",
+  form: "Anmäl dig här",
+  speakers: "Personer",
+  partners: "Partner",
+  gallery: "Galleri",
+  social: "Sociala medier",
+  place: "Plats"
+};
+
+const VISIT_REPORT_DEVICE_LABELS = {
+  all: "Alla",
+  mobile: "Mobil",
+  desktop: "Dator",
+  tablet: "Surfplatta",
+  bot: "Bot",
+  unknown: "Okänd"
+};
+
+const VISIT_REPORT_REFERRER_LABELS = {
+  all: "Alla",
+  direct: "Direkt",
+  search: "Sökmotor",
+  social: "Socialt",
+  external: "Extern",
+  unknown: "Okänd"
+};
+
+const VISIT_REPORT_SOCIAL_LABELS = {
+  instagram: "Instagram",
+  facebook: "Facebook",
+  linkedin: "LinkedIn"
+};
+
+const visitReportPdfFilename = (name) => {
+  const base = String(name || "event")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  return `besoksstatistik-${base || "event"}.pdf`;
+};
+
+const visitReportNumber = (value) => Number(value || 0).toLocaleString("sv-SE");
+
+const visitReportDate = (iso) => {
+  if (!iso) return "";
+  const date = new Date(`${iso}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return String(iso);
+  return date.toLocaleDateString("sv-SE", { day: "numeric", month: "long", year: "numeric" });
+};
+
+const visitReportDay = (iso) => {
+  if (!iso) return "";
+  const date = new Date(`${iso}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return String(iso);
+  return date.toLocaleDateString("sv-SE", { day: "numeric", month: "short" });
+};
+
+const visitReportParseIso = (iso) => {
+  const [year, month, day] = String(iso || "").split("-").map(Number);
+  if (!year || !month || !day) return null;
+  return new Date(year, month - 1, day);
+};
+
+const visitReportIsoDate = (date) => {
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
+};
+
+const visitReportYScale = (maxValue) => {
+  const max = Math.max(0, Number(maxValue) || 0);
+  if (max <= 0) return { top: 1, ticks: [0, 1] };
+  const rough = Math.max(1, max / 4);
+  const pow = Math.pow(10, Math.floor(Math.log10(rough)));
+  const step = [1, 2, 5, 10].map((factor) => factor * pow).find((value) => value >= rough - 1e-9) || pow * 10;
+  const top = Math.ceil(max / step) * step;
+  const ticks = [];
+  for (let value = 0; value <= top + step * 0.01; value += step) ticks.push(Math.round(value));
+  return { top, ticks };
+};
+
+const visitReportGroupDays = (rows, unit) => {
+  const buckets = new Map();
+  for (const row of rows) {
+    const date = visitReportParseIso(row.key);
+    if (!date) continue;
+    let key = row.key;
+    if (unit === "week") {
+      const monday = new Date(date);
+      monday.setDate(date.getDate() - ((date.getDay() + 6) % 7));
+      key = visitReportIsoDate(monday);
+    } else if (unit === "month") {
+      key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+    } else if (unit === "quarter") {
+      key = `${date.getFullYear()}-Q${Math.floor(date.getMonth() / 3) + 1}`;
+    } else if (unit === "year") {
+      key = String(date.getFullYear());
+    }
+    const current = buckets.get(key) || { key, value: 0 };
+    current.value += row.value;
+    buckets.set(key, current);
+  }
+  const points = [...buckets.values()].sort((a, b) => a.key.localeCompare(b.key));
+  const years = new Set(points.map((point) => point.key.slice(0, 4)));
+  return points.map((point) => {
+    if (unit === "month") {
+      const date = visitReportParseIso(`${point.key}-01`);
+      return {
+        label: date
+          ? date.toLocaleDateString("sv-SE", years.size > 1 ? { month: "short", year: "numeric" } : { month: "short" })
+          : point.key,
+        value: point.value
+      };
+    }
+    if (unit === "quarter") {
+      const [year, quarter] = point.key.split("-Q");
+      return { label: years.size > 1 ? `kv${quarter} ${year}` : `kv${quarter}`, value: point.value };
+    }
+    if (unit === "year") return { label: point.key, value: point.value };
+    return { label: visitReportDay(point.key), value: point.value };
+  });
+};
+
+const visitReportCountry = (code) => {
+  const normalized = String(code || "").trim().toUpperCase();
+  if (!normalized || normalized === "XX") return "Okänd plats";
   try {
-    const eventId = await ensureEventOwnership(req.query.eventId, req.userId, res);
-    if (!eventId) {
+    return new Intl.DisplayNames(["sv"], { type: "region" }).of(normalized) || normalized;
+  } catch {
+    return normalized;
+  }
+};
+
+function writeVisitReportPdf(doc, { eventName, analytics }) {
+  const margin = 48;
+  const pageWidth = doc.page.width - margin * 2;
+  const contentBottom = () => doc.page.height - FORM_STATS_FOOTER_RESERVE;
+  const generated = new Date().toLocaleString("sv-SE", { dateStyle: "long", timeStyle: "short" });
+  const fromLabel = visitReportDate(analytics.from);
+  const toLabel = visitReportDate(analytics.to);
+  const periodLabel = analytics.from === analytics.to ? fromLabel : `${fromLabel} – ${toLabel}`;
+  const deviceLabel = VISIT_REPORT_DEVICE_LABELS[analytics.filters?.device] || "Alla";
+  const referrerLabel = VISIT_REPORT_REFERRER_LABELS[analytics.filters?.referrer] || "Alla";
+  const series = Array.isArray(analytics.series) ? analytics.series : [];
+  const accent = "#66788d";
+
+  const drawHeader = () => {
+    doc.save();
+    doc.rect(0, 0, doc.page.width, 92).fill(accent);
+    doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(20).text("Besöksstatistik", margin, 22, {
+      width: pageWidth,
+      lineBreak: false
+    });
+    doc.font("Helvetica").fontSize(11).text(eventName || "Event", margin, 46, {
+      width: pageWidth,
+      lineBreak: false
+    });
+    doc.fontSize(10).text(periodLabel, margin, 64, { width: pageWidth, lineBreak: false });
+    doc.restore();
+    doc.y = 108;
+    doc.fillColor("#64748b").font("Helvetica").fontSize(10);
+    doc.text(`Enhet: ${deviceLabel}. Källa: ${referrerLabel}. Skapad ${generated}.`, margin, doc.y, {
+      width: pageWidth
+    });
+    doc.moveDown(0.7);
+    doc.fillColor("#1e293b");
+  };
+
+  const ensureSpace = (height) => {
+    if (doc.y + height <= contentBottom()) return;
+    doc.addPage();
+    drawHeader();
+  };
+
+  const sectionTitle = (title) => {
+    ensureSpace(36);
+    doc.moveDown(0.45);
+    const top = doc.y;
+    doc.save();
+    doc.roundedRect(margin, top, 4, 16, 2).fill(accent);
+    doc.restore();
+    doc.font("Helvetica-Bold").fontSize(13).fillColor("#1e293b");
+    doc.text(title, margin + 12, top + 1, { width: pageWidth - 12 });
+    doc.moveDown(0.35);
+  };
+
+  const drawMetricCards = () => {
+    const peak = analytics.peak?.count
+      ? analytics.granularity === "hour"
+        ? `${analytics.peak.label} (${visitReportNumber(analytics.peak.count)} unika${
+            analytics.peak.viewCount != null ? `, ${visitReportNumber(analytics.peak.viewCount)} visningar` : ""
+          })`
+        : `${visitReportDate(analytics.peak.label)} (${visitReportNumber(analytics.peak.count)} unika${
+            analytics.peak.viewCount != null ? `, ${visitReportNumber(analytics.peak.viewCount)} visningar` : ""
+          })`
+      : "Ingen trafik i perioden";
+    const cards = [
+      { label: "UNIKA BESÖKARE", value: visitReportNumber(analytics.totalUniqueVisitors) },
+      { label: "SIDVISNINGAR", value: visitReportNumber(analytics.totalViews) },
+      { label: "MEST TRAFIK", value: peak },
+      { label: "UNIKA SEDAN START", value: visitReportNumber(analytics.lifetimeUniqueVisitors) }
+    ];
+    const gap = 10;
+    const cardWidth = (pageWidth - gap) / 2;
+    doc.font("Helvetica").fontSize(9);
+    const rowHeight = Math.max(
+      58,
+      ...cards.map((card) => 28 + doc.heightOfString(card.value, { width: cardWidth - 22 }))
+    );
+    ensureSpace(rowHeight * 2 + gap + 8);
+    const startY = doc.y;
+    cards.forEach((card, index) => {
+      const col = index % 2;
+      const row = Math.floor(index / 2);
+      const x = margin + col * (cardWidth + gap);
+      const y = startY + row * (rowHeight + gap);
+      doc.save();
+      doc.roundedRect(x, y, cardWidth, rowHeight, 8).fill("#f8fafc");
+      doc.roundedRect(x, y, 4, rowHeight, 2).fill(index === 1 ? "#14b8a6" : index === 2 ? "#eab308" : accent);
+      doc.restore();
+      doc.fillColor("#64748b").font("Helvetica-Bold").fontSize(8);
+      doc.text(card.label, x + 14, y + 10, { width: cardWidth - 22, lineBreak: false });
+      doc.fillColor("#0f172a").font("Helvetica-Bold").fontSize(index === 2 ? 10 : 16);
+      doc.text(card.value, x + 14, y + 24, { width: cardWidth - 22 });
+    });
+    doc.y = startY + rowHeight * 2 + gap;
+  };
+
+  const drawLineChart = () => {
+    if (series.length === 0) {
+      doc.font("Helvetica").fontSize(11).fillColor("#64748b");
+      doc.text("Inga besökare i valt filter.", margin, doc.y, { width: pageWidth });
       return;
     }
+    doc.font("Helvetica").fontSize(8);
+    const labelsFit = (points, plotGuess) => {
+      if (points.length <= 1) return true;
+      const widest = Math.max(...points.map((point) => doc.widthOfString(String(point.label || ""))));
+      return points.length * (widest + 8) <= plotGuess;
+    };
+    const plotGuess = Math.max(120, pageWidth - 46);
+    let unit = "dag";
+    let summed = false;
+    let points = [];
+    if (analytics.granularity === "hour") {
+      unit = "timme";
+      points = series.map((row) => ({ label: String(row.label || "").slice(0, 2), value: Number(row.uniqueCount) || 0 }));
+    } else {
+      const rows = series.map((row) => ({ key: String(row.label || ""), value: Number(row.uniqueCount) || 0 }));
+      const daily = visitReportGroupDays(rows, "day");
+      const widestDay = Math.max(1, ...daily.map((point) => doc.widthOfString(String(point.label || ""))));
+      let dayStep = 1;
+      while (dayStep < daily.length) {
+        const shown = Math.floor((daily.length - 1) / dayStep) + 1;
+        if (shown * (widestDay + 12) <= plotGuess) break;
+        dayStep += 1;
+      }
+      if (daily.length <= 1 || dayStep <= 6) {
+        unit = "dag";
+        summed = false;
+        points = daily;
+      } else {
+        const choices = [
+          ["month", "månad"],
+          ["quarter", "kvartal"],
+          ["year", "år"]
+        ];
+        for (const [groupUnit, label] of choices) {
+          const grouped = visitReportGroupDays(rows, groupUnit);
+          unit = label;
+          summed = true;
+          points = grouped;
+          if (labelsFit(grouped, plotGuess)) break;
+        }
+      }
+    }
+    const { top, ticks } = visitReportYScale(Math.max(...points.map((point) => point.value), 0));
+    const yWidth = Math.max(18, ...ticks.map((tick) => doc.widthOfString(visitReportNumber(tick)))) + 8;
+    const plotLeft = margin + yWidth;
+    const plotWidth = Math.max(80, pageWidth - yWidth);
+    const plotHeight = 132;
+    const axisLabelHeight = 16;
+    ensureSpace(plotHeight + axisLabelHeight + 28);
+    const plotTop = doc.y + 4;
+    const plotBottom = plotTop + plotHeight;
+    const xAt = (index) =>
+      points.length <= 1 ? plotLeft + plotWidth / 2 : plotLeft + (plotWidth * index) / (points.length - 1);
+    const yAt = (value) => plotBottom - (plotHeight * value) / top;
 
+    doc.save();
+    doc.lineWidth(0.6).strokeColor("#e2e8f0");
+    ticks.forEach((tick) => {
+      const y = yAt(tick);
+      doc.moveTo(plotLeft, y).lineTo(plotLeft + plotWidth, y).stroke();
+    });
+    doc.strokeColor("#94a3b8").lineWidth(1);
+    doc.moveTo(plotLeft, plotTop).lineTo(plotLeft, plotBottom).lineTo(plotLeft + plotWidth, plotBottom).stroke();
+    doc.restore();
+
+    doc.font("Helvetica").fontSize(8).fillColor("#64748b");
+    ticks.forEach((tick) => {
+      const y = yAt(tick);
+      doc.text(visitReportNumber(tick), margin, y - 4, { width: yWidth - 6, align: "right", lineBreak: false });
+    });
+
+    if (points.length === 1) {
+      doc.save();
+      doc.circle(xAt(0), yAt(points[0].value), 3).fill(accent);
+      doc.restore();
+    } else {
+      doc.save();
+      doc.lineWidth(1.8).strokeColor(accent).lineJoin("round").lineCap("round");
+      points.forEach((point, index) => {
+        const x = xAt(index);
+        const y = yAt(point.value);
+        if (index === 0) doc.moveTo(x, y);
+        else doc.lineTo(x, y);
+      });
+      doc.stroke();
+      if (points.length <= 40) {
+        points.forEach((point, index) => {
+          doc.circle(xAt(index), yAt(point.value), 2.4).fill(accent);
+        });
+      }
+      doc.restore();
+    }
+
+    let labelStep = 1;
+    while (labelStep < points.length) {
+      const shown = points.filter((_, index) => index % labelStep === 0 || index === points.length - 1);
+      const widest = Math.max(...shown.map((point) => doc.widthOfString(String(point.label || ""))));
+      if (shown.length * (widest + 12) <= plotWidth) break;
+      labelStep += 1;
+    }
+    doc.font("Helvetica").fontSize(8).fillColor("#64748b");
+    points.forEach((point, index) => {
+      if (index % labelStep !== 0 && index !== points.length - 1) return;
+      const label = String(point.label || "");
+      const width = Math.max(24, doc.widthOfString(label) + 4);
+      const textX = Math.max(margin, Math.min(xAt(index) - width / 2, margin + pageWidth - width));
+      doc.text(label, textX, plotBottom + 6, {
+        width,
+        align: "center",
+        lineBreak: false
+      });
+    });
+
+    doc.y = plotBottom + axisLabelHeight + 4;
+    doc.font("Helvetica").fontSize(9).fillColor("#64748b");
+    const caption = summed
+      ? `Per ${unit}. Varje punkt är summan av unika besökare per dag.`
+      : `Per ${unit}.`;
+    doc.text(caption, margin, doc.y, { width: pageWidth });
+    doc.moveDown(0.2);
+  };
+
+  const drawTable = (headers, rows, weights) => {
+    const weightSum = weights.reduce((sum, weight) => sum + weight, 0) || 1;
+    let used = 0;
+    const widths = weights.map((weight, index) => {
+      if (index === weights.length - 1) return Math.max(40, pageWidth - used);
+      const width = Math.floor((pageWidth * weight) / weightSum);
+      used += width;
+      return width;
+    });
+    const drawHead = () => {
+      doc.font("Helvetica-Bold").fontSize(9);
+      const textHeight = Math.max(...headers.map((header, index) => doc.heightOfString(header, { width: widths[index] - 12 })));
+      const headerHeight = Math.max(22, textHeight + 10);
+      ensureSpace(headerHeight + 8);
+      const top = doc.y;
+      doc.save();
+      doc.rect(margin, top, pageWidth, headerHeight).fill("#f1f5f9");
+      doc.restore();
+      doc.fillColor("#475569").font("Helvetica-Bold").fontSize(9);
+      let x = margin;
+      headers.forEach((header, index) => {
+        doc.text(header, x + 6, top + 5, { width: widths[index] - 12 });
+        x += widths[index];
+      });
+      doc.y = top + headerHeight;
+    };
+    drawHead();
+    if (rows.length === 0) {
+      doc.font("Helvetica").fontSize(10).fillColor("#64748b");
+      doc.text("Ingen data för valt filter.", margin, doc.y + 6, { width: pageWidth });
+      doc.moveDown(0.8);
+      return;
+    }
+    rows.forEach((row, rowIndex) => {
+      doc.font("Helvetica").fontSize(9);
+      const textHeight = Math.max(
+        ...row.map((cell, index) => doc.heightOfString(String(cell), { width: widths[index] - 12 }))
+      );
+      const rowHeight = Math.max(20, textHeight + 8);
+      if (doc.y + rowHeight > contentBottom()) {
+        doc.addPage();
+        drawHeader();
+        drawHead();
+      }
+      const top = doc.y;
+      if (rowIndex % 2 === 1) {
+        doc.save();
+        doc.rect(margin, top, pageWidth, rowHeight).fill("#f8fafc");
+        doc.restore();
+      }
+      doc.fillColor("#1e293b").font("Helvetica").fontSize(9);
+      let x = margin;
+      row.forEach((cell, index) => {
+        doc.text(String(cell), x + 6, top + 4, { width: widths[index] - 12 });
+        x += widths[index];
+      });
+      doc.y = top + rowHeight;
+    });
+  };
+
+  drawHeader();
+  drawMetricCards();
+
+  sectionTitle("Unika besökare över tid");
+  drawLineChart();
+
+  sectionTitle("Sektioner besökarna tittar på");
+  const sections = (analytics.sectionAttention || []).filter((row) => Number(row.percent) > 0);
+  if (sections.length === 0) {
+    doc.font("Helvetica").fontSize(10).fillColor("#64748b");
+    doc.text("Ingen sektionsdata för valt filter.", margin, doc.y, { width: pageWidth });
+  } else {
+    sections.forEach((row) => {
+      const label = VISIT_REPORT_SECTION_LABELS[row.key] || row.key;
+      ensureSpace(28);
+      const top = doc.y;
+      doc.fillColor("#334155").font("Helvetica").fontSize(10);
+      doc.text(label, margin, top, { width: pageWidth - 48 });
+      doc.fillColor("#64748b").font("Helvetica-Bold").fontSize(10);
+      doc.text(`${Number(row.percent) || 0}%`, margin + pageWidth - 42, top, { width: 42, align: "right" });
+      const barTop = top + 14;
+      doc.save();
+      doc.roundedRect(margin, barTop, pageWidth, 6, 3).fill("#e2e8f0");
+      const fillWidth = Math.max(0, (pageWidth * (Number(row.percent) || 0)) / 100);
+      if (fillWidth > 0) doc.roundedRect(margin, barTop, Math.max(6, fillWidth), 6, 3).fill(accent);
+      doc.restore();
+      doc.y = barTop + 14;
+    });
+  }
+
+  sectionTitle("Besökares plats");
+  const locations = analytics.locations || [];
+  const locationTotal = locations.reduce((sum, row) => sum + (Number(row.count) || 0), 0);
+  drawTable(
+    ["Plats", "Unika", "Andel"],
+    locations.map((row) => [
+      visitReportCountry(row.countryCode),
+      visitReportNumber(row.count),
+      `${locationTotal > 0 ? Math.round(((Number(row.count) || 0) / locationTotal) * 100) : 0}%`
+    ]),
+    [1.6, 0.7, 0.6]
+  );
+
+  sectionTitle("Enhet");
+  drawTable(
+    ["Enhet", "Unika", "Andel"],
+    (analytics.devices || []).map((row) => [
+      VISIT_REPORT_DEVICE_LABELS[row.type] || row.type,
+      visitReportNumber(row.count),
+      `${Number(row.percent) || 0}%`
+    ]),
+    [1.6, 0.7, 0.6]
+  );
+
+  sectionTitle("Trafikkälla");
+  drawTable(
+    ["Källa", "Unika", "Andel"],
+    (analytics.referrers || []).map((row) => [
+      VISIT_REPORT_REFERRER_LABELS[row.type] || row.type,
+      visitReportNumber(row.count),
+      `${Number(row.percent) || 0}%`
+    ]),
+    [1.6, 0.7, 0.6]
+  );
+
+  sectionTitle("Partnerklick");
+  doc.font("Helvetica").fontSize(9).fillColor("#64748b");
+  doc.text("I perioden följer datumvalet. Totalt är alla klick sedan start.", margin, doc.y, { width: pageWidth });
+  doc.moveDown(0.35);
+  drawTable(
+    ["Partner", "Länk", "I perioden", "Totalt"],
+    (analytics.partnerClicks || []).map((row) => [
+      String(row.name || "").trim() || "Partner",
+      row.url || "",
+      visitReportNumber(row.periodClicks),
+      visitReportNumber(row.totalClicks)
+    ]),
+    [1.1, 1.8, 0.8, 0.7]
+  );
+
+  sectionTitle("Sociala medier");
+  doc.font("Helvetica").fontSize(9).fillColor("#64748b");
+  doc.text("I perioden följer datumvalet. Totalt är alla klick sedan start.", margin, doc.y, { width: pageWidth });
+  doc.moveDown(0.35);
+  drawTable(
+    ["Kanal", "Länk", "I perioden", "Totalt"],
+    (analytics.socialClicks || []).map((row) => [
+      VISIT_REPORT_SOCIAL_LABELS[row.platform] || row.platform,
+      row.url || "",
+      visitReportNumber(row.periodClicks),
+      visitReportNumber(row.totalClicks)
+    ]),
+    [1.1, 1.8, 0.8, 0.7]
+  );
+}
+
+function createVisitReportPdfBuffer(data) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({
+      size: "A4",
+      bufferPages: true,
+      margins: { top: 48, left: 48, right: 48, bottom: FORM_STATS_FOOTER_RESERVE }
+    });
+    const chunks = [];
+    doc.on("data", (chunk) => chunks.push(chunk));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+    try {
+      writeVisitReportPdf(doc, data);
+      drawFormStatsFooter(doc);
+      doc.end();
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+async function loadEventAnalytics(eventId, query) {
     const range = resolveAnalyticsRange({
-      from: req.query.from,
-      to: req.query.to,
-      preset: req.query.preset
+      from: query.from,
+      to: query.to,
+      preset: query.preset
     });
     if (!range.from || !range.to) {
-      res.status(400).json({ ok: false, error: "Ogiltigt datumintervall." });
-      return;
+      const error = new Error("Ogiltigt datumintervall.");
+      error.statusCode = 400;
+      throw error;
     }
 
-    const deviceFilter = normalizeDeviceFilter(req.query.device);
-    const referrerFilter = normalizeReferrerFilter(req.query.referrer);
+    const deviceFilter = normalizeDeviceFilter(query.device);
+    const referrerFilter = normalizeReferrerFilter(query.referrer);
     const isSingleDay = range.from === range.to;
     const granularity = isSingleDay ? "hour" : "day";
 
@@ -13624,7 +14250,7 @@ app.get("/admin/event-analytics", requireAdmin, async (req, res) => {
       ORDER BY unique_count DESC, view_count DESC
     `;
 
-    const [seriesResult, deviceResult, referrerResult, locationResult, totalResult, lifetimeResult, lifetimeUniqueResult, ticketSalesResult, checkInResult, sectionViewResult] =
+    const [seriesResult, deviceResult, referrerResult, locationResult, totalResult, lifetimeResult, lifetimeUniqueResult, ticketSalesResult, checkInResult, sectionViewResult, partnerClickResult, socialClickResult] =
       await Promise.all([
       pool.query(seriesQuery, baseParams),
       pool.query(breakdownQuery("device_type"), baseParams),
@@ -13706,6 +14332,66 @@ app.get("/admin/event-analytics", requireAdmin, async (req, res) => {
           ORDER BY visible_ms DESC, section_key ASC
         `,
         [eventId, range.from, range.to]
+      ),
+      pool.query(
+        `
+          SELECT
+            p.id,
+            COALESCE(NULLIF(TRIM(p.name), ''), '') AS name,
+            p.url,
+            COUNT(c.id) FILTER (
+              WHERE (c.clicked_at AT TIME ZONE '${ANALYTICS_TZ}')::date >= $2::date
+                AND (c.clicked_at AT TIME ZONE '${ANALYTICS_TZ}')::date <= $3::date
+            )::int AS period_clicks,
+            COUNT(c.id)::int AS total_clicks
+          FROM partners p
+          LEFT JOIN partner_link_clicks c
+            ON c.partner_id = p.id AND c.event_id = p.event_id
+          WHERE p.event_id = $1
+            AND TRIM(COALESCE(p.url, '')) <> ''
+          GROUP BY p.id, p.name, p.url, p.position
+          ORDER BY p.position ASC NULLS LAST, p.id ASC
+        `,
+        [eventId, range.from, range.to]
+      ),
+      pool.query(
+        `
+          SELECT
+            v.platform,
+            v.url,
+            COUNT(c.id) FILTER (
+              WHERE (c.clicked_at AT TIME ZONE '${ANALYTICS_TZ}')::date >= $2::date
+                AND (c.clicked_at AT TIME ZONE '${ANALYTICS_TZ}')::date <= $3::date
+            )::int AS period_clicks,
+            COUNT(c.id)::int AS total_clicks
+          FROM (
+            SELECT event_id, 'instagram' AS platform, 1 AS sort_order, social_instagram_url AS url
+            FROM event_sections
+            WHERE event_id = $1
+              AND show_social = TRUE
+              AND social_show_instagram = TRUE
+              AND TRIM(COALESCE(social_instagram_url, '')) <> ''
+            UNION ALL
+            SELECT event_id, 'facebook', 2, social_facebook_url
+            FROM event_sections
+            WHERE event_id = $1
+              AND show_social = TRUE
+              AND social_show_facebook = TRUE
+              AND TRIM(COALESCE(social_facebook_url, '')) <> ''
+            UNION ALL
+            SELECT event_id, 'linkedin', 3, social_linkedin_url
+            FROM event_sections
+            WHERE event_id = $1
+              AND show_social = TRUE
+              AND social_show_linkedin = TRUE
+              AND TRIM(COALESCE(social_linkedin_url, '')) <> ''
+          ) v
+          LEFT JOIN social_link_clicks c
+            ON c.event_id = v.event_id AND c.platform = v.platform
+          GROUP BY v.platform, v.url, v.sort_order
+          ORDER BY v.sort_order
+        `,
+        [eventId, range.from, range.to]
       )
     ]);
 
@@ -13744,9 +14430,7 @@ app.get("/admin/event-analytics", requireAdmin, async (req, res) => {
       percent: sectionPercents[index] || 0
     }));
 
-    res.json({
-      ok: true,
-      analytics: {
+    return {
         granularity,
         from: range.from,
         to: range.to,
@@ -13770,6 +14454,19 @@ app.get("/admin/event-analytics", requireAdmin, async (req, res) => {
           notCheckedPercent
         },
         sectionAttention,
+        partnerClicks: (partnerClickResult.rows || []).map((row) => ({
+          id: row.id,
+          name: row.name || "",
+          url: row.url || "",
+          periodClicks: Number(row.period_clicks) || 0,
+          totalClicks: Number(row.total_clicks) || 0
+        })),
+        socialClicks: (socialClickResult.rows || []).map((row) => ({
+          platform: row.platform,
+          url: row.url || "",
+          periodClicks: Number(row.period_clicks) || 0,
+          totalClicks: Number(row.total_clicks) || 0
+        })),
         series,
         devices: withPercents(deviceResult.rows),
         referrers: withPercents(referrerResult.rows),
@@ -13790,10 +14487,50 @@ app.get("/admin/event-analytics", requireAdmin, async (req, res) => {
           device: deviceFilter,
           referrer: referrerFilter
         }
-      }
-    });
+    };
+}
+
+app.get("/admin/event-analytics", requireAdmin, async (req, res) => {
+  try {
+    const eventId = await ensureEventOwnership(req.query.eventId, req.userId, res);
+    if (!eventId) return;
+    const analytics = await loadEventAnalytics(eventId, req.query);
+    res.json({ ok: true, analytics });
   } catch (error) {
-    res.status(500).json({ ok: false, error: "Failed to load analytics" });
+    if (error.statusCode === 400) {
+      res.status(400).json({ ok: false, error: error.message });
+      return;
+    }
+    console.error("GET /admin/event-analytics error:", error);
+    if (!res.headersSent) {
+      res.status(500).json({ ok: false, error: "Failed to load analytics" });
+    }
+  }
+});
+
+app.get("/admin/events/:id/visit-report.pdf", requireAdmin, async (req, res) => {
+  const eventId = await ensureEventOwnership(req.params.id, req.userId, res);
+  if (!eventId) return;
+  try {
+    const eventResult = await pool.query("SELECT name FROM events WHERE id = $1", [eventId]);
+    const analytics = await loadEventAnalytics(eventId, req.query);
+    const pdf = await createVisitReportPdfBuffer({
+      eventName: eventResult.rows[0]?.name || "Event",
+      analytics
+    });
+    const filename = visitReportPdfFilename(eventResult.rows[0]?.name);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send(pdf);
+  } catch (error) {
+    console.error("GET /admin/events/:id/visit-report.pdf error:", error);
+    if (!res.headersSent) {
+      const status = error.statusCode === 400 ? 400 : 500;
+      res.status(status).json({
+        ok: false,
+        error: status === 400 ? error.message : "Kunde inte skapa PDF."
+      });
+    }
   }
 });
 
@@ -14633,6 +15370,40 @@ const ensureBookingsTable = async () => {
       FROM partners
     ) AS sub
     WHERE p.id = sub.id AND p.position IS NULL
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS partner_link_clicks (
+      id BIGSERIAL PRIMARY KEY,
+      event_id INTEGER NOT NULL,
+      partner_id INTEGER NOT NULL,
+      clicked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_partner_link_clicks_event_partner
+      ON partner_link_clicks (event_id, partner_id)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_partner_link_clicks_event_clicked
+      ON partner_link_clicks (event_id, clicked_at DESC)
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS social_link_clicks (
+      id BIGSERIAL PRIMARY KEY,
+      event_id INTEGER NOT NULL,
+      platform TEXT NOT NULL,
+      clicked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_social_link_clicks_event_platform
+      ON social_link_clicks (event_id, platform)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_social_link_clicks_event_clicked
+      ON social_link_clicks (event_id, clicked_at DESC)
   `);
 
   await pool.query(`
