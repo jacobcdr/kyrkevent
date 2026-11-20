@@ -4543,6 +4543,12 @@ fieldset.field {
   margin-top: 0.75rem;
 }
 
+.admin-checkin-access-start {
+  display: inline-block;
+  margin: 0.25rem 0 1.25rem;
+  text-decoration: none;
+}
+
 .admin-checkin-access-mail {
   margin: 1.75rem 0 1rem;
   padding-top: 1.5rem;

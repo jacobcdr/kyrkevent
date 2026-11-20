@@ -3658,7 +3658,7 @@ function AdminCheckInPage({ linkToken = "", sessionToken = "", presetEventName =
   if (!eventId) {
     return (
       <div className="page admin-checkin-page">
-        <p className="admin-error">Saknar event. Öppna sidan från admin via knappen QR-incheckning.</p>
+        <p className="admin-error">Saknar event. Öppna sidan från fliken QR-kod incheckning.</p>
         <a href="/admin" className="button">
           Till admin
         </a>
@@ -14420,8 +14420,8 @@ const AdminPage = () => {
 
             <h3>9. QR-kod incheckning</h3>
             <p>
-              I dörren skannas deltagarnas QR-koder med kameran. Du som arrangör öppnar det med knappen <strong>QR-incheckning</strong>.
-              Andra som ska hjälpa till behöver inte ditt lösenord.
+              I dörren skannas deltagarnas QR-koder med kameran. Du som arrangör startar det i fliken QR-kod incheckning med
+              knappen <strong>Starta QR-incheckning från denna enhet</strong>. Andra som ska hjälpa till behöver inte ditt lösenord.
             </p>
             <ul>
               <li>
@@ -14431,7 +14431,7 @@ const AdminPage = () => {
               <li>
                 <strong>När länken fungerar</strong> – från två dagar före eventets startdatum till och med eventets sista dag.
                 Tidigare än så står det att incheckningen inte är öppen ännu. Dagen efter eventet har länken gått ut och går inte att använda.
-                Ett försök utanför de dagarna räknas inte som fel pinkod. Knappen QR-incheckning, som du själv använder, påverkas inte.
+                Ett försök utanför de dagarna räknas inte som fel pinkod. Knappen Starta QR-incheckning från denna enhet, som du själv använder, påverkas inte.
               </li>
               <li>
                 <strong>Så använder hjälparen länken</strong> – öppna länken och fyll i pinkoden en gång på den mobilen. Därefter kan kameran
@@ -14487,14 +14487,6 @@ const AdminPage = () => {
                   rel="noreferrer"
                 >
                   👁 Förhandsgranska event
-                </a>
-                <a
-                  className="button button-outline"
-                  href={`/admin/check-in?eventId=${encodeURIComponent(selectedEvent.id)}`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  QR-incheckning
                 </a>
               </>
             ) : null}
@@ -14996,6 +14988,16 @@ const AdminPage = () => {
                 Länken ger bara incheckning för det här eventet, inte resten av admin. Den fungerar från två dagar före
                 eventet och till och med eventets sista dag.
               </p>
+              {selectedEvent ? (
+                <a
+                  className="button admin-checkin-access-start"
+                  href={`/admin/check-in?eventId=${encodeURIComponent(selectedEvent.id)}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Starta QR-incheckning från denna enhet
+                </a>
+              ) : null}
               {checkInAccessError ? <p className="admin-error">{checkInAccessError}</p> : null}
               {checkInAccess ? (
                 <>
