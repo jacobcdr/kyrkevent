@@ -476,6 +476,15 @@ CREATE INDEX IF NOT EXISTS idx_social_link_clicks_event_platform
 CREATE INDEX IF NOT EXISTS idx_social_link_clicks_event_clicked
   ON social_link_clicks (event_id, clicked_at DESC);
 
+CREATE TABLE IF NOT EXISTS event_checkin_access (
+  event_id INTEGER PRIMARY KEY,
+  token TEXT NOT NULL UNIQUE,
+  pin TEXT NOT NULL,
+  failed_attempts INTEGER NOT NULL DEFAULT 0,
+  locked BOOLEAN NOT NULL DEFAULT FALSE,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS prices (
   id SERIAL PRIMARY KEY,
   event_id INTEGER,

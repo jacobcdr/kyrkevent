@@ -10304,6 +10304,7 @@ app.delete("/admin/events/:id", requireAdmin, async (req, res) => {
     await client.query("DELETE FROM speakers WHERE event_id = $1", [eventId]);
     await client.query("DELETE FROM partner_link_clicks WHERE event_id = $1", [eventId]);
     await client.query("DELETE FROM social_link_clicks WHERE event_id = $1", [eventId]);
+    await client.query("DELETE FROM event_checkin_access WHERE event_id = $1", [eventId]);
     await client.query("DELETE FROM partners WHERE event_id = $1", [eventId]);
     const galleryFiles = await client.query(
       "SELECT image_url FROM event_gallery_images WHERE event_id = $1",
@@ -12517,13 +12518,391 @@ app.post("/admin/bookings/:bookingId/void", requireAdmin, async (req, res) => {
   }
 });
 
-app.post("/admin/events/:eventId/check-in/scan", requireAdmin, async (req, res) => {
+const CHECKIN_PIN_ATTEMPTS = 10;
+
+const checkInPinLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: "För många försök. Vänta en stund." }
+});
+const checkInMailLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: "För många utskick. Försök igen om en stund." }
+});
+
+const newCheckInPin = () => String(crypto.randomInt(0, 10000)).padStart(4, "0");
+const newCheckInToken = () => crypto.randomBytes(24).toString("base64url");
+
+const addDateOnlyDays = (isoDate, days) => {
+  const [year, month, day] = isoDate.split("-").map(Number);
+  const utc = new Date(Date.UTC(year, month - 1, day + days));
+  const y = utc.getUTCFullYear();
+  const m = String(utc.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(utc.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+};
+
+const checkInWindowState = (startDate, endDate, today) => {
+  const start = startDate || endDate;
+  const end = endDate || startDate;
+  if (!start || !end || !today) return { state: "undated" };
+  const opensOn = addDateOnlyDays(start, -2);
+  if (today < opensOn) return { state: "early", opensOn, closesOn: end };
+  if (today > end) return { state: "ended", opensOn, closesOn: end };
+  return { state: "open", opensOn, closesOn: end };
+};
+
+const checkInWindowMessage = (windowState) => {
+  if (windowState?.state === "early") {
+    return "Incheckningen är inte öppen ännu. Länken fungerar från två dagar före eventet.";
+  }
+  if (windowState?.state === "ended") {
+    return "Länken har gått ut. Den gäller inte dagen efter eventet.";
+  }
+  if (windowState?.state === "undated" || windowState?.state === "missing") {
+    return "Incheckningen kan inte öppnas eftersom eventet saknar datum.";
+  }
+  return "";
+};
+
+async function loadCheckInWindow(eventId) {
+  const result = await pool.query(
+    `
+      SELECT event_start_date, event_end_date,
+             (NOW() AT TIME ZONE '${ANALYTICS_TZ}')::date AS today
+      FROM events
+      WHERE id = $1
+    `,
+    [eventId]
+  );
+  const row = result.rows[0];
+  if (!row) return { state: "missing" };
+  return checkInWindowState(
+    toDateOnlyString(row.event_start_date),
+    toDateOnlyString(row.event_end_date),
+    toDateOnlyString(row.today)
+  );
+}
+
+const rejectCheckInWindow = (res, windowState) => {
+  if (windowState?.state === "open") return false;
+  res.status(403).json({ ok: false, error: checkInWindowMessage(windowState) });
+  return true;
+};
+
+const pinsMatch = (stored, given) => {
+  const left = Buffer.from(String(stored || ""));
+  const right = Buffer.from(String(given ?? "").trim());
+  if (left.length === 0 || left.length !== right.length) return false;
+  return crypto.timingSafeEqual(left, right);
+};
+
+const checkInAccessPayload = (row) => ({
+  ok: true,
+  path: `/check-in/${row.token}`,
+  pin: row.pin,
+  locked: row.locked === true,
+  failedAttempts: Number(row.failed_attempts) || 0,
+  attemptsLeft: row.locked ? 0 : Math.max(0, CHECKIN_PIN_ATTEMPTS - (Number(row.failed_attempts) || 0))
+});
+
+async function regenerateCheckInAccess(eventId) {
+  const token = newCheckInToken();
+  const pin = newCheckInPin();
+  const result = await pool.query(
+    `
+      INSERT INTO event_checkin_access (event_id, token, pin, failed_attempts, locked, updated_at)
+      VALUES ($1, $2, $3, 0, FALSE, NOW())
+      ON CONFLICT (event_id) DO UPDATE
+        SET token = EXCLUDED.token,
+            pin = EXCLUDED.pin,
+            failed_attempts = 0,
+            locked = FALSE,
+            updated_at = NOW()
+      RETURNING token, pin, failed_attempts, locked
+    `,
+    [eventId, token, pin]
+  );
+  return result.rows[0];
+}
+
+async function ensureCheckInAccess(eventId) {
+  const existing = await pool.query(
+    "SELECT token, pin, failed_attempts, locked FROM event_checkin_access WHERE event_id = $1",
+    [eventId]
+  );
+  if (existing.rowCount > 0) return existing.rows[0];
+  return regenerateCheckInAccess(eventId);
+}
+
+const requireCheckInSession = async (req, res, next) => {
+  if (!JWT_SECRET) {
+    res.status(500).json({ ok: false, error: "JWT_SECRET is not set" });
+    return;
+  }
+  const header = req.headers.authorization || "";
+  const bearer = header.startsWith("Bearer ") ? header.slice(7) : "";
+  const linkToken = String(req.params.token || "");
+  if (!bearer || !linkToken) {
+    res.status(401).json({ ok: false, error: "Logga in med pinkoden igen." });
+    return;
+  }
   try {
-    const eventId = await ensureEventOwnership(req.params.eventId, req.userId, res);
-    if (!eventId) {
+    const payload = jwt.verify(bearer, JWT_SECRET);
+    if (payload?.role !== "checkin" || payload.accessToken !== linkToken) {
+      res.status(401).json({ ok: false, error: "Logga in med pinkoden igen." });
       return;
     }
-    const normalized = normalizeQrOrderNumber(req.body?.raw ?? req.body?.text ?? "");
+    const row = await pool.query(
+      "SELECT event_id, locked FROM event_checkin_access WHERE token = $1",
+      [linkToken]
+    );
+    if (row.rowCount === 0 || Number(row.rows[0].event_id) !== Number(payload.eventId)) {
+      res.status(401).json({ ok: false, error: "Länken har gått ut. Fråga efter en ny giltig länk." });
+      return;
+    }
+    if (row.rows[0].locked) {
+      res.status(423).json({ ok: false, error: "Länken är låst. Be arrangören skapa en ny länk." });
+      return;
+    }
+    if (rejectCheckInWindow(res, await loadCheckInWindow(row.rows[0].event_id))) return;
+    req.checkInEventId = row.rows[0].event_id;
+    next();
+  } catch {
+    res.status(401).json({ ok: false, error: "Logga in med pinkoden igen." });
+  }
+};
+
+app.get("/admin/events/:id/check-in-access", requireAdmin, async (req, res) => {
+  const eventId = await ensureEventOwnership(req.params.id, req.userId, res);
+  if (!eventId) return;
+  try {
+    const row = await ensureCheckInAccess(eventId);
+    res.json(checkInAccessPayload(row));
+  } catch (error) {
+    console.error("GET check-in-access error:", error);
+    res.status(500).json({ ok: false, error: "Kunde inte läsa incheckningslänken." });
+  }
+});
+
+app.post("/admin/events/:id/check-in-access", requireAdmin, async (req, res) => {
+  const eventId = await ensureEventOwnership(req.params.id, req.userId, res);
+  if (!eventId) return;
+  try {
+    const row = await regenerateCheckInAccess(eventId);
+    res.json(checkInAccessPayload(row));
+  } catch (error) {
+    console.error("POST check-in-access error:", error);
+    res.status(500).json({ ok: false, error: "Kunde inte skapa en ny länk." });
+  }
+});
+
+const checkInMailOrigin = (req) => {
+  const origin = String(req.get("origin") || "").replace(/\/+$/, "");
+  if (origin && (!allowedOrigins.length || allowedOrigins.includes(origin))) return origin;
+  return String(primaryFrontendUrl || "").replace(/\/+$/, "");
+};
+
+app.post("/admin/events/:id/check-in-access/email", requireAdmin, checkInMailLimiter, async (req, res) => {
+  const eventId = await ensureEventOwnership(req.params.id, req.userId, res);
+  if (!eventId) return;
+  const email = String(req.body?.email || "").trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 200) {
+    res.status(400).json({ ok: false, error: "Ange en giltig e-postadress." });
+    return;
+  }
+  if (!resend || !RESEND_FROM) {
+    res.status(500).json({ ok: false, error: "E-post är inte konfigurerat." });
+    return;
+  }
+  const origin = checkInMailOrigin(req);
+  if (!origin) {
+    res.status(500).json({ ok: false, error: "FRONTEND_URL is not set" });
+    return;
+  }
+  try {
+    const row = await ensureCheckInAccess(eventId);
+    const eventResult = await pool.query("SELECT name FROM events WHERE id = $1", [eventId]);
+    const eventName = String(eventResult.rows[0]?.name || "Event").replace(/[\r\n]+/g, " ").trim() || "Event";
+    const link = `${origin}/check-in/${row.token}`;
+    const lockedNote = row.locked
+      ? "Länken är låst efter för många felaktiga försök. Be arrangören skapa en ny länk och pinkod."
+      : "Öppna länken och fyll i pinkoden. Därefter kan du skanna QR-koder i dörren.";
+    const subject = `Incheckning – ${eventName}`;
+    const text = [
+      "Hej!",
+      "",
+      `Du kan checka in deltagare på ${eventName}.`,
+      "",
+      `Länk: ${link}`,
+      `Pinkod: ${row.pin}`,
+      "",
+      lockedNote,
+      "Länken ger bara incheckning för det här eventet.",
+      "Länken fungerar från två dagar före eventet och till och med eventets sista dag. Dagen efter fungerar den inte.",
+      "",
+      "Vänliga hälsningar,",
+      "Kyrkevent.se"
+    ].join("\n");
+    const sent = await resend.emails.send({
+      from: RESEND_FROM,
+      to: email,
+      subject,
+      text,
+      html: `
+        <p>Hej!</p>
+        <p>Du kan checka in deltagare på <strong>${escapeHtml(eventName)}</strong>.</p>
+        <p><strong>Länk:</strong> <a href="${escapeHtml(link)}">${escapeHtml(link)}</a><br/>
+        <strong>Pinkod:</strong> <span style="font-size:24px;letter-spacing:0.18em;font-weight:700;">${escapeHtml(row.pin)}</span></p>
+        <p>${escapeHtml(lockedNote)}</p>
+        <p>Länken ger bara incheckning för det här eventet.</p>
+        <p>Länken fungerar från två dagar före eventet och till och med eventets sista dag. Dagen efter fungerar den inte.</p>
+        <p>Vänliga hälsningar,<br/>Kyrkevent.se</p>
+      `
+    });
+    if (sent?.error) {
+      console.error("POST check-in-access email error:", sent.error);
+      res.status(500).json({ ok: false, error: "Kunde inte skicka e-posten." });
+      return;
+    }
+    res.json({ ok: true, email });
+  } catch (error) {
+    console.error("POST check-in-access email error:", error);
+    res.status(500).json({ ok: false, error: "Kunde inte skicka e-posten." });
+  }
+});
+
+app.get("/check-in/:token", async (req, res) => {
+  try {
+    const row = await pool.query(
+      `
+        SELECT a.locked, a.failed_attempts, a.event_id, e.name,
+               e.event_start_date, e.event_end_date,
+               (NOW() AT TIME ZONE '${ANALYTICS_TZ}')::date AS today
+        FROM event_checkin_access a
+        JOIN events e ON e.id = a.event_id
+        WHERE a.token = $1
+      `,
+      [req.params.token]
+    );
+    if (row.rowCount === 0) {
+      res.status(404).json({ ok: false, error: "Länken har gått ut. Fråga efter en ny giltig länk." });
+      return;
+    }
+    const item = row.rows[0];
+    const windowState = checkInWindowState(
+      toDateOnlyString(item.event_start_date),
+      toDateOnlyString(item.event_end_date),
+      toDateOnlyString(item.today)
+    );
+    if (windowState.state !== "open") {
+      res.status(403).json({
+        ok: false,
+        eventName: item.name || "Event",
+        error: checkInWindowMessage(windowState)
+      });
+      return;
+    }
+    const locked = item.locked === true;
+    res.json({
+      ok: true,
+      eventName: item.name || "Event",
+      locked,
+      attemptsLeft: locked ? 0 : Math.max(0, CHECKIN_PIN_ATTEMPTS - (Number(item.failed_attempts) || 0))
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Kunde inte öppna incheckningen." });
+  }
+});
+
+app.post("/check-in/:token/pin", checkInPinLimiter, async (req, res) => {
+  const linkToken = String(req.params.token || "");
+  const given = String(req.body?.pin ?? "").trim();
+  try {
+    const found = await pool.query(
+      "SELECT event_id, pin, locked FROM event_checkin_access WHERE token = $1",
+      [linkToken]
+    );
+    if (found.rowCount === 0) {
+      res.status(404).json({ ok: false, error: "Länken har gått ut. Fråga efter en ny giltig länk." });
+      return;
+    }
+    const row = found.rows[0];
+    if (rejectCheckInWindow(res, await loadCheckInWindow(row.event_id))) return;
+    if (row.locked) {
+      res.status(423).json({
+        ok: false,
+        locked: true,
+        attemptsLeft: 0,
+        error: "Länken är låst. Be arrangören skapa en ny länk."
+      });
+      return;
+    }
+    if (!pinsMatch(row.pin, given)) {
+      const updated = await pool.query(
+        `
+          UPDATE event_checkin_access
+          SET failed_attempts = failed_attempts + 1,
+              locked = failed_attempts + 1 >= $2,
+              updated_at = NOW()
+          WHERE token = $1 AND locked = FALSE
+          RETURNING failed_attempts, locked
+        `,
+        [linkToken, CHECKIN_PIN_ATTEMPTS]
+      );
+      const next = updated.rows[0];
+      const locked = next?.locked === true;
+      const attemptsLeft = locked ? 0 : Math.max(0, CHECKIN_PIN_ATTEMPTS - (Number(next?.failed_attempts) || 0));
+      res.status(locked ? 423 : 401).json({
+        ok: false,
+        locked,
+        attemptsLeft,
+        error: locked ? "För många felaktiga försök. Be arrangören skapa en ny länk." : "Fel pinkod."
+      });
+      return;
+    }
+    const cleared = await pool.query(
+      `
+        UPDATE event_checkin_access
+        SET failed_attempts = 0, updated_at = NOW()
+        WHERE token = $1 AND locked = FALSE
+        RETURNING event_id
+      `,
+      [linkToken]
+    );
+    if (cleared.rowCount === 0) {
+      res.status(423).json({
+        ok: false,
+        locked: true,
+        attemptsLeft: 0,
+        error: "Länken är låst. Be arrangören skapa en ny länk."
+      });
+      return;
+    }
+    if (!JWT_SECRET) {
+      res.status(500).json({ ok: false, error: "JWT_SECRET is not set" });
+      return;
+    }
+    const session = jwt.sign(
+      { role: "checkin", eventId: cleared.rows[0].event_id, accessToken: linkToken },
+      JWT_SECRET,
+      { expiresIn: "18h" }
+    );
+    res.json({ ok: true, session });
+  } catch (error) {
+    console.error("POST check-in pin error:", error);
+    res.status(500).json({ ok: false, error: "Kunde inte logga in." });
+  }
+});
+
+async function sendCheckInScan(res, eventId, body) {
+  try {
+    const normalized = normalizeQrOrderNumber(body?.raw ?? body?.text ?? "");
     if (!normalized) {
       res.status(400).json({ ok: false, error: "Ogiltig QR-kod." });
       return;
@@ -12551,15 +12930,11 @@ app.post("/admin/events/:eventId/check-in/scan", requireAdmin, async (req, res) 
   } catch (error) {
     res.status(500).json({ ok: false, error: "Incheckning misslyckades." });
   }
-});
+}
 
-app.post("/admin/events/:eventId/check-in/search", requireAdmin, async (req, res) => {
+async function sendCheckInSearch(res, eventId, body) {
   try {
-    const eventId = await ensureEventOwnership(req.params.eventId, req.userId, res);
-    if (!eventId) {
-      return;
-    }
-    const query = String(req.body?.query ?? "").trim();
+    const query = String(body?.query ?? "").trim();
     if (query.length < 2) {
       res.status(400).json({ ok: false, error: "Ange minst 2 tecken." });
       return;
@@ -12599,16 +12974,12 @@ app.post("/admin/events/:eventId/check-in/search", requireAdmin, async (req, res
   } catch (error) {
     res.status(500).json({ ok: false, error: "Sökning misslyckades." });
   }
-});
+}
 
-app.post("/admin/events/:eventId/check-in/confirm", requireAdmin, async (req, res) => {
+async function sendCheckInConfirm(res, eventId, body) {
   try {
-    const eventId = await ensureEventOwnership(req.params.eventId, req.userId, res);
-    if (!eventId) {
-      return;
-    }
-    const bodyIds = req.body?.bookingIds;
-    const singleId = req.body?.bookingId;
+    const bodyIds = body?.bookingIds;
+    const singleId = body?.bookingId;
     let bookingIds =
       Array.isArray(bodyIds) && bodyIds.length > 0
         ? bodyIds.map((id) => Number(id)).filter((n) => Number.isFinite(n) && n > 0)
@@ -12641,7 +13012,21 @@ app.post("/admin/events/:eventId/check-in/confirm", requireAdmin, async (req, re
   } catch (error) {
     res.status(500).json({ ok: false, error: "Kunde inte checka in." });
   }
-});
+}
+
+const runOwnedCheckIn = async (req, res, send) => {
+  const eventId = await ensureEventOwnership(req.params.eventId, req.userId, res);
+  if (!eventId) return;
+  await send(res, eventId, req.body);
+};
+
+app.post("/admin/events/:eventId/check-in/scan", requireAdmin, (req, res) => runOwnedCheckIn(req, res, sendCheckInScan));
+app.post("/admin/events/:eventId/check-in/search", requireAdmin, (req, res) => runOwnedCheckIn(req, res, sendCheckInSearch));
+app.post("/admin/events/:eventId/check-in/confirm", requireAdmin, (req, res) => runOwnedCheckIn(req, res, sendCheckInConfirm));
+
+app.post("/check-in/:token/scan", requireCheckInSession, (req, res) => sendCheckInScan(res, req.checkInEventId, req.body));
+app.post("/check-in/:token/search", requireCheckInSession, (req, res) => sendCheckInSearch(res, req.checkInEventId, req.body));
+app.post("/check-in/:token/confirm", requireCheckInSession, (req, res) => sendCheckInConfirm(res, req.checkInEventId, req.body));
 
 const toCsvRow = (values) =>
   values
@@ -15404,6 +15789,17 @@ const ensureBookingsTable = async () => {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_social_link_clicks_event_clicked
       ON social_link_clicks (event_id, clicked_at DESC)
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS event_checkin_access (
+      event_id INTEGER PRIMARY KEY,
+      token TEXT NOT NULL UNIQUE,
+      pin TEXT NOT NULL,
+      failed_attempts INTEGER NOT NULL DEFAULT 0,
+      locked BOOLEAN NOT NULL DEFAULT FALSE,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
   `);
 
   await pool.query(`

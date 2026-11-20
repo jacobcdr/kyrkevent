@@ -4515,6 +4515,45 @@ fieldset.field {
   text-decoration: none;
 }
 
+.admin-checkin-access-link .field-with-copy {
+  width: fit-content;
+  max-width: 100%;
+}
+
+.admin-checkin-access-link .field-with-copy input {
+  flex: 0 1 auto;
+  width: auto;
+  max-width: calc(100% - 6.5rem);
+  field-sizing: content;
+}
+
+.admin-checkin-access-pin {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.25rem 0 0.75rem;
+}
+
+.admin-checkin-access-pin strong {
+  font-size: 1.8rem;
+  letter-spacing: 0.18em;
+}
+
+.admin-checkin-access-regenerate {
+  margin-top: 0.75rem;
+}
+
+.admin-checkin-access-mail {
+  margin: 1.75rem 0 1rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border);
+  max-width: 36rem;
+}
+
+.admin-checkin-pin-form {
+  max-width: 18rem;
+}
+
 .admin-event-tabs {
   display: flex;
   flex-wrap: wrap;

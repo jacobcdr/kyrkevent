@@ -3341,10 +3341,25 @@ const PaymentStatusPage = () => {
   );
 };
 
-function AdminCheckInPage() {
+function AdminCheckInPage({ linkToken = "", sessionToken = "", presetEventName = "", onSessionExpired } = {}) {
+  const linkMode = Boolean(linkToken);
   const params = new URLSearchParams(window.location.search);
-  const eventId = params.get("eventId");
-  const [token] = useState(() => localStorage.getItem("adminToken") || "");
+  const eventId = linkMode ? "link" : params.get("eventId");
+  const [token] = useState(() => (linkMode ? sessionToken : localStorage.getItem("adminToken") || ""));
+  const checkInEndpoint = (action) =>
+    linkMode
+      ? `${API_BASE}/check-in/${encodeURIComponent(linkToken)}/${action}`
+      : `${API_BASE}/admin/events/${eventId}/check-in/${action}`;
+  const sessionRejected = (res, data) => {
+    if (linkMode && (res.status === 401 || res.status === 423 || res.status === 403)) {
+      onSessionExpired?.({
+        message: data?.error || "",
+        blocked: res.status === 403 || res.status === 423
+      });
+      return true;
+    }
+    return false;
+  };
   const [eventName, setEventName] = useState("");
   const [cameraError, setCameraError] = useState("");
   const [toast, setToast] = useState("");
@@ -3367,6 +3382,10 @@ function AdminCheckInPage() {
   };
 
   useEffect(() => {
+    if (linkMode) {
+      setEventName(presetEventName || "");
+      return;
+    }
     if (!token || !eventId) {
       return;
     }
@@ -3391,7 +3410,7 @@ function AdminCheckInPage() {
     return () => {
       cancelled = true;
     };
-  }, [token, eventId]);
+  }, [token, eventId, linkMode, presetEventName]);
 
   useEffect(() => {
     document.title = "QR-incheckning";
@@ -3453,7 +3472,7 @@ function AdminCheckInPage() {
         }
 
         try {
-          const res = await fetch(`${API_BASE}/admin/events/${eventId}/check-in/scan`, {
+          const res = await fetch(checkInEndpoint("scan"), {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -3466,6 +3485,9 @@ function AdminCheckInPage() {
             data = await res.json();
           } catch {
             data = null;
+          }
+          if (sessionRejected(res, data)) {
+            return;
           }
           if (cancelled) {
             resumeScanner();
@@ -3512,7 +3534,7 @@ function AdminCheckInPage() {
         }
       })();
     };
-  }, [token, eventId, readerDomId]);
+  }, [token, eventId, readerDomId, linkMode, linkToken]);
 
   useEffect(() => {
     if (modalMatches) {
@@ -3562,7 +3584,7 @@ function AdminCheckInPage() {
     pauseScanner();
     setSearchBusy(true);
     try {
-      const res = await fetch(`${API_BASE}/admin/events/${eventId}/check-in/search`, {
+      const res = await fetch(checkInEndpoint("search"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -3575,6 +3597,9 @@ function AdminCheckInPage() {
         data = await res.json();
       } catch {
         data = null;
+      }
+      if (sessionRejected(res, data)) {
+        return;
       }
       if (!data?.ok) {
         const msg =
@@ -3604,7 +3629,7 @@ function AdminCheckInPage() {
     }
     setBusy(true);
     try {
-      const res = await fetch(`${API_BASE}/admin/events/${eventId}/check-in/confirm`, {
+      const res = await fetch(checkInEndpoint("confirm"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -3613,6 +3638,9 @@ function AdminCheckInPage() {
         body: JSON.stringify({ bookingIds })
       });
       const data = await res.json();
+      if (sessionRejected(res, data)) {
+        return;
+      }
       if (!data.ok) {
         showToast(data.error || "Kunde inte checka in");
       } else {
@@ -3806,11 +3834,171 @@ function AdminCheckInPage() {
           )
         : null}
 
-      <footer className="admin-checkin-footer">
-        <a href="/admin" className="link-button admin-checkin-footer-link">
-          Tillbaka till admin
-        </a>
-      </footer>
+      {linkMode ? null : (
+        <footer className="admin-checkin-footer">
+          <a href="/admin" className="link-button admin-checkin-footer-link">
+            Tillbaka till admin
+          </a>
+        </footer>
+      )}
+    </div>
+  );
+}
+
+function CheckInLinkPage({ linkToken }) {
+  const storageKey = `checkinAccess:${linkToken}`;
+  const [sessionToken, setSessionToken] = useState(() => {
+    try {
+      return sessionStorage.getItem(storageKey) || "";
+    } catch {
+      return "";
+    }
+  });
+  const [eventName, setEventName] = useState("");
+  const [locked, setLocked] = useState(false);
+  const [missing, setMissing] = useState(false);
+  const [pin, setPin] = useState("");
+  const [error, setError] = useState("");
+  const [attemptsLeft, setAttemptsLeft] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    document.title = "QR-incheckning";
+    return () => {
+      document.title = SITE_TITLE;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/check-in/${encodeURIComponent(linkToken)}`);
+        const data = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!res.ok) {
+          setEventName(data.eventName || "");
+          setMissing(true);
+          setError(data.error || "Länken har gått ut. Fråga efter en ny giltig länk.");
+          return;
+        }
+        setEventName(data.eventName || "");
+        setLocked(Boolean(data.locked));
+        if (data.locked) {
+          setError("Länken är låst. Be arrangören skapa en ny länk.");
+        }
+        setAttemptsLeft(data.attemptsLeft ?? null);
+      } catch {
+        if (!cancelled) setError("Kunde inte öppna incheckningen.");
+      } finally {
+        if (!cancelled) setLoaded(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [linkToken]);
+
+  const clearSession = () => {
+    try {
+      sessionStorage.removeItem(storageKey);
+    } catch {
+      /* ignore */
+    }
+    setSessionToken("");
+  };
+
+  const submitPin = async (event) => {
+    event.preventDefault();
+    if (busy || locked || missing) return;
+    setBusy(true);
+    setError("");
+    try {
+      const res = await fetch(`${API_BASE}/check-in/${encodeURIComponent(linkToken)}/pin`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pin })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.session) {
+        setLocked(Boolean(data.locked));
+        setAttemptsLeft(data.attemptsLeft ?? null);
+        setError(data.error || "Fel pinkod.");
+        return;
+      }
+      try {
+        sessionStorage.setItem(storageKey, data.session);
+      } catch {
+        /* ignore */
+      }
+      setSessionToken(data.session);
+    } catch {
+      setError("Nätverksfel");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!loaded) {
+    return (
+      <div className="page admin-checkin-page">
+        <header className="admin-checkin-header">
+          <h1>Incheckning</h1>
+          <p className="muted">Laddar…</p>
+        </header>
+      </div>
+    );
+  }
+
+  if (sessionToken && !locked && !missing) {
+    return (
+      <AdminCheckInPage
+        linkToken={linkToken}
+        sessionToken={sessionToken}
+        presetEventName={eventName}
+        onSessionExpired={(info) => {
+          clearSession();
+          setError(info?.message || "Logga in med pinkoden igen.");
+          if (info?.blocked) setMissing(true);
+        }}
+      />
+    );
+  }
+
+  return (
+    <div className="page admin-checkin-page">
+      <header className="admin-checkin-header">
+        <h1>Incheckning</h1>
+        {eventName ? <p className="admin-checkin-event-name">{eventName}</p> : null}
+        {!missing && !locked ? (
+          <p className="muted admin-checkin-hint">Fyll i pinkoden du fått av arrangören.</p>
+        ) : null}
+      </header>
+      {!loaded ? <p className="muted">Laddar…</p> : null}
+      {loaded && (missing || locked) ? <p className="admin-error">{error}</p> : null}
+      {loaded && !missing && !locked ? (
+        <form className="admin-checkin-pin-form" onSubmit={submitPin}>
+          <label className="field">
+            <span className="field-label">Pinkod</span>
+            <input
+              type="password"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              maxLength={4}
+              value={pin}
+              onChange={(event) => setPin(event.target.value.replace(/\D/g, "").slice(0, 4))}
+            />
+          </label>
+          {error ? <p className="admin-error">{error}</p> : null}
+          {attemptsLeft != null ? (
+            <p className="muted">{attemptsLeft} försök kvar av 10.</p>
+          ) : null}
+          <button className="button" type="submit" disabled={busy || pin.length !== 4}>
+            {busy ? "…" : "Fortsätt"}
+          </button>
+        </form>
+      ) : null}
     </div>
   );
 }
@@ -3938,6 +4126,14 @@ const AdminPage = () => {
   const [dbStatus, setDbStatus] = useState("checking");
   const [statusMessage, setStatusMessage] = useState("");
   const [adminSection, setAdminSection] = useState("bookings");
+  const [checkInAccess, setCheckInAccess] = useState(null);
+  const [checkInAccessError, setCheckInAccessError] = useState("");
+  const [checkInAccessBusy, setCheckInAccessBusy] = useState(false);
+  const [checkInRegenerateConfirm, setCheckInRegenerateConfirm] = useState(false);
+  const [checkInMailTo, setCheckInMailTo] = useState("");
+  const [checkInMailBusy, setCheckInMailBusy] = useState(false);
+  const [checkInMailMessage, setCheckInMailMessage] = useState("");
+  const [checkInMailError, setCheckInMailError] = useState("");
   const [adminPanelTab, setAdminPanelTab] = useState("start");
   const [serviceFeeTierFormRows, setServiceFeeTierFormRows] = useState(() => serviceFeeTiersToFormRows());
   const [serviceFeeTierLines, setServiceFeeTierLines] = useState(() => buildServiceFeeTierLines());
@@ -4960,7 +5156,7 @@ const AdminPage = () => {
       return;
     }
     const sectionParam = new URLSearchParams(window.location.search).get("section");
-    const allowedSections = ["home", "profile", "bookings", "frontpage", "settings", "payout", "admin", "help"];
+    const allowedSections = ["home", "profile", "bookings", "frontpage", "settings", "checkin", "payout", "admin", "help"];
     if (!sectionParam || !allowedSections.includes(sectionParam)) {
       return;
     }
@@ -5001,7 +5197,7 @@ const AdminPage = () => {
       return;
     }
     if (!selectedEventId) {
-      if (["bookings", "frontpage", "settings"].includes(adminSection)) {
+      if (["bookings", "frontpage", "settings", "checkin"].includes(adminSection)) {
         setAdminSection("home");
       }
       if (adminSection !== "payout" && adminSection !== "profile" && adminSection !== "admin" && adminSection !== "help") return;
@@ -5010,6 +5206,32 @@ const AdminPage = () => {
       setAdminSection("bookings");
     }
   }, [adminSection, selectedEventId, token]);
+
+  useEffect(() => {
+    if (!token || !selectedEventId || adminSection !== "checkin") return;
+    let cancelled = false;
+    setCheckInAccessError("");
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/admin/events/${selectedEventId}/check-in-access`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        const data = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!res.ok || !data.ok) {
+          setCheckInAccess(null);
+          setCheckInAccessError(data.error || "Kunde inte läsa incheckningslänken.");
+          return;
+        }
+        setCheckInAccess(data);
+      } catch {
+        if (!cancelled) setCheckInAccessError("Kunde inte läsa incheckningslänken.");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token, selectedEventId, adminSection]);
 
   const loadMyPayoutRequests = async (authToken) => {
     if (!authToken) return;
@@ -9838,6 +10060,19 @@ const AdminPage = () => {
             </button>
             <button
               type="button"
+              className={`admin-nav-item ${
+                !selectedEventId ? "is-disabled" : adminSection === "checkin" ? "is-active" : ""
+              }`}
+              disabled={!selectedEventId}
+              onClick={() => {
+                setAdminSection("checkin");
+                setAdminMenuOpen(false);
+              }}
+            >
+              QR-kod incheckning{!selectedEventId ? " (Välj event)" : ""}
+            </button>
+            <button
+              type="button"
               className={`admin-nav-item ${adminSection === "payout" ? "is-active" : ""}`}
               onClick={() => {
                 setAdminSection("payout");
@@ -13882,7 +14117,7 @@ const AdminPage = () => {
             <h2>Hjälp – kom igång med Kyrkevent.se</h2>
             <p className="muted">
               Här följer en genomgång av hur du sätter upp ett event från start till mål: profil, framsida, eventinställningar,
-              betalningar, utbetalningar och anonymisering.
+              betalningar, utbetalningar, incheckning och anonymisering.
             </p>
             <p>
               <strong>Exempel.</strong> Så här kan en färdig anmälningssida se ut för deltagaren:{" "}
@@ -14183,6 +14418,38 @@ const AdminPage = () => {
               </li>
             </ul>
 
+            <h3>9. QR-kod incheckning</h3>
+            <p>
+              I dörren skannas deltagarnas QR-koder med kameran. Du som arrangör öppnar det med knappen <strong>QR-incheckning</strong>.
+              Andra som ska hjälpa till behöver inte ditt lösenord.
+            </p>
+            <ul>
+              <li>
+                <strong>Fliken QR-kod incheckning</strong> – på eventet finns en länk och en pinkod. Länken ger bara incheckning för det
+                eventet, inte resten av admin.
+              </li>
+              <li>
+                <strong>När länken fungerar</strong> – från två dagar före eventets startdatum till och med eventets sista dag.
+                Tidigare än så står det att incheckningen inte är öppen ännu. Dagen efter eventet har länken gått ut och går inte att använda.
+                Ett försök utanför de dagarna räknas inte som fel pinkod. Knappen QR-incheckning, som du själv använder, påverkas inte.
+              </li>
+              <li>
+                <strong>Så använder hjälparen länken</strong> – öppna länken och fyll i pinkoden en gång på den mobilen. Därefter kan kameran
+                användas för att skanna QR-koder, söka och checka in.
+              </li>
+              <li>
+                <strong>Skicka via e-post</strong> – fyll i en adress så skickas den aktuella länken och pinkoden.
+              </li>
+              <li>
+                <strong>Skapa ny länk och pinkod</strong> – ersätter de nuvarande. Den gamla länken slutar fungera, och den som har den behöver
+                få en ny giltig länk.
+              </li>
+              <li>
+                <strong>Fel pinkod</strong> – efter 10 felaktiga försök låses länken. En lyckad inloggning nollställer räknaren. En låst länk
+                låses upp genom att du skapar en ny länk och pinkod.
+              </li>
+            </ul>
+
             <p className="muted" style={{ marginTop: "1.5rem" }}>
               Om du är osäker på något steg: börja alltid med att kontrollera att profilen är komplett, därefter att eventet har rätt
               datum, plats och biljetter, och titta sedan i flikarna Bokningar och Utbetalning för detaljer kring betalningar och
@@ -14237,7 +14504,7 @@ const AdminPage = () => {
         {token &&
         isAssistingOrganizationEvent &&
         selectedEvent &&
-        (adminSection === "bookings" || adminSection === "frontpage" || adminSection === "settings") ? (
+        (adminSection === "bookings" || adminSection === "frontpage" || adminSection === "settings" || adminSection === "checkin") ? (
           <div className="admin-assist-banner" role="status">
             Du redigerar <strong>{selectedEvent.name}</strong>
             {assistOrgLabel ? (
@@ -14250,12 +14517,13 @@ const AdminPage = () => {
           </div>
         ) : null}
 
-        {token && selectedEventId && (adminSection === "bookings" || adminSection === "frontpage" || adminSection === "settings") ? (
+        {token && selectedEventId && (adminSection === "bookings" || adminSection === "frontpage" || adminSection === "settings" || adminSection === "checkin") ? (
           <nav className="admin-event-tabs" role="tablist" aria-label="Event">
             {[
               { id: "bookings", label: "Bokningar" },
               { id: "frontpage", label: "Framsida" },
-              { id: "settings", label: "Eventinställningar" }
+              { id: "settings", label: "Eventinställningar" },
+              { id: "checkin", label: "QR-kod incheckning" }
             ].map((tab) => (
               <button
                 key={tab.id}
@@ -14719,6 +14987,168 @@ const AdminPage = () => {
           ) : null}
           </div>
         ) : null}
+
+          {token && selectedEventId && adminSection === "checkin" ? (
+            <div className="section admin-checkin-access">
+              <h2>QR-kod incheckning</h2>
+              <p className="muted">
+                Skicka länken till den som ska hjälpa till i dörren. Pinkoden fylls i en gång på den mobilen.
+                Länken ger bara incheckning för det här eventet, inte resten av admin. Den fungerar från två dagar före
+                eventet och till och med eventets sista dag.
+              </p>
+              {checkInAccessError ? <p className="admin-error">{checkInAccessError}</p> : null}
+              {checkInAccess ? (
+                <>
+                  <label className="field admin-checkin-access-link">
+                    <span className="field-label">Länk</span>
+                    <div className="field-with-action field-with-copy">
+                      <input
+                        type="text"
+                        readOnly
+                        size={`${window.location.origin}${checkInAccess.path}`.length}
+                        value={`${window.location.origin}${checkInAccess.path}`}
+                        aria-label="Länk till incheckning"
+                      />
+                      <CopyEventUrlButton url={`${window.location.origin}${checkInAccess.path}`} />
+                    </div>
+                  </label>
+                  <div className="admin-checkin-access-pin">
+                    <span className="field-label">Pinkod</span>
+                    <strong>{checkInAccess.pin}</strong>
+                    <CopyEventUrlButton url={checkInAccess.pin} />
+                  </div>
+                  <p className="muted">
+                    {checkInAccess.locked
+                      ? "Länken är låst efter 10 felaktiga försök. Skapa en ny länk och pinkod."
+                      : `${checkInAccess.attemptsLeft} försök kvar innan länken låses. En lyckad inloggning nollställer räknaren.`}
+                  </p>
+                  <button
+                    type="button"
+                    className="button admin-checkin-access-regenerate"
+                    disabled={checkInAccessBusy}
+                    onClick={() => setCheckInRegenerateConfirm(true)}
+                  >
+                    {checkInAccessBusy ? "Skapar…" : "Skapa ny länk och pinkod"}
+                  </button>
+                  <label className="field admin-checkin-access-mail">
+                    <span className="field-label">Skicka via e-post</span>
+                    <div className="field-with-action">
+                      <input
+                        type="email"
+                        inputMode="email"
+                        autoComplete="email"
+                        value={checkInMailTo}
+                        placeholder="namn@exempel.se"
+                        aria-label="E-postadress som ska få länken och pinkoden"
+                        onChange={(event) => {
+                          setCheckInMailTo(event.target.value);
+                          setCheckInMailMessage("");
+                          setCheckInMailError("");
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="button button-small"
+                        disabled={checkInMailBusy || !checkInMailTo.trim()}
+                        onClick={() => {
+                          const email = checkInMailTo.trim();
+                          if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+                            setCheckInMailError("Ange en giltig e-postadress.");
+                            setCheckInMailMessage("");
+                            return;
+                          }
+                          setCheckInMailBusy(true);
+                          setCheckInMailError("");
+                          setCheckInMailMessage("");
+                          fetch(`${API_BASE}/admin/events/${selectedEventId}/check-in-access/email`, {
+                            method: "POST",
+                            headers: {
+                              Authorization: `Bearer ${token}`,
+                              "Content-Type": "application/json"
+                            },
+                            body: JSON.stringify({ email })
+                          })
+                            .then(async (res) => {
+                              const data = await res.json().catch(() => ({}));
+                              if (!res.ok || !data.ok) {
+                                throw new Error(data.error || "Kunde inte skicka e-posten.");
+                              }
+                              setCheckInMailMessage(`Länk och pinkod har skickats till ${email}.`);
+                            })
+                            .catch((err) => setCheckInMailError(err.message || "Kunde inte skicka e-posten."))
+                            .finally(() => setCheckInMailBusy(false));
+                        }}
+                      >
+                        {checkInMailBusy ? "Skickar…" : "Skicka"}
+                      </button>
+                    </div>
+                    <span className="muted">Mottagaren får den här länken och pinkoden.</span>
+                    {checkInMailError ? <span className="admin-error">{checkInMailError}</span> : null}
+                    {checkInMailMessage ? <span className="muted">{checkInMailMessage}</span> : null}
+                  </label>
+                  {checkInRegenerateConfirm ? (
+                    <div
+                      className="toaster-overlay"
+                      onClick={() => !checkInAccessBusy && setCheckInRegenerateConfirm(false)}
+                      aria-hidden="false"
+                    >
+                      <div
+                        className="toaster toaster-confirm"
+                        onClick={(event) => event.stopPropagation()}
+                        role="dialog"
+                        aria-labelledby="checkin-regenerate-title"
+                        aria-modal="true"
+                      >
+                        <h3 id="checkin-regenerate-title" className="toaster-title">Skapa ny länk och pinkod</h3>
+                        <p className="toaster-message">
+                          En ny länk och en ny pinkod ersätter de nuvarande. Den gamla länken slutar fungera.
+                        </p>
+                        {checkInAccessError ? <p className="admin-error">{checkInAccessError}</p> : null}
+                        <div className="toaster-actions">
+                          <button
+                            type="button"
+                            className="button button-outline"
+                            onClick={() => setCheckInRegenerateConfirm(false)}
+                            disabled={checkInAccessBusy}
+                          >
+                            Avbryt
+                          </button>
+                          <button
+                            type="button"
+                            className="button"
+                            disabled={checkInAccessBusy}
+                            onClick={() => {
+                              setCheckInAccessBusy(true);
+                              setCheckInAccessError("");
+                              fetch(`${API_BASE}/admin/events/${selectedEventId}/check-in-access`, {
+                                method: "POST",
+                                headers: { Authorization: `Bearer ${token}` }
+                              })
+                                .then(async (res) => {
+                                  const data = await res.json().catch(() => ({}));
+                                  if (!res.ok || !data.ok) {
+                                    throw new Error(data.error || "Kunde inte skapa en ny länk.");
+                                  }
+                                  setCheckInAccess(data);
+                                  setCheckInRegenerateConfirm(false);
+                                  setCheckInMailMessage("");
+                                })
+                                .catch((err) => setCheckInAccessError(err.message || "Kunde inte skapa en ny länk."))
+                                .finally(() => setCheckInAccessBusy(false));
+                            }}
+                          >
+                            {checkInAccessBusy ? "Skapar…" : "Skapa ny"}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+                </>
+              ) : checkInAccessError ? null : (
+                <p className="muted">Laddar länk…</p>
+              )}
+            </div>
+          ) : null}
 
           {token && selectedEventId && adminSection === "bookings" ? (
             <div className="section admin-bookings">
@@ -19203,7 +19633,10 @@ function App() {
 
   const pathNorm = normalizePublicPath(window.location.pathname);
   const urlRequestsEnglish = isEnglishUrlPath(window.location.pathname);
-  const isCheckInRoute = pathNorm === "/admin/check-in";
+  const checkInLinkToken = pathNorm.startsWith("/check-in/")
+    ? decodeURIComponent(pathNorm.slice("/check-in/".length))
+    : "";
+  const isCheckInRoute = pathNorm === "/admin/check-in" || Boolean(checkInLinkToken);
   const isAdminRoute = window.location.pathname.startsWith("/admin");
   const isPaymentStatusRoute = window.location.pathname.startsWith("/payment-status");
   const isVerifyEmailRoute =
@@ -19722,7 +20155,7 @@ function App() {
   }, [isAdminRoute, isLandingRoute]);
 
   useEffect(() => {
-    if (isAdminRoute || isPaymentStatusRoute || isVerifyEmailRoute || isResetPasswordRoute) {
+    if (isAdminRoute || isPaymentStatusRoute || isVerifyEmailRoute || isResetPasswordRoute || isCheckInRoute) {
       return;
     }
     if (!eventSlug) {
@@ -19781,7 +20214,7 @@ function App() {
         setEventError("Eventet kunde inte hittas.");
       })
       .finally(() => setEventLoading(false));
-  }, [eventSlug, isAdminRoute, isPaymentStatusRoute, isVerifyEmailRoute, isResetPasswordRoute, isLandingRoute, sitePage]);
+  }, [eventSlug, isAdminRoute, isPaymentStatusRoute, isVerifyEmailRoute, isResetPasswordRoute, isCheckInRoute, isLandingRoute, sitePage]);
 
   useEffect(() => {
     if (!event?.slug || !eventSectionsLoaded) return undefined;
@@ -20453,7 +20886,11 @@ function App() {
     return <VerifyEmailPage />;
   }
 
-  if (isCheckInRoute) {
+  if (checkInLinkToken) {
+    return <CheckInLinkPage linkToken={checkInLinkToken} />;
+  }
+
+  if (pathNorm === "/admin/check-in") {
     return <AdminCheckInPage />;
   }
 

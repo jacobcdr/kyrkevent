@@ -53,6 +53,15 @@ export default defineConfig({
       "/hero": "http://localhost:3001",
       "/payments": "http://localhost:3001",
       "/events": "http://localhost:3001",
+      "/check-in": {
+        target: "http://localhost:3001",
+        bypass(req) {
+          if (req.headers.accept && req.headers.accept.includes("text/html")) {
+            return "/index.html";
+          }
+          return null;
+        }
+      },
       "/speakers": "http://localhost:3001",
       "/partners": "http://localhost:3001",
       "/uploads": "http://localhost:3001",
